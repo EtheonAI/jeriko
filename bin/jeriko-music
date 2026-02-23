@@ -1,0 +1,77 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, escapeAppleScript: esc } = require('../lib/cli');
+const { execSync } = require('child_process');
+
+function osascript(script) {
+  return execSync('osascript', { input: script, encoding: 'utf-8', timeout: 10000 }).trim();
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // Detect which music app is available
+  const app = flags.spotify ? 'Spotify' : 'Music';
+
+  if (flags.play) {
+    const track = typeof flags.play === 'string' ? flags.play : null;
+    if (track) {
+      const safeTrack = esc(track);
+      if (app === 'Spotify') {
+        osascript(`tell application "Spotify" to play track "spotify:search:${safeTrack}"`);
+      } else {
+        osascript(`
+          tell application "Music"
+            set results to (search playlist 1 for "${safeTrack}")
+            if length of results > 0 then
+              play item 1 of results
+            end if
+          end tell
+        `);
+      }
+      return ok({ playing: track, app });
+    }
+    osascript(`tell application "${app}" to play`);
+    return ok({ action: 'play', app });
+  }
+
+  if (flags.pause) {
+    osascript(`tell application "${app}" to pause`);
+    return ok({ action: 'paused', app });
+  }
+
+  if (flags.next) {
+    osascript(`tell application "${app}" to next track`);
+    return ok({ action: 'next', app });
+  }
+
+  if (flags.prev) {
+    osascript(`tell application "${app}" to previous track`);
+    return ok({ action: 'previous', app });
+  }
+
+  if (flags.current || Object.keys(flags).length === 0) {
+    try {
+      const info = osascript(`
+        tell application "${app}"
+          if player state is playing then
+            set t to name of current track
+            set a to artist of current track
+            set al to album of current track
+            set pos to player position
+            set dur to duration of current track
+            return t & "|" & a & "|" & al & "|" & (round pos) & "|" & (round dur)
+          else
+            return "stopped"
+          end if
+        end tell
+      `);
+      if (info === 'stopped') return ok({ state: 'stopped', app });
+      const [track, artist, album, position, duration] = info.split('|');
+      return ok({ track, artist, album, position: parseInt(position), duration: parseInt(duration), app });
+    } catch {
+      return ok({ state: 'not running', app });
+    }
+  }
+
+  fail('Usage: jeriko music [--play [track]|--pause|--next|--prev|--current] [--spotify]');
+});

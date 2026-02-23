@@ -1,0 +1,78 @@
+#!/usr/bin/env node
+// Formats Stripe webhook events into clean Telegram notifications
+const { execSync } = require('child_process');
+const path = require('path');
+
+const JERIKO = `node ${path.join(__dirname, 'jeriko')}`;
+
+const raw = process.env.TRIGGER_EVENT;
+if (!raw) { process.exit(1); }
+
+let event;
+try { event = JSON.parse(raw); } catch { process.exit(1); }
+
+const body = event.body || {};
+const type = body.type || 'unknown';
+const obj = body.data?.object || {};
+
+// Event type to readable title
+const titles = {
+  'customer.created': 'New Customer',
+  'customer.updated': 'Customer Updated',
+  'customer.deleted': 'Customer Deleted',
+  'product.created': 'New Product',
+  'product.updated': 'Product Updated',
+  'price.created': 'New Price',
+  'payment_intent.created': 'Payment Created',
+  'payment_intent.succeeded': 'Payment Succeeded',
+  'payment_intent.payment_failed': 'Payment Failed',
+  'charge.succeeded': 'Charge Succeeded',
+  'charge.failed': 'Charge Failed',
+  'charge.refunded': 'Charge Refunded',
+  'invoice.created': 'Invoice Created',
+  'invoice.paid': 'Invoice Paid',
+  'invoice.payment_failed': 'Invoice Payment Failed',
+  'invoice.sent': 'Invoice Sent',
+  'subscription.created': 'New Subscription',
+  'subscription.updated': 'Subscription Updated',
+  'subscription.deleted': 'Subscription Cancelled',
+  'payout.paid': 'Payout Sent',
+  'payout.failed': 'Payout Failed',
+};
+
+const title = titles[type] || type.replace(/[._]/g, ' ');
+
+// Build clean message
+let lines = [];
+lines.push(`STRIPE: ${title.toUpperCase()}`);
+lines.push('');
+
+if (obj.amount !== undefined) {
+  const amt = (obj.amount / 100).toFixed(2);
+  const cur = (obj.currency || 'usd').toUpperCase();
+  lines.push(`Amount: $${amt} ${cur}`);
+}
+if (obj.name) lines.push(`Name: ${obj.name}`);
+if (obj.email) lines.push(`Email: ${obj.email}`);
+if (obj.customer && typeof obj.customer === 'string') lines.push(`Customer: ${obj.customer}`);
+if (obj.status) lines.push(`Status: ${obj.status}`);
+if (obj.description) lines.push(`Description: ${obj.description}`);
+if (obj.hosted_invoice_url) lines.push(`Pay: ${obj.hosted_invoice_url}`);
+if (obj.receipt_url) lines.push(`Receipt: ${obj.receipt_url}`);
+
+lines.push('');
+lines.push(`ID: ${obj.id || 'n/a'}`);
+
+const message = lines.join('\n');
+
+try {
+  execSync(`${JERIKO} notify`, {
+    input: message,
+    encoding: 'utf-8',
+    timeout: 10000,
+    stdio: ['pipe', 'inherit', 'inherit'],
+  });
+} catch (e) {
+  console.error('Notify failed:', e.message);
+  process.exit(1);
+}

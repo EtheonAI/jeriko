@@ -1,0 +1,252 @@
+#!/usr/bin/env node
+const readline = require('readline');
+const path = require('path');
+const { execSync } = require('child_process');
+
+// ── Colors ──────────────────────────────────────────────────────────
+const C = {
+  blue: '\x1b[34m',
+  bBlue: '\x1b[94m',   // bright blue — robot body
+  cyan: '\x1b[36m',
+  bold: '\x1b[1m',
+  dim: '\x1b[2m',
+  reset: '\x1b[0m',
+  gray: '\x1b[90m',
+  white: '\x1b[37m',
+  green: '\x1b[32m',
+};
+
+const JERIKO = path.join(__dirname, 'jeriko');
+
+// ── Helpers ─────────────────────────────────────────────────────────
+function getVersion() {
+  try {
+    const pkg = require(path.join(__dirname, '..', 'package.json'));
+    return pkg.version || '1.0.0';
+  } catch { return '1.0.0'; }
+}
+
+function getBackend() {
+  try {
+    require(path.join(__dirname, '..', 'lib', 'cli.js')); // loads .env
+  } catch { /* ignore */ }
+  return process.env.AI_BACKEND || 'claude';
+}
+
+function getRecentActivity() {
+  try {
+    const raw = execSync(`node "${JERIKO}" memory --recent 3 --format json`, {
+      encoding: 'utf-8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    const parsed = JSON.parse(raw);
+    if (parsed.ok && Array.isArray(parsed.data)) {
+      return parsed.data.map(entry => {
+        const cmd = entry.command || '';
+        return cmd.length > 32 ? cmd.slice(0, 29) + '...' : cmd;
+      }).filter(Boolean);
+    }
+  } catch { /* no memory data */ }
+  return [];
+}
+
+// ── Banner ──────────────────────────────────────────────────────────
+function drawBanner() {
+  const version = getVersion();
+  const backend = getBackend();
+  const cwd = process.cwd().replace(process.env.HOME || '', '~');
+  const recent = getRecentActivity();
+
+  const b = C.blue;
+  const bb = C.bBlue;
+  const c = C.cyan;
+  const d = C.dim;
+  const w = C.white;
+  const r = C.reset;
+  const bo = C.bold;
+
+  // Build right panel lines
+  const rightLines = [
+    `${bo}${c}Tips${r}`,
+    `${d}  Ask anything in plain text${r}`,
+    `${d}  I run jeriko commands for you${r}`,
+    `${d}  Type ${w}/help${d} for commands${r}`,
+    `${d}  Type ${w}/exit${d} to quit${r}`,
+  ];
+
+  if (recent.length > 0) {
+    rightLines.push('');
+    rightLines.push(`${bo}${c}Recent${r}`);
+    for (const item of recent) {
+      rightLines.push(`${d}  > ${item}${r}`);
+    }
+  }
+
+  const truncCwd = cwd.length > 25 ? '~/..' + cwd.slice(-22) : cwd;
+
+  // Left panel — blocky robot with both arms up
+  const leftLines = [
+    '',
+    `   ${bo}${w}Welcome back!${r}`,
+    `            ${bb}┌───┐${r}`,
+    `         ${bb}┌──┘   └──┐${r}`,
+    `   ${bb}\\\\    │  ${bo}●   ●${r}${bb}  │    //${r}`,
+    `    ${bb}\\\\   │    ${bo}◡${r}${bb}    │   //${r}`,
+    `         ${bb}├─────────┤${r}`,
+    `         ${bb}│  ┌───┐  │${r}`,
+    `         ${bb}│  │   │  │${r}`,
+    `         ${bb}└──┘   └──┘${r}`,
+    `   ${d}${backend} ${C.gray}${truncCwd}${r}`,
+  ];
+
+  // Merge left + right panels
+  const leftWidth = 38;
+  const totalWidth = 70;
+
+  const maxLines = Math.max(leftLines.length, rightLines.length);
+  const bodyLines = [];
+  for (let i = 0; i < maxLines; i++) {
+    const left = leftLines[i] || '';
+    const right = rightLines[i] || '';
+    // Strip ANSI for padding calculation
+    const leftVisible = left.replace(/\x1b\[[0-9;]*m/g, '');
+    const pad = Math.max(0, leftWidth - leftVisible.length);
+    bodyLines.push(`${b}|${r}${left}${' '.repeat(pad)}${b}|${r} ${right}`);
+  }
+
+  const title = ` JerikoBot v${version} `;
+  const topPad = totalWidth - title.length - 3; // 3 for ╭── prefix
+  const top = `${b}╭──${bo}${c}${title}${r}${b}${'─'.repeat(Math.max(0, topPad))}╮${r}`;
+  const bot = `${b}╰${'─'.repeat(totalWidth - 1)}╯${r}`;
+
+  console.log('');
+  console.log(top);
+  for (const line of bodyLines) {
+    console.log(line);
+  }
+  console.log(bot);
+  console.log('');
+}
+
+// ── Slash Commands ──────────────────────────────────────────────────
+function runJerikoSync(args) {
+  try {
+    const out = execSync(`node "${JERIKO}" ${args}`, {
+      encoding: 'utf-8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return out;
+  } catch (e) {
+    return e.stdout || e.stderr || e.message;
+  }
+}
+
+function handleSlash(input, rl) {
+  const cmd = input.trim().toLowerCase();
+
+  if (cmd === '/exit' || cmd === '/quit') {
+    console.log(`\n${C.dim}Goodbye.${C.reset}\n`);
+    process.exit(0);
+  }
+
+  if (cmd === '/clear') {
+    console.clear();
+    drawBanner();
+    return true;
+  }
+
+  if (cmd === '/help') {
+    console.log(runJerikoSync('--help'));
+    return true;
+  }
+
+  if (cmd === '/commands') {
+    console.log(runJerikoSync('discover --list --format text'));
+    return true;
+  }
+
+  if (cmd === '/memory') {
+    console.log(runJerikoSync('memory --recent 10 --format text'));
+    return true;
+  }
+
+  return false;
+}
+
+// ── Main REPL ───────────────────────────────────────────────────────
+async function main() {
+  // Load .env so AI_BACKEND and API keys are available
+  try {
+    require(path.join(__dirname, '..', 'lib', 'cli.js'));
+  } catch { /* ignore */ }
+
+  drawBanner();
+
+  // Suppress router log lines in interactive mode
+  process.env.JERIKO_CHAT_QUIET = '1';
+
+  // Lazy-load router (now safe — websocket is lazy too)
+  const { route } = require(path.join(__dirname, '..', 'server', 'router.js'));
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    prompt: `${C.cyan}jeriko>${C.reset} `,
+    terminal: true,
+  });
+
+  // Clean exit on Ctrl+C
+  rl.on('SIGINT', () => {
+    console.log(`\n${C.dim}Goodbye.${C.reset}\n`);
+    process.exit(0);
+  });
+
+  rl.prompt();
+
+  rl.on('line', async (line) => {
+    const input = line.trim();
+
+    // Empty input → re-prompt
+    if (!input) {
+      rl.prompt();
+      return;
+    }
+
+    // Slash commands
+    if (input.startsWith('/')) {
+      if (handleSlash(input, rl)) {
+        rl.prompt();
+        return;
+      }
+      // Unknown slash command — treat as chat
+    }
+
+    // Route to AI
+    try {
+      // Pause readline while AI is responding
+      rl.pause();
+      process.stdout.write(`\n${C.dim}`);
+
+      await route(input, (chunk) => {
+        process.stdout.write(chunk);
+      });
+
+      process.stdout.write(`${C.reset}\n\n`);
+    } catch (err) {
+      process.stdout.write(`${C.reset}\n`);
+      console.error(`${C.blue}error:${C.reset} ${err.message}\n`);
+    }
+
+    rl.resume();
+    rl.prompt();
+  });
+
+  rl.on('close', () => {
+    console.log(`\n${C.dim}Goodbye.${C.reset}\n`);
+    process.exit(0);
+  });
+}
+
+main();

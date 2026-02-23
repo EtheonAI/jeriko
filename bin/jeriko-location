@@ -1,0 +1,26 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+
+run(async () => {
+  const { flags } = parseArgs(process.argv);
+
+  // Use IP-based geolocation (no permissions needed)
+  try {
+    const res = await fetch('http://ip-api.com/json/?fields=status,message,country,regionName,city,zip,lat,lon,timezone,isp,query');
+    const data = await res.json();
+    if (data.status !== 'success') fail(data.message || 'Location lookup failed', EXIT.NETWORK);
+    ok({
+      ip: data.query,
+      city: data.city,
+      region: data.regionName,
+      country: data.country,
+      zip: data.zip,
+      lat: data.lat,
+      lon: data.lon,
+      timezone: data.timezone,
+      isp: data.isp,
+    });
+  } catch (e) {
+    fail(`Location lookup failed: ${e.message}`, EXIT.NETWORK);
+  }
+});

@@ -1,0 +1,545 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-stripe — Full Stripe CLI built on Stripe REST API
+// Standalone CLI: jeriko stripe <resource> <action> [flags]
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+
+const SK = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SK;
+const BASE = 'https://api.stripe.com/v1';
+
+if (!SK) {
+  console.error(JSON.stringify({ ok: false, error: 'STRIPE_SECRET_KEY not set in .env' }));
+  process.exit(EXIT.AUTH);
+}
+
+// ---- HTTP helpers ----
+
+async function stripe(method, path, params = {}) {
+  const url = path.startsWith('http') ? path : `${BASE}${path}`;
+  const opts = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${SK}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+  };
+  if (method !== 'GET' && Object.keys(params).length) {
+    opts.body = encodeParams(params);
+  }
+  let finalUrl = url;
+  if (method === 'GET' && Object.keys(params).length) {
+    finalUrl += '?' + encodeParams(params);
+  }
+  const res = await fetch(finalUrl, opts);
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.error?.message || JSON.stringify(data);
+    const code = res.status === 401 || res.status === 403 ? EXIT.AUTH
+      : res.status === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+    fail(`Stripe ${res.status}: ${msg}`, code);
+  }
+  return data;
+}
+
+function encodeParams(obj, prefix = '') {
+  const parts = [];
+  for (const [key, val] of Object.entries(obj)) {
+    const fullKey = prefix ? `${prefix}[${key}]` : key;
+    if (val && typeof val === 'object' && !Array.isArray(val)) {
+      parts.push(encodeParams(val, fullKey));
+    } else if (val !== undefined && val !== null) {
+      parts.push(`${encodeURIComponent(fullKey)}=${encodeURIComponent(val)}`);
+    }
+  }
+  return parts.join('&');
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const resource = args[0];
+  const action = args[1];
+  const { flags, positional } = parseArgs(['', '', ...args.slice(2)]);
+
+  if (!resource) {
+    return ok({
+      usage: 'jeriko stripe <resource> <action> [flags]',
+      resources: {
+        customers: 'list, create, get, update, delete',
+        products: 'list, create, get, update, delete',
+        prices: 'list, create, get',
+        payments: 'list, create, get, confirm, cancel',
+        charges: 'list, get, refund',
+        invoices: 'list, create, get, send, pay, void',
+        subscriptions: 'list, create, get, update, cancel',
+        balance: 'get, transactions',
+        payouts: 'list, create, get',
+        refunds: 'list, create, get',
+        events: 'list, get',
+        webhooks: 'list, create, delete',
+        checkout: 'create',
+        links: 'list, create, get, update',
+      },
+    });
+  }
+
+  // ===================== CUSTOMERS =====================
+  if (resource === 'customers') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.email) p.email = flags.email;
+      const data = await stripe('GET', '/customers', p);
+      return ok(data.data.map(c => ({
+        id: c.id, name: c.name, email: c.email,
+        created: new Date(c.created * 1000).toISOString(),
+        balance: c.balance, currency: c.currency,
+      })));
+    }
+    if (action === 'create') {
+      const p = {};
+      if (flags.email) p.email = flags.email;
+      if (flags.name) p.name = flags.name;
+      if (flags.phone) p.phone = flags.phone;
+      if (flags.description) p.description = flags.description;
+      const data = await stripe('POST', '/customers', p);
+      return ok({ id: data.id, name: data.name, email: data.email });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe customers get --id cus_xxx');
+      const data = await stripe('GET', `/customers/${id}`);
+      return ok(data);
+    }
+    if (action === 'update') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe customers update --id cus_xxx [--name --email]');
+      const p = {};
+      if (flags.name) p.name = flags.name;
+      if (flags.email) p.email = flags.email;
+      if (flags.phone) p.phone = flags.phone;
+      const data = await stripe('POST', `/customers/${id}`, p);
+      return ok({ id: data.id, name: data.name, email: data.email, updated: true });
+    }
+    if (action === 'delete') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe customers delete --id cus_xxx');
+      const data = await stripe('DELETE', `/customers/${id}`);
+      return ok({ id: data.id, deleted: data.deleted });
+    }
+  }
+
+  // ===================== PRODUCTS =====================
+  if (resource === 'products') {
+    if (action === 'list' || !action) {
+      const data = await stripe('GET', '/products', { limit: flags.limit || 10, active: flags.active || 'true' });
+      return ok(data.data.map(p => ({
+        id: p.id, name: p.name, description: p.description,
+        active: p.active, created: new Date(p.created * 1000).toISOString(),
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.name) fail('Usage: jeriko stripe products create --name "Pro Plan" [--description text]');
+      const p = { name: flags.name };
+      if (flags.description) p.description = flags.description;
+      if (flags.type) p.type = flags.type;
+      const data = await stripe('POST', '/products', p);
+      return ok({ id: data.id, name: data.name });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/products/${id}`);
+      return ok(data);
+    }
+    if (action === 'update') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe products update --id prod_xxx [--name --description]');
+      const p = {};
+      if (flags.name) p.name = flags.name;
+      if (flags.description) p.description = flags.description;
+      if (flags.active) p.active = flags.active;
+      const data = await stripe('POST', `/products/${id}`, p);
+      return ok({ id: data.id, name: data.name, updated: true });
+    }
+    if (action === 'delete') {
+      const id = flags.id || positional[0];
+      const data = await stripe('DELETE', `/products/${id}`);
+      return ok({ id: data.id, deleted: data.deleted });
+    }
+  }
+
+  // ===================== PRICES =====================
+  if (resource === 'prices') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.product) p.product = flags.product;
+      const data = await stripe('GET', '/prices', p);
+      return ok(data.data.map(pr => ({
+        id: pr.id, product: pr.product, unit_amount: pr.unit_amount,
+        currency: pr.currency, recurring: pr.recurring, active: pr.active,
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.product || !flags.amount) fail('Usage: jeriko stripe prices create --product prod_xxx --amount 2000 --currency usd [--interval month]');
+      const p = {
+        product: flags.product,
+        unit_amount: parseInt(flags.amount),
+        currency: flags.currency || 'usd',
+      };
+      if (flags.interval) {
+        p['recurring[interval]'] = flags.interval; // month, year, week, day
+      }
+      const data = await stripe('POST', '/prices', p);
+      return ok({ id: data.id, product: data.product, unit_amount: data.unit_amount, currency: data.currency });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/prices/${id}`);
+      return ok(data);
+    }
+  }
+
+  // ===================== PAYMENT INTENTS =====================
+  if (resource === 'payments') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.customer) p.customer = flags.customer;
+      const data = await stripe('GET', '/payment_intents', p);
+      return ok(data.data.map(pi => ({
+        id: pi.id, amount: pi.amount, currency: pi.currency,
+        status: pi.status, customer: pi.customer,
+        created: new Date(pi.created * 1000).toISOString(),
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.amount) fail('Usage: jeriko stripe payments create --amount 5000 --currency usd [--customer cus_xxx]');
+      const p = {
+        amount: parseInt(flags.amount),
+        currency: flags.currency || 'usd',
+      };
+      if (flags.customer) p.customer = flags.customer;
+      if (flags.description) p.description = flags.description;
+      if (flags['auto-confirm']) p.confirm = 'true';
+      if (flags['payment-method']) p.payment_method = flags['payment-method'];
+      const data = await stripe('POST', '/payment_intents', p);
+      return ok({ id: data.id, amount: data.amount, currency: data.currency, status: data.status, client_secret: data.client_secret });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/payment_intents/${id}`);
+      return ok(data);
+    }
+    if (action === 'confirm') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe payments confirm --id pi_xxx');
+      const data = await stripe('POST', `/payment_intents/${id}/confirm`);
+      return ok({ id: data.id, status: data.status });
+    }
+    if (action === 'cancel') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe payments cancel --id pi_xxx');
+      const data = await stripe('POST', `/payment_intents/${id}/cancel`);
+      return ok({ id: data.id, status: data.status });
+    }
+  }
+
+  // ===================== CHARGES =====================
+  if (resource === 'charges') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.customer) p.customer = flags.customer;
+      const data = await stripe('GET', '/charges', p);
+      return ok(data.data.map(c => ({
+        id: c.id, amount: c.amount, currency: c.currency,
+        status: c.status, paid: c.paid, customer: c.customer,
+        description: c.description,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/charges/${id}`);
+      return ok(data);
+    }
+    if (action === 'refund') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe charges refund --id ch_xxx [--amount 500]');
+      const p = { charge: id };
+      if (flags.amount) p.amount = parseInt(flags.amount);
+      const data = await stripe('POST', '/refunds', p);
+      return ok({ id: data.id, charge: data.charge, amount: data.amount, status: data.status });
+    }
+  }
+
+  // ===================== INVOICES =====================
+  if (resource === 'invoices') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.customer) p.customer = flags.customer;
+      if (flags.status) p.status = flags.status;
+      const data = await stripe('GET', '/invoices', p);
+      return ok(data.data.map(inv => ({
+        id: inv.id, customer: inv.customer, status: inv.status,
+        total: inv.total, currency: inv.currency,
+        due_date: inv.due_date ? new Date(inv.due_date * 1000).toISOString() : null,
+        hosted_invoice_url: inv.hosted_invoice_url,
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.customer) fail('Usage: jeriko stripe invoices create --customer cus_xxx [--days-until-due 30]');
+      const p = { customer: flags.customer };
+      if (flags['days-until-due']) p.days_until_due = parseInt(flags['days-until-due']);
+      if (flags.description) p.description = flags.description;
+      const data = await stripe('POST', '/invoices', p);
+      return ok({ id: data.id, customer: data.customer, status: data.status });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/invoices/${id}`);
+      return ok(data);
+    }
+    if (action === 'send') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe invoices send --id inv_xxx');
+      const data = await stripe('POST', `/invoices/${id}/send`);
+      return ok({ id: data.id, status: data.status, sent: true });
+    }
+    if (action === 'pay') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe invoices pay --id inv_xxx');
+      const data = await stripe('POST', `/invoices/${id}/pay`);
+      return ok({ id: data.id, status: data.status, paid: true });
+    }
+    if (action === 'void') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe invoices void --id inv_xxx');
+      const data = await stripe('POST', `/invoices/${id}/void`);
+      return ok({ id: data.id, status: data.status });
+    }
+    if (action === 'finalize') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe invoices finalize --id inv_xxx');
+      const data = await stripe('POST', `/invoices/${id}/finalize`);
+      return ok({ id: data.id, status: data.status });
+    }
+  }
+
+  // ===================== SUBSCRIPTIONS =====================
+  if (resource === 'subscriptions') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.customer) p.customer = flags.customer;
+      if (flags.status) p.status = flags.status;
+      const data = await stripe('GET', '/subscriptions', p);
+      return ok(data.data.map(s => ({
+        id: s.id, customer: s.customer, status: s.status,
+        current_period_start: new Date(s.current_period_start * 1000).toISOString(),
+        current_period_end: new Date(s.current_period_end * 1000).toISOString(),
+        items: s.items?.data?.map(i => ({ price: i.price?.id, product: i.price?.product })),
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.customer || !flags.price) fail('Usage: jeriko stripe subscriptions create --customer cus_xxx --price price_xxx');
+      const p = {
+        customer: flags.customer,
+        'items[0][price]': flags.price,
+      };
+      const data = await stripe('POST', '/subscriptions', p);
+      return ok({ id: data.id, customer: data.customer, status: data.status });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/subscriptions/${id}`);
+      return ok(data);
+    }
+    if (action === 'cancel') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe subscriptions cancel --id sub_xxx');
+      const data = await stripe('DELETE', `/subscriptions/${id}`);
+      return ok({ id: data.id, status: data.status, canceled: true });
+    }
+    if (action === 'update') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe subscriptions update --id sub_xxx [--price price_xxx]');
+      const p = {};
+      if (flags.price) p['items[0][price]'] = flags.price;
+      const data = await stripe('POST', `/subscriptions/${id}`, p);
+      return ok({ id: data.id, status: data.status, updated: true });
+    }
+  }
+
+  // ===================== BALANCE =====================
+  if (resource === 'balance') {
+    if (action === 'get' || !action) {
+      const data = await stripe('GET', '/balance');
+      return ok({
+        available: data.available?.map(b => ({ amount: b.amount, currency: b.currency })),
+        pending: data.pending?.map(b => ({ amount: b.amount, currency: b.currency })),
+      });
+    }
+    if (action === 'transactions') {
+      const data = await stripe('GET', '/balance_transactions', { limit: flags.limit || 10 });
+      return ok(data.data.map(t => ({
+        id: t.id, amount: t.amount, currency: t.currency,
+        type: t.type, status: t.status, description: t.description,
+        created: new Date(t.created * 1000).toISOString(),
+      })));
+    }
+  }
+
+  // ===================== PAYOUTS =====================
+  if (resource === 'payouts') {
+    if (action === 'list' || !action) {
+      const data = await stripe('GET', '/payouts', { limit: flags.limit || 10 });
+      return ok(data.data.map(p => ({
+        id: p.id, amount: p.amount, currency: p.currency,
+        status: p.status, arrival_date: new Date(p.arrival_date * 1000).toISOString(),
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.amount) fail('Usage: jeriko stripe payouts create --amount 5000 --currency usd');
+      const data = await stripe('POST', '/payouts', {
+        amount: parseInt(flags.amount),
+        currency: flags.currency || 'usd',
+      });
+      return ok({ id: data.id, amount: data.amount, status: data.status });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/payouts/${id}`);
+      return ok(data);
+    }
+  }
+
+  // ===================== REFUNDS =====================
+  if (resource === 'refunds') {
+    if (action === 'list' || !action) {
+      const data = await stripe('GET', '/refunds', { limit: flags.limit || 10 });
+      return ok(data.data.map(r => ({
+        id: r.id, amount: r.amount, currency: r.currency,
+        status: r.status, charge: r.charge,
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.charge && !flags['payment-intent']) fail('Usage: jeriko stripe refunds create --charge ch_xxx [--amount 500]');
+      const p = {};
+      if (flags.charge) p.charge = flags.charge;
+      if (flags['payment-intent']) p.payment_intent = flags['payment-intent'];
+      if (flags.amount) p.amount = parseInt(flags.amount);
+      const data = await stripe('POST', '/refunds', p);
+      return ok({ id: data.id, amount: data.amount, status: data.status });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/refunds/${id}`);
+      return ok(data);
+    }
+  }
+
+  // ===================== EVENTS =====================
+  if (resource === 'events') {
+    if (action === 'list' || !action) {
+      const p = { limit: flags.limit || 10 };
+      if (flags.type) p.type = flags.type;
+      const data = await stripe('GET', '/events', p);
+      return ok(data.data.map(e => ({
+        id: e.id, type: e.type,
+        created: new Date(e.created * 1000).toISOString(),
+        data_object: e.data?.object?.id,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/events/${id}`);
+      return ok(data);
+    }
+  }
+
+  // ===================== WEBHOOK ENDPOINTS =====================
+  if (resource === 'webhooks') {
+    if (action === 'list' || !action) {
+      const data = await stripe('GET', '/webhook_endpoints', { limit: flags.limit || 10 });
+      return ok(data.data.map(w => ({
+        id: w.id, url: w.url, status: w.status,
+        enabled_events: w.enabled_events,
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.url) fail('Usage: jeriko stripe webhooks create --url https://example.com/hook --events "payment_intent.succeeded,invoice.paid"');
+      const events = flags.events ? flags.events.split(',') : ['*'];
+      const p = { url: flags.url };
+      events.forEach((e, i) => { p[`enabled_events[${i}]`] = e.trim(); });
+      const data = await stripe('POST', '/webhook_endpoints', p);
+      return ok({ id: data.id, url: data.url, secret: data.secret });
+    }
+    if (action === 'delete') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe webhooks delete --id we_xxx');
+      const data = await stripe('DELETE', `/webhook_endpoints/${id}`);
+      return ok({ id: data.id, deleted: data.deleted });
+    }
+  }
+
+  // ===================== CHECKOUT SESSIONS =====================
+  if (resource === 'checkout') {
+    if (action === 'create') {
+      if (!flags.price && !flags.amount) fail('Usage: jeriko stripe checkout create --price price_xxx --success-url https://example.com/ok --cancel-url https://example.com/cancel');
+      const p = {
+        mode: flags.mode || 'payment',
+        success_url: flags['success-url'] || 'https://example.com/success',
+        cancel_url: flags['cancel-url'] || 'https://example.com/cancel',
+      };
+      if (flags.price) {
+        p['line_items[0][price]'] = flags.price;
+        p['line_items[0][quantity]'] = flags.quantity || '1';
+      } else {
+        p['line_items[0][price_data][unit_amount]'] = parseInt(flags.amount);
+        p['line_items[0][price_data][currency]'] = flags.currency || 'usd';
+        p['line_items[0][price_data][product_data][name]'] = flags.name || 'Payment';
+        p['line_items[0][quantity]'] = flags.quantity || '1';
+      }
+      if (flags.customer) p.customer = flags.customer;
+      const data = await stripe('POST', '/checkout/sessions', p);
+      return ok({ id: data.id, url: data.url, status: data.status });
+    }
+    if (action === 'list') {
+      const data = await stripe('GET', '/checkout/sessions', { limit: flags.limit || 10 });
+      return ok(data.data.map(s => ({
+        id: s.id, status: s.status, url: s.url,
+        amount_total: s.amount_total, currency: s.currency,
+        customer: s.customer,
+      })));
+    }
+  }
+
+  // ===================== PAYMENT LINKS =====================
+  if (resource === 'links') {
+    if (action === 'list' || !action) {
+      const data = await stripe('GET', '/payment_links', { limit: flags.limit || 10 });
+      return ok(data.data.map(l => ({
+        id: l.id, url: l.url, active: l.active,
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.price) fail('Usage: jeriko stripe links create --price price_xxx');
+      const p = { 'line_items[0][price]': flags.price, 'line_items[0][quantity]': flags.quantity || '1' };
+      const data = await stripe('POST', '/payment_links', p);
+      return ok({ id: data.id, url: data.url, active: data.active });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      const data = await stripe('GET', `/payment_links/${id}`);
+      return ok(data);
+    }
+    if (action === 'update') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko stripe links update --id plink_xxx --active false');
+      const p = {};
+      if (flags.active) p.active = flags.active;
+      const data = await stripe('POST', `/payment_links/${id}`, p);
+      return ok({ id: data.id, url: data.url, active: data.active });
+    }
+  }
+
+  fail(`Unknown command: stripe ${resource} ${action || ''}\nRun "jeriko stripe" for usage.`);
+});

@@ -1,0 +1,53 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, escapeAppleScript: esc } = require('../lib/cli');
+const { execSync } = require('child_process');
+
+function osascript(script) {
+  return execSync('osascript', { input: script, encoding: 'utf-8', timeout: 15000 }).trim();
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  if (flags.send) {
+    const to = esc(typeof flags.send === 'string' ? flags.send : positional[0]);
+    const message = esc(flags.message || positional.slice(1).join(' '));
+    if (!to || !message) fail('Usage: jeriko msg --send "+1234567890" --message "hello"');
+    osascript(`
+      tell application "Messages"
+        set targetService to 1st account whose service type = iMessage
+        set targetBuddy to participant "${to}" of targetService
+        send "${message}" to targetBuddy
+      end tell
+    `);
+    return ok({ sent: message, to });
+  }
+
+  if (flags.read) {
+    const limit = flags.limit ? parseInt(flags.limit) : 10;
+    const raw = osascript(`
+      tell application "Messages"
+        set output to ""
+        set chatList to chats
+        set cnt to 0
+        repeat with c in chatList
+          if cnt >= ${limit} then exit repeat
+          set lastMsg to ""
+          try
+            set lastMsg to text of last item of messages of c
+          end try
+          set output to output & id of c & "|" & name of c & "|" & lastMsg & linefeed
+          set cnt to cnt + 1
+        end repeat
+        return output
+      end tell
+    `);
+    const chats = raw.split('\n').filter(Boolean).map(line => {
+      const [id, name, lastMessage] = line.split('|');
+      return { id, name: name || 'Unknown', lastMessage: lastMessage || '' };
+    });
+    return ok(chats);
+  }
+
+  fail('Usage: jeriko msg --send <to> --message <text>|--read [--limit N]');
+});

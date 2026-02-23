@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // --ping <host>
+  if (flags.ping) {
+    const host = typeof flags.ping === 'string' ? flags.ping : positional[0];
+    if (!host) fail('Usage: jeriko net --ping <host>');
+    const count = parseInt(flags.count) || 4;
+    try {
+      const raw = execSync(`ping -c ${count} -W 3000 "${host}"`, { encoding: 'utf-8', timeout: 15000 });
+      const lines = raw.trim().split('\n');
+      const stats = lines[lines.length - 1];
+      const match = stats.match(/([\d.]+)\/([\d.]+)\/([\d.]+)/);
+      return ok({
+        host,
+        packets: count,
+        min: match ? parseFloat(match[1]) : null,
+        avg: match ? parseFloat(match[2]) : null,
+        max: match ? parseFloat(match[3]) : null,
+        unit: 'ms',
+        raw: lines.slice(-2).join('\n'),
+      });
+    } catch (e) {
+      fail(`Ping failed: ${e.stderr || e.message}`, EXIT.NETWORK);
+    }
+  }
+
+  // --dns <domain>
+  if (flags.dns) {
+    const domain = typeof flags.dns === 'string' ? flags.dns : positional[0];
+    if (!domain) fail('Usage: jeriko net --dns <domain>');
+    try {
+      const raw = execSync(`dig +short "${domain}"`, { encoding: 'utf-8', timeout: 10000 });
+      const records = raw.trim().split('\n').filter(Boolean);
+      return ok({ domain, records });
+    } catch (e) {
+      fail(`DNS lookup failed: ${e.message}`, EXIT.NETWORK);
+    }
+  }
+
+  // --ports: listening ports
+  if (flags.ports) {
+    try {
+      const raw = execSync(`lsof -iTCP -sTCP:LISTEN -P -n 2>/dev/null || netstat -an | grep LISTEN`, {
+        encoding: 'utf-8', timeout: 10000,
+      });
+      const lines = raw.trim().split('\n').filter(Boolean);
+      const ports = lines.slice(1).map(line => {
+        const parts = line.trim().split(/\s+/);
+        return {
+          command: parts[0],
+          pid: parseInt(parts[1]),
+          address: parts[8] || parts[3],
+        };
+      }).filter(p => p.command);
+      return ok(ports);
+    } catch {
+      return ok([]);
+    }
+  }
+
+  // --download <url> --to <path>
+  if (flags.download) {
+    const url = typeof flags.download === 'string' ? flags.download : positional[0];
+    if (!url) fail('Usage: jeriko net --download <url> --to <path>');
+    const dest = flags.to || path.basename(new URL(url).pathname) || 'download';
+    try {
+      execSync(`curl -fsSL -o "${dest}" "${url}"`, { timeout: 60000 });
+      const stat = fs.statSync(dest);
+      return ok({ downloaded: url, path: path.resolve(dest), bytes: stat.size });
+    } catch (e) {
+      fail(`Download failed: ${e.stderr || e.message}`, EXIT.NETWORK);
+    }
+  }
+
+  // --curl <url>: HTTP request with structured output
+  if (flags.curl) {
+    const url = typeof flags.curl === 'string' ? flags.curl : positional[0];
+    if (!url) fail('Usage: jeriko net --curl <url> [--method POST] [--body "{}"] [--headers "{}"]');
+    const method = (flags.method || 'GET').toUpperCase();
+    let curlArgs = `curl -sS -X ${method} -w "\\n%{http_code}" -m 30`;
+
+    if (flags.headers) {
+      try {
+        const hdrs = JSON.parse(flags.headers);
+        for (const [k, v] of Object.entries(hdrs)) {
+          curlArgs += ` -H "${k}: ${v}"`;
+        }
+      } catch {
+        curlArgs += ` -H "${flags.headers}"`;
+      }
+    }
+    if (flags.body) {
+      curlArgs += ` -H "Content-Type: application/json" -d '${flags.body}'`;
+    }
+    curlArgs += ` "${url}"`;
+
+    try {
+      const raw = execSync(curlArgs, { encoding: 'utf-8', timeout: 35000 });
+      const lines = raw.split('\n');
+      const statusCode = parseInt(lines.pop());
+      const body = lines.join('\n');
+      let parsed;
+      try { parsed = JSON.parse(body); } catch { parsed = body; }
+      return ok({ status: statusCode, body: parsed });
+    } catch (e) {
+      fail(`Request failed: ${e.stderr || e.message}`, EXIT.NETWORK);
+    }
+  }
+
+  // --ip: public IP
+  if (flags.ip) {
+    try {
+      const raw = await fetch('https://api.ipify.org?format=json');
+      const data = await raw.json();
+      return ok({ ip: data.ip });
+    } catch (e) {
+      fail(`IP lookup failed: ${e.message}`, EXIT.NETWORK);
+    }
+  }
+
+  fail('Usage: jeriko net --ping <host>|--dns <domain>|--ports|--download <url>|--curl <url>|--ip');
+});

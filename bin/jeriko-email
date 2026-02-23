@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const Imap = require('imap');
+const { simpleParser } = require('mailparser');
+
+run(async () => {
+  const { flags } = parseArgs(process.argv);
+
+  const config = {
+    user: process.env.IMAP_USER,
+    password: process.env.IMAP_PASSWORD,
+    host: process.env.IMAP_HOST || 'imap.gmail.com',
+    port: parseInt(process.env.IMAP_PORT) || 993,
+    tls: true,
+    tlsOptions: { rejectUnauthorized: false },
+  };
+
+  if (!config.user || !config.password) {
+    fail('Set IMAP_USER and IMAP_PASSWORD in .env', EXIT.AUTH);
+  }
+
+  const limit = flags.limit ? parseInt(flags.limit) : 10;
+  const box = flags.box || 'INBOX';
+
+  const results = await new Promise((resolve, reject) => {
+    const imap = new Imap(config);
+    const emails = [];
+
+    imap.once('ready', () => {
+      imap.openBox(box, true, (err, mailbox) => {
+        if (err) return reject(err);
+        const total = mailbox.messages.total;
+        if (total === 0) return resolve([]);
+
+        let criteria;
+        if (flags.unread) criteria = ['UNSEEN'];
+        else if (flags.search) criteria = [['TEXT', flags.search]];
+        else if (flags.from) criteria = [['FROM', flags.from]];
+        else criteria = ['ALL'];
+
+        imap.search(criteria, (err, uids) => {
+          if (err) return reject(err);
+          if (!uids.length) { imap.end(); return resolve([]); }
+
+          const fetchUids = uids.slice(-limit).reverse();
+          const f = imap.fetch(fetchUids, { bodies: '', struct: true });
+
+          f.on('message', (msg) => {
+            msg.on('body', (stream) => {
+              let raw = '';
+              stream.on('data', (chunk) => raw += chunk.toString('utf8'));
+              stream.on('end', async () => {
+                try {
+                  const parsed = await simpleParser(raw);
+                  emails.push({
+                    uid: parsed.messageId,
+                    from: parsed.from?.text || '',
+                    to: parsed.to?.text || '',
+                    subject: parsed.subject || '(no subject)',
+                    date: parsed.date?.toISOString() || '',
+                    snippet: (parsed.text || '').slice(0, 500),
+                    hasAttachments: (parsed.attachments?.length || 0) > 0,
+                  });
+                } catch {}
+              });
+            });
+          });
+
+          f.once('end', () => {
+            imap.end();
+            // Wait a tick for async parsing
+            setTimeout(() => resolve(emails), 500);
+          });
+          f.once('error', reject);
+        });
+      });
+    });
+
+    imap.once('error', reject);
+    imap.connect();
+  });
+
+  ok(results);
+});

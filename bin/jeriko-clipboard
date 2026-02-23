@@ -1,0 +1,25 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, readStdin } = require('../lib/cli');
+const { execSync } = require('child_process');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  if (flags.get || (!flags.set && positional.length === 0)) {
+    const content = execSync('pbpaste', { encoding: 'utf-8', timeout: 5000 });
+    return ok(content);
+  }
+
+  if (flags.set !== undefined) {
+    let text = typeof flags.set === 'string' ? flags.set : positional.join(' ');
+    if (!text) {
+      const stdin = await readStdin();
+      if (stdin) text = stdin.trim();
+    }
+    if (!text) fail('Usage: jeriko clipboard --set <text> or pipe via stdin');
+    execSync('pbcopy', { input: text, timeout: 5000 });
+    return ok({ copied: text.length + ' chars' });
+  }
+
+  fail('Usage: jeriko clipboard [--get|--set <text>]');
+});

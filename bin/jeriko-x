@@ -1,0 +1,804 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-x — Full X.com (Twitter) CLI built on X API v2
+// Standalone CLI: jeriko x <command> [flags]
+// Auth: Bearer token (read) + OAuth 2.0 PKCE (write)
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const http = require('http');
+const { execSync } = require('child_process');
+
+const BASE = 'https://api.x.com/2';
+const BEARER = process.env.X_BEARER_TOKEN;
+const CLIENT_ID = process.env.X_CLIENT_ID;
+const CLIENT_SECRET = process.env.X_CLIENT_SECRET;
+const API_KEY = process.env.X_API_KEY;
+const API_SECRET = process.env.X_API_SECRET;
+const ACCESS_TOKEN = process.env.X_ACCESS_TOKEN;
+const ACCESS_TOKEN_SECRET = process.env.X_ACCESS_TOKEN_SECRET;
+const TOKEN_FILE = path.join(__dirname, '..', 'data', 'x-tokens.json');
+const CALLBACK_PORT = 9876;
+const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}/callback`;
+const SCOPES = 'tweet.read tweet.write users.read follows.read follows.write like.read like.write dm.read dm.write list.read list.write bookmark.read bookmark.write offline.access';
+
+// ---- OAuth 1.0a signing ----
+
+function hasOAuth1() {
+  return API_KEY && API_SECRET && ACCESS_TOKEN && ACCESS_TOKEN_SECRET;
+}
+
+function percentEncode(str) {
+  return encodeURIComponent(str)
+    .replace(/!/g, '%21').replace(/\*/g, '%2A')
+    .replace(/'/g, '%27').replace(/\(/g, '%28').replace(/\)/g, '%29');
+}
+
+function oauth1Header(method, url, body = null) {
+  const oauthParams = {
+    oauth_consumer_key: API_KEY,
+    oauth_nonce: crypto.randomBytes(16).toString('hex'),
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp: Math.floor(Date.now() / 1000).toString(),
+    oauth_token: ACCESS_TOKEN,
+    oauth_version: '1.0',
+  };
+
+  // Collect all params for signature base (oauth + query + form body)
+  const allParams = { ...oauthParams };
+  const urlObj = new URL(url);
+  for (const [k, v] of urlObj.searchParams) allParams[k] = v;
+  // For non-JSON form-encoded bodies
+  if (body && typeof body === 'string' && !body.startsWith('{')) {
+    new URLSearchParams(body).forEach((v, k) => { allParams[k] = v; });
+  }
+
+  // Sort and encode
+  const paramStr = Object.keys(allParams).sort()
+    .map(k => `${percentEncode(k)}=${percentEncode(allParams[k])}`)
+    .join('&');
+
+  const baseUrl = `${urlObj.origin}${urlObj.pathname}`;
+  const signatureBase = `${method.toUpperCase()}&${percentEncode(baseUrl)}&${percentEncode(paramStr)}`;
+  const signingKey = `${percentEncode(API_SECRET)}&${percentEncode(ACCESS_TOKEN_SECRET)}`;
+  const signature = crypto.createHmac('sha1', signingKey).update(signatureBase).digest('base64');
+
+  oauthParams.oauth_signature = signature;
+  const header = 'OAuth ' + Object.keys(oauthParams).sort()
+    .map(k => `${percentEncode(k)}="${percentEncode(oauthParams[k])}"`)
+    .join(', ');
+  return header;
+}
+
+// ---- Token management ----
+
+function loadTokens() {
+  try { return JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf-8')); }
+  catch { return null; }
+}
+
+function saveTokens(tokens) {
+  const dir = path.dirname(TOKEN_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+}
+
+async function refreshToken(refresh_token) {
+  if (!CLIENT_ID) fail('X_CLIENT_ID not set in .env', EXIT.AUTH);
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token,
+    client_id: CLIENT_ID,
+  });
+  const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+  if (CLIENT_SECRET) {
+    headers['Authorization'] = 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+  }
+  const res = await fetch('https://api.x.com/2/oauth2/token', {
+    method: 'POST', headers, body,
+  });
+  const data = await res.json();
+  if (!res.ok) fail(`Token refresh failed: ${data.error_description || data.error || res.status}`, EXIT.AUTH);
+  const tokens = {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: Date.now() + (data.expires_in * 1000) - 60000, // 1min buffer
+  };
+  saveTokens(tokens);
+  return tokens;
+}
+
+async function getUserToken() {
+  const tokens = loadTokens();
+  if (!tokens) fail('Not authenticated. Run: jeriko x auth', EXIT.AUTH);
+  if (Date.now() >= tokens.expires_at) {
+    const refreshed = await refreshToken(tokens.refresh_token);
+    return refreshed.access_token;
+  }
+  return tokens.access_token;
+}
+
+// ---- HTTP helpers ----
+
+async function xGet(urlPath, params = {}) {
+  if (!BEARER) fail('X_BEARER_TOKEN not set in .env', EXIT.AUTH);
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) qs.set(k, v);
+  }
+  const qstr = qs.toString();
+  const url = `${BASE}${urlPath}${qstr ? '?' + qstr : ''}`;
+  const res = await fetch(url, {
+    headers: { 'Authorization': `Bearer ${BEARER}` },
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.detail || data.title || data.errors?.[0]?.message || JSON.stringify(data);
+    const code = res.status === 401 || res.status === 403 ? EXIT.AUTH
+      : res.status === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+    fail(`X API ${res.status}: ${msg}`, code);
+  }
+  return data;
+}
+
+async function xUser(method, urlPath, body = null) {
+  const url = `${BASE}${urlPath}`;
+  const opts = { method, headers: { 'Content-Type': 'application/json' } };
+  if (body && (method === 'POST' || method === 'PUT')) {
+    opts.body = JSON.stringify(body);
+  }
+  // OAuth 2.0 tokens preferred (have write scopes), fallback to OAuth 1.0a
+  const tokens = loadTokens();
+  if (tokens) {
+    const token = await getUserToken();
+    opts.headers['Authorization'] = `Bearer ${token}`;
+  } else if (hasOAuth1()) {
+    opts.headers['Authorization'] = oauth1Header(method, url);
+  } else {
+    fail('Not authenticated. Run: jeriko x auth', EXIT.AUTH);
+  }
+  const res = await fetch(url, opts);
+  if (res.status === 204) return { ok: true };
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.detail || data.title || data.errors?.[0]?.message || JSON.stringify(data);
+    const code = res.status === 401 || res.status === 403 ? EXIT.AUTH
+      : res.status === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+    fail(`X API ${res.status}: ${msg}`, code);
+  }
+  return data;
+}
+
+// GET with user auth (for home timeline, mentions, bookmarks, DMs, lists)
+async function xUserGet(urlPath, params = {}) {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null) qs.set(k, v);
+  }
+  const qstr = qs.toString();
+  const url = `${BASE}${urlPath}${qstr ? '?' + qstr : ''}`;
+  const headers = {};
+  const tokens = loadTokens();
+  if (tokens) {
+    const token = await getUserToken();
+    headers['Authorization'] = `Bearer ${token}`;
+  } else if (hasOAuth1()) {
+    headers['Authorization'] = oauth1Header('GET', url);
+  } else {
+    fail('Not authenticated. Run: jeriko x auth', EXIT.AUTH);
+  }
+  const res = await fetch(url, { headers });
+  if (res.status === 204) return { ok: true };
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.detail || data.title || data.errors?.[0]?.message || JSON.stringify(data);
+    const code = res.status === 401 || res.status === 403 ? EXIT.AUTH
+      : res.status === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+    fail(`X API ${res.status}: ${msg}`, code);
+  }
+  return data;
+}
+
+// ---- User ID resolution ----
+
+let _myUserId = null;
+let _myUsername = null;
+
+async function getMyUser() {
+  if (_myUserId) return { id: _myUserId, username: _myUsername };
+  const data = await xUserGet('/users/me', { 'user.fields': 'id,username,name,public_metrics' });
+  _myUserId = data.data.id;
+  _myUsername = data.data.username;
+  return data.data;
+}
+
+async function getMyId() {
+  const me = await getMyUser();
+  return me.id;
+}
+
+async function resolveUserId(handle) {
+  const clean = handle.replace(/^@/, '');
+  const data = await xGet(`/users/by/username/${clean}`, { 'user.fields': 'id,username,name,public_metrics' });
+  if (!data.data) fail(`User @${clean} not found`, EXIT.NOT_FOUND);
+  return data.data;
+}
+
+// ---- Auth flow (OAuth 2.0 PKCE) ----
+
+function startAuthFlow() {
+  return new Promise((resolve, reject) => {
+    if (!CLIENT_ID) fail('X_CLIENT_ID not set in .env — required for OAuth', EXIT.AUTH);
+
+    const codeVerifier = crypto.randomBytes(64).toString('base64url');
+    const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+    const state = crypto.randomBytes(16).toString('hex');
+
+    const authUrl = `https://x.com/i/oauth2/authorize?` + new URLSearchParams({
+      response_type: 'code',
+      client_id: CLIENT_ID,
+      redirect_uri: REDIRECT_URI,
+      scope: SCOPES,
+      state,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+    }).toString();
+
+    const server = http.createServer(async (req, res) => {
+      const url = new URL(req.url, `http://localhost:${CALLBACK_PORT}`);
+      if (url.pathname !== '/callback') {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
+      }
+
+      const code = url.searchParams.get('code');
+      const returnedState = url.searchParams.get('state');
+
+      if (returnedState !== state) {
+        res.writeHead(400);
+        res.end('State mismatch — possible CSRF attack');
+        server.close();
+        reject(new Error('State mismatch'));
+        return;
+      }
+
+      if (!code) {
+        const error = url.searchParams.get('error');
+        res.writeHead(400);
+        res.end(`Authorization failed: ${error || 'no code received'}`);
+        server.close();
+        reject(new Error(error || 'No code'));
+        return;
+      }
+
+      // Exchange code for tokens
+      try {
+        const body = new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: codeVerifier,
+          client_id: CLIENT_ID,
+        });
+        const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+        if (CLIENT_SECRET) {
+          headers['Authorization'] = 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+        }
+        const tokenRes = await fetch('https://api.x.com/2/oauth2/token', {
+          method: 'POST', headers, body,
+        });
+        const tokenData = await tokenRes.json();
+
+        if (!tokenRes.ok) {
+          res.writeHead(500);
+          res.end(`Token exchange failed: ${tokenData.error_description || tokenData.error}`);
+          server.close();
+          reject(new Error(tokenData.error_description || tokenData.error));
+          return;
+        }
+
+        const tokens = {
+          access_token: tokenData.access_token,
+          refresh_token: tokenData.refresh_token,
+          expires_at: Date.now() + (tokenData.expires_in * 1000) - 60000,
+        };
+        saveTokens(tokens);
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end('<html><body><h1>Authorized!</h1><p>You can close this tab and return to the terminal.</p></body></html>');
+        server.close();
+        resolve(tokens);
+      } catch (err) {
+        res.writeHead(500);
+        res.end(`Error: ${err.message}`);
+        server.close();
+        reject(err);
+      }
+    });
+
+    server.listen(CALLBACK_PORT, () => {
+      console.error(`Opening browser for X authorization...`);
+      console.error(`If browser doesn't open, visit: ${authUrl}`);
+      try {
+        execSync(`open "${authUrl}"`, { stdio: 'ignore' });
+      } catch {
+        // open may fail in headless environments
+      }
+    });
+
+    // Timeout after 5 minutes
+    setTimeout(() => {
+      server.close();
+      reject(new Error('Auth timeout — no callback received within 5 minutes'));
+    }, 300000);
+  });
+}
+
+// ---- Tweet formatting helpers ----
+
+const TWEET_FIELDS = 'created_at,author_id,public_metrics,text,conversation_id,in_reply_to_user_id';
+const USER_FIELDS = 'username,name,public_metrics';
+
+function formatTweet(t, users) {
+  const author = users?.find(u => u.id === t.author_id);
+  return {
+    id: t.id,
+    text: t.text,
+    author: author ? `@${author.username}` : t.author_id,
+    author_name: author?.name,
+    created_at: t.created_at,
+    likes: t.public_metrics?.like_count,
+    retweets: t.public_metrics?.retweet_count,
+    replies: t.public_metrics?.reply_count,
+    impressions: t.public_metrics?.impression_count,
+  };
+}
+
+function formatTweets(data) {
+  const tweets = data.data || [];
+  const users = data.includes?.users || [];
+  return tweets.map(t => formatTweet(t, users));
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const command = args[0];
+  const { flags, positional } = parseArgs(['', '', ...args.slice(1)]);
+
+  if (!command) {
+    return ok({
+      usage: 'jeriko x <command> [flags]',
+      commands: {
+        auth: 'OAuth 2.0 PKCE login, --status, --revoke',
+        post: '"text" | --reply <id> "text" | --quote <id> "text"',
+        delete: '<tweet_id>',
+        search: '"query" [--limit N]',
+        timeline: '[--user <handle>] [--mentions] [--limit N]',
+        like: '<tweet_id>',
+        unlike: '<tweet_id>',
+        retweet: '<tweet_id>',
+        unretweet: '<tweet_id>',
+        bookmark: '<tweet_id>',
+        unbookmark: '<tweet_id>',
+        me: 'authenticated user info',
+        user: '<handle> | --id <user_id>',
+        follow: '<handle>',
+        unfollow: '<handle>',
+        followers: '<handle> [--limit N]',
+        following: '<handle> [--limit N]',
+        dm: '<handle> "message" | --list | --convo <id>',
+        lists: '[--create "name"] [--delete <id>] [--add <list_id> <handle>] [--remove <list_id> <handle>]',
+        mute: '<handle>',
+        unmute: '<handle>',
+      },
+    });
+  }
+
+  // ===================== AUTH =====================
+  if (command === 'auth') {
+    if (flags.status) {
+      const tokens = loadTokens();
+      if (!tokens) return ok({ authenticated: false, message: 'Not logged in. Run: jeriko x auth' });
+      try {
+        const me = await getMyUser();
+        return ok({
+          authenticated: true,
+          username: `@${me.username}`,
+          name: me.name,
+          id: me.id,
+          token_expires: new Date(tokens.expires_at).toISOString(),
+          expired: Date.now() >= tokens.expires_at,
+        });
+      } catch {
+        return ok({
+          authenticated: true,
+          token_expires: new Date(tokens.expires_at).toISOString(),
+          expired: Date.now() >= tokens.expires_at,
+          note: 'Token may be invalid — try: jeriko x auth',
+        });
+      }
+    }
+    if (flags.revoke) {
+      const tokens = loadTokens();
+      if (!tokens) return ok({ message: 'No tokens to revoke' });
+      if (CLIENT_ID) {
+        try {
+          const headers = { 'Content-Type': 'application/x-www-form-urlencoded' };
+          if (CLIENT_SECRET) {
+            headers['Authorization'] = 'Basic ' + Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+          }
+          await fetch('https://api.x.com/2/oauth2/revoke', {
+            method: 'POST', headers,
+            body: new URLSearchParams({ token: tokens.access_token, client_id: CLIENT_ID }),
+          });
+        } catch { /* best effort */ }
+      }
+      try { fs.unlinkSync(TOKEN_FILE); } catch { /* ok */ }
+      return ok({ revoked: true, message: 'Tokens revoked and deleted' });
+    }
+    // Default: start auth flow
+    const tokens = await startAuthFlow();
+    // Fetch user info with new tokens
+    _myUserId = null; // reset cache
+    try {
+      const me = await getMyUser();
+      return ok({ authenticated: true, username: `@${me.username}`, name: me.name, id: me.id });
+    } catch {
+      return ok({ authenticated: true, message: 'Tokens saved. Could not fetch user info.' });
+    }
+  }
+
+  // ===================== POST =====================
+  if (command === 'post') {
+    const text = positional[0] || flags.text;
+    if (!text) fail('Usage: jeriko x post "Hello world" [--reply <id>] [--quote <id>]');
+    const body = { text };
+    if (flags.reply) {
+      body.reply = { in_reply_to_tweet_id: flags.reply };
+    }
+    if (flags.quote) {
+      body.quote_tweet_id = flags.quote;
+    }
+    const data = await xUser('POST', '/tweets', body);
+    return ok({
+      id: data.data.id,
+      text: data.data.text,
+      url: `https://x.com/i/status/${data.data.id}`,
+    });
+  }
+
+  // ===================== DELETE =====================
+  if (command === 'delete') {
+    const id = positional[0] || flags.id;
+    if (!id) fail('Usage: jeriko x delete <tweet_id>');
+    const data = await xUser('DELETE', `/tweets/${id}`);
+    return ok({ id, deleted: data.data?.deleted ?? true });
+  }
+
+  // ===================== SEARCH =====================
+  if (command === 'search') {
+    const query = positional[0] || flags.query;
+    if (!query) fail('Usage: jeriko x search "query" [--limit N]');
+    const data = await xGet('/tweets/search/recent', {
+      query,
+      max_results: Math.max(10, Math.min(parseInt(flags.limit) || 10, 100)),
+      'tweet.fields': TWEET_FIELDS,
+      'expansions': 'author_id',
+      'user.fields': USER_FIELDS,
+    });
+    if (!data.data || data.data.length === 0) return ok([]);
+    const tweets = formatTweets(data);
+    // Respect user's limit even though API min is 10
+    const userLimit = parseInt(flags.limit);
+    return ok(userLimit && userLimit < 10 ? tweets.slice(0, userLimit) : tweets);
+  }
+
+  // ===================== TIMELINE =====================
+  if (command === 'timeline') {
+    const limit = Math.min(parseInt(flags.limit) || 10, 100);
+    const params = {
+      max_results: limit,
+      'tweet.fields': TWEET_FIELDS,
+      'expansions': 'author_id',
+      'user.fields': USER_FIELDS,
+    };
+
+    if (flags.user) {
+      // User's tweets (public, Bearer auth)
+      const user = await resolveUserId(flags.user);
+      const data = await xGet(`/users/${user.id}/tweets`, params);
+      if (!data.data) return ok([]);
+      return ok(formatTweets(data));
+    }
+    if (flags.mentions) {
+      // My mentions (User auth)
+      const myId = await getMyId();
+      const data = await xUserGet(`/users/${myId}/mentions`, params);
+      if (!data.data) return ok([]);
+      return ok(formatTweets(data));
+    }
+    // Home timeline (User auth)
+    const myId = await getMyId();
+    const data = await xUserGet(`/users/${myId}/timelines/reverse_chronological`, params);
+    if (!data.data) return ok([]);
+    return ok(formatTweets(data));
+  }
+
+  // ===================== LIKE / UNLIKE =====================
+  if (command === 'like') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x like <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('POST', `/users/${myId}/likes`, { tweet_id: tweetId });
+    return ok({ tweet_id: tweetId, liked: data.data?.liked ?? true });
+  }
+  if (command === 'unlike') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x unlike <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('DELETE', `/users/${myId}/likes/${tweetId}`);
+    return ok({ tweet_id: tweetId, unliked: true });
+  }
+
+  // ===================== RETWEET / UNRETWEET =====================
+  if (command === 'retweet') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x retweet <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('POST', `/users/${myId}/retweets`, { tweet_id: tweetId });
+    return ok({ tweet_id: tweetId, retweeted: data.data?.retweeted ?? true });
+  }
+  if (command === 'unretweet') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x unretweet <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('DELETE', `/users/${myId}/retweets/${tweetId}`);
+    return ok({ tweet_id: tweetId, unretweeted: true });
+  }
+
+  // ===================== BOOKMARK / UNBOOKMARK =====================
+  if (command === 'bookmark') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x bookmark <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('POST', `/users/${myId}/bookmarks`, { tweet_id: tweetId });
+    return ok({ tweet_id: tweetId, bookmarked: data.data?.bookmarked ?? true });
+  }
+  if (command === 'unbookmark') {
+    const tweetId = positional[0] || flags.id;
+    if (!tweetId) fail('Usage: jeriko x unbookmark <tweet_id>');
+    const myId = await getMyId();
+    const data = await xUser('DELETE', `/users/${myId}/bookmarks/${tweetId}`);
+    return ok({ tweet_id: tweetId, unbookmarked: true });
+  }
+
+  // ===================== ME =====================
+  if (command === 'me') {
+    const data = await xUserGet('/users/me', {
+      'user.fields': 'id,username,name,description,public_metrics,profile_image_url,created_at,verified',
+    });
+    const u = data.data;
+    return ok({
+      id: u.id,
+      username: `@${u.username}`,
+      name: u.name,
+      description: u.description,
+      followers: u.public_metrics?.followers_count,
+      following: u.public_metrics?.following_count,
+      tweets: u.public_metrics?.tweet_count,
+      listed: u.public_metrics?.listed_count,
+      verified: u.verified,
+      created_at: u.created_at,
+      profile_image: u.profile_image_url,
+    });
+  }
+
+  // ===================== USER =====================
+  if (command === 'user') {
+    if (flags.id) {
+      const data = await xGet(`/users/${flags.id}`, {
+        'user.fields': 'id,username,name,description,public_metrics,profile_image_url,created_at,verified',
+      });
+      const u = data.data;
+      return ok({
+        id: u.id,
+        username: `@${u.username}`,
+        name: u.name,
+        description: u.description,
+        followers: u.public_metrics?.followers_count,
+        following: u.public_metrics?.following_count,
+        tweets: u.public_metrics?.tweet_count,
+        verified: u.verified,
+        created_at: u.created_at,
+        profile_image: u.profile_image_url,
+      });
+    }
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x user <handle> | --id <user_id>');
+    const u = await resolveUserId(handle);
+    return ok({
+      id: u.id,
+      username: `@${u.username}`,
+      name: u.name,
+      followers: u.public_metrics?.followers_count,
+      following: u.public_metrics?.following_count,
+      tweets: u.public_metrics?.tweet_count,
+    });
+  }
+
+  // ===================== FOLLOW / UNFOLLOW =====================
+  if (command === 'follow') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x follow <handle>');
+    const target = await resolveUserId(handle);
+    const myId = await getMyId();
+    const data = await xUser('POST', `/users/${myId}/following`, { target_user_id: target.id });
+    return ok({
+      username: `@${target.username}`,
+      following: data.data?.following ?? true,
+      pending: data.data?.pending_follow ?? false,
+    });
+  }
+  if (command === 'unfollow') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x unfollow <handle>');
+    const target = await resolveUserId(handle);
+    const myId = await getMyId();
+    const data = await xUser('DELETE', `/users/${myId}/following/${target.id}`);
+    return ok({ username: `@${target.username}`, unfollowed: true });
+  }
+
+  // ===================== FOLLOWERS / FOLLOWING =====================
+  if (command === 'followers') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x followers <handle> [--limit N]');
+    const user = await resolveUserId(handle);
+    const data = await xGet(`/users/${user.id}/followers`, {
+      max_results: Math.min(parseInt(flags.limit) || 20, 1000),
+      'user.fields': USER_FIELDS,
+    });
+    if (!data.data) return ok([]);
+    return ok(data.data.map(u => ({
+      id: u.id,
+      username: `@${u.username}`,
+      name: u.name,
+      followers: u.public_metrics?.followers_count,
+    })));
+  }
+  if (command === 'following') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x following <handle> [--limit N]');
+    const user = await resolveUserId(handle);
+    const data = await xGet(`/users/${user.id}/following`, {
+      max_results: Math.min(parseInt(flags.limit) || 20, 1000),
+      'user.fields': USER_FIELDS,
+    });
+    if (!data.data) return ok([]);
+    return ok(data.data.map(u => ({
+      id: u.id,
+      username: `@${u.username}`,
+      name: u.name,
+      followers: u.public_metrics?.followers_count,
+    })));
+  }
+
+  // ===================== DM =====================
+  if (command === 'dm') {
+    if (flags.list) {
+      const data = await xUserGet('/dm_events', {
+        max_results: Math.min(parseInt(flags.limit) || 20, 100),
+        'dm_event.fields': 'id,text,created_at,sender_id,dm_conversation_id',
+      });
+      if (!data.data) return ok([]);
+      return ok(data.data.map(e => ({
+        id: e.id,
+        conversation_id: e.dm_conversation_id,
+        sender_id: e.sender_id,
+        text: e.text,
+        created_at: e.created_at,
+      })));
+    }
+    if (flags.convo) {
+      const data = await xUserGet(`/dm_conversations/${flags.convo}/dm_events`, {
+        max_results: Math.min(parseInt(flags.limit) || 20, 100),
+        'dm_event.fields': 'id,text,created_at,sender_id',
+      });
+      if (!data.data) return ok([]);
+      return ok(data.data.map(e => ({
+        id: e.id,
+        sender_id: e.sender_id,
+        text: e.text,
+        created_at: e.created_at,
+      })));
+    }
+    // Send DM: jeriko x dm <handle> "message"
+    const handle = positional[0];
+    const message = positional[1] || flags.message;
+    if (!handle || !message) fail('Usage: jeriko x dm <handle> "message" | --list | --convo <id>');
+    const target = await resolveUserId(handle);
+    const data = await xUser('POST', `/dm_conversations/with/${target.id}/messages`, {
+      text: message,
+    });
+    return ok({
+      to: `@${target.username}`,
+      message,
+      event_id: data.data?.dm_event_id,
+      conversation_id: data.data?.dm_conversation_id,
+    });
+  }
+
+  // ===================== LISTS =====================
+  if (command === 'lists') {
+    if (flags.create) {
+      const name = typeof flags.create === 'string' ? flags.create : positional[0];
+      if (!name) fail('Usage: jeriko x lists --create "name" [--description "text"] [--private]');
+      const body = { name };
+      if (flags.description) body.description = flags.description;
+      if (flags.private) body.private = true;
+      const data = await xUser('POST', '/lists', body);
+      return ok({ id: data.data.id, name: data.data.name });
+    }
+    if (flags.delete) {
+      const id = typeof flags.delete === 'string' ? flags.delete : positional[0];
+      if (!id) fail('Usage: jeriko x lists --delete <list_id>');
+      const data = await xUser('DELETE', `/lists/${id}`);
+      return ok({ id, deleted: data.data?.deleted ?? true });
+    }
+    if (flags.add) {
+      const listId = typeof flags.add === 'string' ? flags.add : positional[0];
+      const handle = positional[typeof flags.add === 'string' ? 0 : 1];
+      if (!listId || !handle) fail('Usage: jeriko x lists --add <list_id> <handle>');
+      const target = await resolveUserId(handle);
+      const data = await xUser('POST', `/lists/${listId}/members`, { user_id: target.id });
+      return ok({ list_id: listId, username: `@${target.username}`, added: data.data?.is_member ?? true });
+    }
+    if (flags.remove) {
+      const listId = typeof flags.remove === 'string' ? flags.remove : positional[0];
+      const handle = positional[typeof flags.remove === 'string' ? 0 : 1];
+      if (!listId || !handle) fail('Usage: jeriko x lists --remove <list_id> <handle>');
+      const target = await resolveUserId(handle);
+      const data = await xUser('DELETE', `/lists/${listId}/members/${target.id}`);
+      return ok({ list_id: listId, username: `@${target.username}`, removed: true });
+    }
+    // Default: list my lists
+    const myId = await getMyId();
+    const data = await xUserGet(`/users/${myId}/owned_lists`, {
+      max_results: Math.min(parseInt(flags.limit) || 20, 100),
+      'list.fields': 'id,name,description,member_count,follower_count,private,created_at',
+    });
+    if (!data.data) return ok([]);
+    return ok(data.data.map(l => ({
+      id: l.id,
+      name: l.name,
+      description: l.description,
+      members: l.member_count,
+      followers: l.follower_count,
+      private: l.private,
+    })));
+  }
+
+  // ===================== MUTE / UNMUTE =====================
+  if (command === 'mute') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x mute <handle>');
+    const target = await resolveUserId(handle);
+    const myId = await getMyId();
+    const data = await xUser('POST', `/users/${myId}/muting`, { target_user_id: target.id });
+    return ok({ username: `@${target.username}`, muted: data.data?.muting ?? true });
+  }
+  if (command === 'unmute') {
+    const handle = positional[0];
+    if (!handle) fail('Usage: jeriko x unmute <handle>');
+    const target = await resolveUserId(handle);
+    const myId = await getMyId();
+    const data = await xUser('DELETE', `/users/${myId}/muting/${target.id}`);
+    return ok({ username: `@${target.username}`, unmuted: true });
+  }
+
+  fail(`Unknown command: x ${command}\nRun "jeriko x" for usage.`);
+});

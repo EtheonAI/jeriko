@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { execSync } = require('child_process');
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+
+const ENV_PATH = path.join(__dirname, '..', '.env');
+const JERIKO_BIN = path.join(__dirname, 'jeriko');
+
+run(async () => {
+  const { flags } = parseArgs(process.argv);
+  const w = (s) => process.stdout.write(s);
+
+  // ── Welcome banner ──
+  w('\n');
+  w('  JerikoBot v1.0.0\n');
+  w('  Unix-first AI toolkit\n');
+  w('\n');
+
+  const nonInteractive = flags.yes === true;
+  const skipAI = flags['skip-ai'] === true;
+  const skipTelegram = flags['skip-telegram'] === true;
+  const summary = { steps: [] };
+
+  // ── Helpers ──
+  function readEnv() {
+    if (!fs.existsSync(ENV_PATH)) return {};
+    const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+    const env = {};
+    for (const line of lines) {
+      const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+      if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    }
+    return env;
+  }
+
+  function writeEnvKey(key, value) {
+    const existing = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+    const regex = new RegExp(`^\\s*${key}\\s*=.*$`, 'm');
+    if (regex.test(existing)) return false; // already set, don't overwrite
+    const line = `${key}=${value}\n`;
+    fs.appendFileSync(ENV_PATH, (existing && !existing.endsWith('\n') ? '\n' : '') + line);
+    return true;
+  }
+
+  // ── Step 1/4: AI Backend ──
+  w('  [1/4] AI Backend\n');
+  if (skipAI) {
+    w('         Skipped (--skip-ai)\n');
+    summary.steps.push({ step: 'ai_backend', status: 'skipped' });
+  } else {
+    const env = readEnv();
+    if (env.AI_BACKEND) {
+      w(`         Already configured: ${env.AI_BACKEND}\n`);
+      summary.steps.push({ step: 'ai_backend', status: 'exists', value: env.AI_BACKEND });
+    } else {
+      let backend = flags.ai;
+      if (!backend && nonInteractive) {
+        backend = 'claude';
+      }
+      if (!backend) {
+        w('         Options:\n');
+        w('           1. claude  — Claude Code (recommended)\n');
+        w('           2. openai  — OpenAI (requires OPENAI_API_KEY)\n');
+        w('         Use: jeriko init --ai claude  (or --ai openai)\n');
+        backend = 'claude';
+        w(`         Defaulting to: ${backend}\n`);
+      }
+      backend = backend.toLowerCase();
+      if (!['claude', 'openai'].includes(backend)) {
+        fail(`Invalid AI backend: ${backend}. Use "claude" or "openai".`);
+      }
+      writeEnvKey('AI_BACKEND', backend);
+      w(`         Set AI_BACKEND=${backend}\n`);
+      summary.steps.push({ step: 'ai_backend', status: 'configured', value: backend });
+    }
+  }
+
+  // ── Step 2/4: Telegram Bot ──
+  w('  [2/4] Telegram Bot\n');
+  if (skipTelegram) {
+    w('         Skipped (--skip-telegram)\n');
+    summary.steps.push({ step: 'telegram', status: 'skipped' });
+  } else {
+    const env = readEnv();
+    const tokenFlag = flags['telegram-token'];
+    const adminFlag = flags['admin-ids'];
+    let telegramDone = false;
+
+    if (env.TELEGRAM_BOT_TOKEN && env.ADMIN_TELEGRAM_IDS) {
+      w('         Already configured\n');
+      summary.steps.push({ step: 'telegram', status: 'exists' });
+      telegramDone = true;
+    }
+
+    if (!telegramDone && tokenFlag && adminFlag) {
+      writeEnvKey('TELEGRAM_BOT_TOKEN', tokenFlag);
+      writeEnvKey('ADMIN_TELEGRAM_IDS', adminFlag);
+      w('         Set TELEGRAM_BOT_TOKEN and ADMIN_TELEGRAM_IDS\n');
+      summary.steps.push({ step: 'telegram', status: 'configured' });
+    } else if (!telegramDone) {
+      w('         No token provided. Use --telegram-token and --admin-ids to configure.\n');
+      summary.steps.push({ step: 'telegram', status: 'skipped' });
+    }
+  }
+
+  // ── Step 3/4: Security ──
+  w('  [3/4] Security\n');
+  const env = readEnv();
+  if (env.NODE_AUTH_SECRET) {
+    w('         NODE_AUTH_SECRET already set\n');
+    summary.steps.push({ step: 'security', status: 'exists' });
+  } else {
+    const secret = crypto.randomBytes(32).toString('hex');
+    writeEnvKey('NODE_AUTH_SECRET', secret);
+    w('         Generated NODE_AUTH_SECRET\n');
+    summary.steps.push({ step: 'security', status: 'configured' });
+  }
+
+  // ── Step 4/4: Verify ──
+  w('  [4/4] Verify\n');
+  const checks = [];
+
+  // Check: jeriko sys
+  try {
+    const out = execSync(`"${JERIKO_BIN}" sys --format text`, { timeout: 10000, encoding: 'utf-8' });
+    w('         jeriko sys            ... pass\n');
+    checks.push({ check: 'sys', pass: true });
+  } catch {
+    w('         jeriko sys            ... FAIL\n');
+    checks.push({ check: 'sys', pass: false });
+  }
+
+  // Check: jeriko discover --list
+  try {
+    execSync(`"${JERIKO_BIN}" discover --list --format text`, { timeout: 10000, encoding: 'utf-8' });
+    w('         jeriko discover --list ... pass\n');
+    checks.push({ check: 'discover', pass: true });
+  } catch {
+    w('         jeriko discover --list ... FAIL\n');
+    checks.push({ check: 'discover', pass: false });
+  }
+
+  // Check: jeriko exec
+  try {
+    execSync(`"${JERIKO_BIN}" exec echo "JerikoBot is ready" --format text`, { timeout: 10000, encoding: 'utf-8' });
+    w('         jeriko exec           ... pass\n');
+    checks.push({ check: 'exec', pass: true });
+  } catch {
+    w('         jeriko exec           ... FAIL\n');
+    checks.push({ check: 'exec', pass: false });
+  }
+
+  summary.steps.push({ step: 'verify', checks });
+
+  // ── Done ──
+  const passed = checks.filter(c => c.pass).length;
+  const total = checks.length;
+  w('\n');
+  w(`  Setup complete. ${passed}/${total} checks passed.\n`);
+  w('\n');
+  w('  Next steps:\n');
+  w('    jeriko sys --info           # verify system access\n');
+  w('    jeriko discover --format raw  # generate AI system prompt\n');
+  w('    jeriko server --start       # start the server\n');
+  w('\n');
+
+  ok(summary);
+});

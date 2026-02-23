@@ -1,0 +1,121 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { spawn, execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+const SERVER_SCRIPT = path.join(__dirname, '..', 'server', 'index.js');
+const DATA_DIR = path.join(__dirname, '..', 'data');
+const PID_FILE = path.join(DATA_DIR, 'server.pid');
+const LOG_FILE = path.join(DATA_DIR, 'server.log');
+
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function readPid() {
+  if (!fs.existsSync(PID_FILE)) return null;
+  const pid = parseInt(fs.readFileSync(PID_FILE, 'utf-8').trim());
+  if (isNaN(pid)) return null;
+  // Check if process is running
+  try {
+    process.kill(pid, 0);
+    return pid;
+  } catch {
+    fs.unlinkSync(PID_FILE);
+    return null;
+  }
+}
+
+run(async () => {
+  const { flags } = parseArgs(process.argv);
+
+  // --status: check if server is running
+  if (flags.status) {
+    const pid = readPid();
+    if (pid) {
+      const port = process.env.PROXY_PORT || 3000;
+      return ok({ running: true, pid, port });
+    }
+    return ok({ running: false });
+  }
+
+  // --stop: stop the server
+  if (flags.stop) {
+    const pid = readPid();
+    if (!pid) fail('Server is not running');
+    try {
+      process.kill(pid, 'SIGTERM');
+      // Wait briefly for graceful shutdown
+      for (let i = 0; i < 10; i++) {
+        try { process.kill(pid, 0); } catch { break; }
+        await new Promise(r => setTimeout(r, 500));
+      }
+      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+      return ok({ stopped: true, pid });
+    } catch (e) {
+      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+      fail(`Failed to stop server: ${e.message}`);
+    }
+  }
+
+  // --start: start the server in background
+  if (flags.start || (!flags.stop && !flags.status && !flags.restart)) {
+    const existingPid = readPid();
+    if (existingPid) fail(`Server already running (PID ${existingPid}). Use --restart or --stop first.`);
+
+    const out = fs.openSync(LOG_FILE, 'a');
+    const err = fs.openSync(LOG_FILE, 'a');
+
+    const child = spawn(process.execPath, [SERVER_SCRIPT], {
+      detached: true,
+      stdio: ['ignore', out, err],
+      env: process.env,
+      cwd: path.join(__dirname, '..'),
+    });
+
+    fs.writeFileSync(PID_FILE, String(child.pid));
+    child.unref();
+
+    // Wait a moment and verify it started
+    await new Promise(r => setTimeout(r, 1500));
+    const running = readPid();
+    if (running) {
+      const port = process.env.PROXY_PORT || 3000;
+      return ok({ started: true, pid: child.pid, port, log: LOG_FILE });
+    }
+    fail('Server failed to start. Check ' + LOG_FILE);
+  }
+
+  // --restart
+  if (flags.restart) {
+    const pid = readPid();
+    if (pid) {
+      process.kill(pid, 'SIGTERM');
+      for (let i = 0; i < 10; i++) {
+        try { process.kill(pid, 0); } catch { break; }
+        await new Promise(r => setTimeout(r, 500));
+      }
+      if (fs.existsSync(PID_FILE)) fs.unlinkSync(PID_FILE);
+    }
+
+    const out = fs.openSync(LOG_FILE, 'a');
+    const err = fs.openSync(LOG_FILE, 'a');
+
+    const child = spawn(process.execPath, [SERVER_SCRIPT], {
+      detached: true,
+      stdio: ['ignore', out, err],
+      env: process.env,
+      cwd: path.join(__dirname, '..'),
+    });
+
+    fs.writeFileSync(PID_FILE, String(child.pid));
+    child.unref();
+
+    await new Promise(r => setTimeout(r, 1500));
+    const running = readPid();
+    if (running) {
+      const port = process.env.PROXY_PORT || 3000;
+      return ok({ restarted: true, pid: child.pid, port, log: LOG_FILE });
+    }
+    fail('Server failed to restart. Check ' + LOG_FILE);
+  }
+});

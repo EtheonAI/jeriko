@@ -1,0 +1,37 @@
+#!/usr/bin/env node
+const fs = require('fs');
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { loadRegistry, saveRegistry, auditLog } = require('../lib/plugins');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+  const name = positional[0] || flags.name;
+
+  if (!name) fail('Usage: jeriko uninstall <plugin-name>');
+
+  const registry = loadRegistry();
+  const meta = registry.plugins?.[name];
+
+  if (!meta) fail(`Plugin "${name}" is not installed`, EXIT.NOT_FOUND);
+
+  // Collect command names before removal (for confirmation output)
+  const commands = meta.commands || [];
+
+  // Remove plugin directory
+  if (meta.path && fs.existsSync(meta.path)) {
+    fs.rmSync(meta.path, { recursive: true, force: true });
+  }
+
+  // Remove from registry
+  delete registry.plugins[name];
+  saveRegistry(registry);
+
+  // Audit
+  auditLog({ action: 'uninstall', plugin: name, commands });
+
+  ok({
+    uninstalled: name,
+    removedCommands: commands,
+    message: `Plugin "${name}" has been uninstalled`,
+  });
+});

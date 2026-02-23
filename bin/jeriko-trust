@@ -1,0 +1,104 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-trust — Manage plugin trust (grant, revoke, list, audit)
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { loadRegistry, saveRegistry, loadManifest, auditLog, readAuditLog } = require('../lib/plugins');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // --audit: show recent audit log
+  if (flags.audit) {
+    const limit = parseInt(flags.limit) || 50;
+    const entries = readAuditLog(limit);
+    if (!entries.length) return ok({ message: 'No audit entries', entries: [] });
+    return ok(entries);
+  }
+
+  // --list: show all plugins with trust status
+  if (flags.list) {
+    const registry = loadRegistry();
+    const plugins = Object.entries(registry.plugins || {}).map(([name, meta]) => ({
+      name,
+      version: meta.version || 'unknown',
+      commands: meta.commands || [],
+      trusted: meta.trusted || false,
+      trustedAt: meta.trustedAt || null,
+    }));
+    if (!plugins.length) return ok({ message: 'No plugins installed', plugins: [] });
+    return ok(plugins);
+  }
+
+  // --revoke <name>: revoke trust
+  if (flags.revoke) {
+    const name = typeof flags.revoke === 'string' ? flags.revoke : positional[0];
+    if (!name) fail('Usage: jeriko trust --revoke <plugin-name>');
+
+    const registry = loadRegistry();
+    const meta = registry.plugins?.[name];
+    if (!meta) fail(`Plugin "${name}" not found in registry`, EXIT.NOT_FOUND);
+
+    if (!meta.trusted) return ok({ name, trusted: false, message: 'Already untrusted' });
+
+    meta.trusted = false;
+    meta.trustedAt = null;
+    saveRegistry(registry);
+    auditLog({ action: 'trust.revoke', plugin: name });
+
+    return ok({ name, trusted: false, revoked: true });
+  }
+
+  // Trust a plugin: jeriko trust <name> --yes
+  const name = positional[0];
+  if (!name) {
+    fail('Usage: jeriko trust <plugin-name> --yes\n       jeriko trust --revoke <plugin-name>\n       jeriko trust --list\n       jeriko trust --audit [--limit N]');
+  }
+
+  const registry = loadRegistry();
+  const meta = registry.plugins?.[name];
+  if (!meta) fail(`Plugin "${name}" not found in registry`, EXIT.NOT_FOUND);
+
+  // Load manifest to show permissions
+  const manifest = loadManifest(meta.path);
+  if (!manifest) fail(`Cannot read manifest for "${name}"`, EXIT.NOT_FOUND);
+
+  const permissions = manifest.permissions || [];
+  const envVars = (manifest.env || []).map(e => ({
+    key: e.key,
+    required: e.required,
+    description: e.description || '',
+  }));
+
+  // Print what the plugin requests
+  const review = {
+    name: manifest.name,
+    version: manifest.version,
+    namespace: manifest.namespace,
+    permissions,
+    env: envVars,
+    commands: (manifest.commands || []).map(c => c.name),
+  };
+
+  // Require --yes (non-interactive CLI, no prompts)
+  if (!flags.yes) {
+    fail(
+      `Plugin "${name}" requests:\n` +
+      `  permissions: ${permissions.length ? permissions.join(', ') : 'none'}\n` +
+      `  env vars: ${envVars.length ? envVars.map(e => e.key).join(', ') : 'none'}\n` +
+      `Re-run with --yes to confirm: jeriko trust ${name} --yes`
+    );
+  }
+
+  // Already trusted
+  if (meta.trusted) return ok({ ...review, trusted: true, message: 'Already trusted' });
+
+  // Grant trust
+  meta.trusted = true;
+  meta.trustedAt = new Date().toISOString();
+  meta.trustedBy = 'admin';
+  saveRegistry(registry);
+  auditLog({ action: 'trust.grant', plugin: name, permissions, env: envVars.map(e => e.key) });
+
+  return ok({ ...review, trusted: true, trustedAt: meta.trustedAt, trustedBy: 'admin' });
+});

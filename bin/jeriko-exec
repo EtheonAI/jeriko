@@ -1,0 +1,31 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, readStdin, run, EXIT } = require('../lib/cli');
+const { exec } = require('../tools/shell');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+  let command = positional.join(' ');
+
+  if (!command) {
+    const stdin = await readStdin();
+    if (stdin) command = stdin.trim();
+  }
+
+  if (!command) fail('Usage: jeriko exec <command>');
+
+  const timeout = flags.timeout ? parseInt(flags.timeout, 10) : 30000;
+  const cwd = flags.cwd || process.cwd();
+
+  const result = await exec(command, { timeout, cwd });
+
+  // code === null means the process was killed (timeout)
+  if (result.code === null) {
+    fail(`Command timed out after ${timeout}ms`, EXIT.TIMEOUT);
+  }
+
+  if (result.code !== 0 && result.stderr && !result.stdout) {
+    fail(result.stderr.trim(), EXIT.GENERAL);
+  }
+
+  ok(result);
+});

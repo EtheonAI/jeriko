@@ -1,0 +1,129 @@
+#!/usr/bin/env node
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+// Extract global flags before command name
+const args = process.argv.slice(2);
+const globalFlags = {};
+const remaining = [];
+let i = 0;
+
+// Global flags: --format, --quiet (extracted before command)
+while (i < args.length) {
+  if (args[i] === '--format' && args[i + 1]) {
+    globalFlags.format = args[i + 1];
+    i += 2;
+  } else if (args[i] === '--quiet') {
+    globalFlags.quiet = true;
+    i++;
+  } else {
+    remaining.push(args[i]);
+    i++;
+  }
+}
+
+const cmd = remaining[0];
+
+// No args → launch interactive chat
+if (!cmd) {
+  const chat = path.join(__dirname, 'jeriko-chat');
+  const child = spawn(process.execPath, [chat], { stdio: 'inherit' });
+  child.on('close', (code) => process.exit(code || 0));
+  child.on('error', (err) => {
+    console.error(`Failed to start interactive mode: ${err.message}`);
+    process.exit(1);
+  });
+  return;
+}
+
+// Explicit help
+if (cmd === '--help' || cmd === '-h') {
+  const coreBins = fs.readdirSync(__dirname)
+    .filter(f => f.startsWith('jeriko-'))
+    .map(f => f.replace('jeriko-', ''))
+    .sort();
+
+  let output = `Usage: jeriko [--format json|text|logfmt] <command> [options]\n\nCore commands:\n  ${coreBins.join('\n  ')}`;
+
+  // Show plugin commands
+  try {
+    const { getPluginCommands } = require('../lib/plugins');
+    const pluginCmds = getPluginCommands();
+    if (pluginCmds.length > 0) {
+      const grouped = {};
+      for (const c of pluginCmds) {
+        if (!grouped[c.plugin]) grouped[c.plugin] = [];
+        grouped[c.plugin].push(c.name);
+      }
+      output += '\n\nPlugin commands:';
+      for (const [plugin, cmds] of Object.entries(grouped)) {
+        const trust = pluginCmds.find(c => c.plugin === plugin)?.trusted ? '' : ' (untrusted)';
+        output += `\n  ${cmds.join(', ')}  (${plugin}${trust})`;
+      }
+    }
+  } catch { /* plugins not available */ }
+
+  console.log(output);
+  process.exit(0);
+}
+
+// ---- Two-phase command resolution ----
+
+function resolveCommand(cmdName) {
+  // Phase 1: Core commands (always win)
+  const local = path.join(__dirname, `jeriko-${cmdName}`);
+  if (fs.existsSync(local)) return { bin: local, isPlugin: false };
+
+  // Phase 2: Plugin commands
+  try {
+    const { resolvePluginBin } = require('../lib/plugins');
+    const result = resolvePluginBin(cmdName);
+    if (result) return { bin: result.bin, isPlugin: true, meta: result.meta, manifest: result.manifest };
+  } catch { /* plugins not available */ }
+
+  return null;
+}
+
+function spawnCommand(bin, cmdArgs, env) {
+  // Detect binary type from shebang
+  try {
+    const head = fs.readFileSync(bin, { encoding: 'utf-8', flag: 'r' }).slice(0, 256);
+    if (head.startsWith('#!/usr/bin/env node') || head.startsWith('#!/usr/bin/node')) {
+      return spawn(process.execPath, [bin, ...cmdArgs], { stdio: 'inherit', env });
+    }
+  } catch { /* binary file, can't read as text */ }
+  // Compiled binary or other shebang — execute directly
+  return spawn(bin, cmdArgs, { stdio: 'inherit', env });
+}
+
+const resolved = resolveCommand(cmd);
+if (!resolved) {
+  console.error(`Unknown command: ${cmd}\nRun "jeriko --help" for available commands.`);
+  process.exit(1);
+}
+
+// Build env
+const baseEnv = { ...process.env };
+baseEnv.JERIKO_ROOT = path.join(__dirname, '..');
+baseEnv.JERIKO_DATA_DIR = path.join(__dirname, '..', 'data');
+if (globalFlags.format) baseEnv.JERIKO_FORMAT = globalFlags.format;
+if (globalFlags.quiet) baseEnv.JERIKO_QUIET = '1';
+
+let childEnv;
+if (resolved.isPlugin) {
+  // Plugin: restricted env (only declared vars + safe vars)
+  const { buildPluginEnv } = require('../lib/plugins');
+  childEnv = buildPluginEnv(resolved.meta, resolved.manifest, baseEnv);
+} else {
+  // Core: full env
+  childEnv = baseEnv;
+}
+
+const child = spawnCommand(resolved.bin, remaining.slice(1), childEnv);
+
+child.on('close', (code) => process.exit(code || 0));
+child.on('error', (err) => {
+  console.error(`Failed to run jeriko-${cmd}: ${err.message}`);
+  process.exit(1);
+});

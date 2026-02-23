@@ -1,0 +1,145 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, escapeAppleScript: esc } = require('../lib/cli');
+const { execSync } = require('child_process');
+
+function osascript(script) {
+  return execSync('osascript', { input: script, encoding: 'utf-8', timeout: 10000 }).trim();
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // --list: list all visible windows with app, title, position, size
+  if (flags.list) {
+    const raw = osascript(`
+      tell application "System Events"
+        set output to ""
+        set procs to every process whose visible is true
+        repeat with p in procs
+          set appName to name of p
+          try
+            repeat with w in windows of p
+              set {x, y} to position of w
+              set {w2, h} to size of w
+              set output to output & appName & "|" & (name of w) & "|" & x & "," & y & "|" & w2 & "x" & h & linefeed
+            end repeat
+          end try
+        end repeat
+        return output
+      end tell
+    `);
+    const windows = raw.split('\n').filter(Boolean).map(line => {
+      const [app, title, pos, size] = line.split('|');
+      return { app, title: title || '', position: pos, size };
+    });
+    return ok(windows);
+  }
+
+  // --focus <app>: bring app to front
+  if (flags.focus) {
+    const app = esc(typeof flags.focus === 'string' ? flags.focus : positional[0]);
+    if (!app) fail('Usage: jeriko window --focus <app>');
+    osascript(`
+      tell application "${app}" to activate
+    `);
+    return ok({ focused: app });
+  }
+
+  // --minimize <app>: minimize all windows of app
+  if (flags.minimize) {
+    const app = esc(typeof flags.minimize === 'string' ? flags.minimize : positional[0]);
+    if (!app) fail('Usage: jeriko window --minimize <app>');
+    osascript(`
+      tell application "System Events"
+        tell process "${app}"
+          repeat with w in windows
+            try
+              click button 3 of w
+            end try
+          end repeat
+        end tell
+      end tell
+    `);
+    return ok({ minimized: app });
+  }
+
+  // --close <app>: close all windows of app
+  if (flags.close) {
+    const app = esc(typeof flags.close === 'string' ? flags.close : positional[0]);
+    if (!app) fail('Usage: jeriko window --close <app>');
+    osascript(`
+      tell application "${app}" to close every window
+    `);
+    return ok({ closed: app });
+  }
+
+  // --app <name>: launch or activate app
+  if (flags.app) {
+    const app = esc(typeof flags.app === 'string' ? flags.app : positional[0]);
+    if (!app) fail('Usage: jeriko window --app <name>');
+    osascript(`tell application "${app}" to activate`);
+    return ok({ launched: app });
+  }
+
+  // --resize <app> --width W --height H
+  if (flags.resize) {
+    const app = esc(typeof flags.resize === 'string' ? flags.resize : positional[0]);
+    if (!app) fail('Usage: jeriko window --resize <app> --width W --height H');
+    const w = parseInt(flags.width) || 1280;
+    const h = parseInt(flags.height) || 720;
+    const x = flags.x ? parseInt(flags.x) : null;
+    const y = flags.y ? parseInt(flags.y) : null;
+    let posScript = '';
+    if (x !== null && y !== null) {
+      posScript = `set position of window 1 to {${x}, ${y}}`;
+    }
+    osascript(`
+      tell application "System Events"
+        tell process "${app}"
+          set size of window 1 to {${w}, ${h}}
+          ${posScript}
+        end tell
+      end tell
+    `);
+    return ok({ resized: app, width: w, height: h });
+  }
+
+  // --fullscreen <app>: toggle fullscreen
+  if (flags.fullscreen) {
+    const app = esc(typeof flags.fullscreen === 'string' ? flags.fullscreen : positional[0]);
+    if (!app) fail('Usage: jeriko window --fullscreen <app>');
+    osascript(`
+      tell application "System Events"
+        tell process "${app}"
+          set value of attribute "AXFullScreen" of window 1 to not (value of attribute "AXFullScreen" of window 1)
+        end tell
+      end tell
+    `);
+    return ok({ toggled: 'fullscreen', app });
+  }
+
+  // --apps: list running apps
+  if (flags.apps) {
+    const raw = osascript(`
+      tell application "System Events"
+        set output to ""
+        set procs to every process whose background only is false
+        repeat with p in procs
+          set output to output & name of p & linefeed
+        end repeat
+        return output
+      end tell
+    `);
+    return ok(raw.split('\n').filter(Boolean));
+  }
+
+  // --quit <app>: quit an app
+  if (flags.quit) {
+    const app = esc(typeof flags.quit === 'string' ? flags.quit : positional[0]);
+    if (!app) fail('Usage: jeriko window --quit <app>');
+    osascript(`tell application "${app}" to quit`);
+    return ok({ quit: app });
+  }
+
+  fail('Usage: jeriko window --list|--focus <app>|--minimize <app>|--close <app>|--app <name>|--resize <app>|--fullscreen <app>|--apps|--quit <app>');
+});

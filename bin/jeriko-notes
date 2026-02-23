@@ -1,0 +1,84 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, readStdin, escapeAppleScript: esc } = require('../lib/cli');
+const { execSync } = require('child_process');
+
+function osascript(script) {
+  return execSync('osascript', { input: script, encoding: 'utf-8', timeout: 15000 }).trim();
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  if (flags.list) {
+    const folder = esc(typeof flags.list === 'string' ? flags.list : 'Notes');
+    const raw = osascript(`
+      tell application "Notes"
+        set output to ""
+        set noteList to notes of folder "${folder}"
+        repeat with n in noteList
+          set output to output & id of n & "|" & name of n & "|" & modification date of n & linefeed
+        end repeat
+        return output
+      end tell
+    `);
+    const notes = raw.split('\n').filter(Boolean).map(line => {
+      const [id, name, date] = line.split('|');
+      return { id, name, date };
+    });
+    return ok(notes);
+  }
+
+  if (flags.search) {
+    const query = esc(typeof flags.search === 'string' ? flags.search : positional[0]);
+    if (!query) fail('Usage: jeriko notes --search <query>');
+    const raw = osascript(`
+      tell application "Notes"
+        set output to ""
+        set matches to notes whose name contains "${query}"
+        repeat with n in matches
+          set output to output & id of n & "|" & name of n & "|" & modification date of n & linefeed
+        end repeat
+        return output
+      end tell
+    `);
+    const notes = raw.split('\n').filter(Boolean).map(line => {
+      const [id, name, date] = line.split('|');
+      return { id, name, date };
+    });
+    return ok(notes);
+  }
+
+  if (flags.read) {
+    const name = esc(typeof flags.read === 'string' ? flags.read : positional[0]);
+    if (!name) fail('Usage: jeriko notes --read <name>');
+    const body = osascript(`
+      tell application "Notes"
+        set n to first note whose name is "${name}"
+        return plaintext of n
+      end tell
+    `);
+    return ok({ name, body });
+  }
+
+  if (flags.create) {
+    const title = esc(typeof flags.create === 'string' ? flags.create : positional[0]);
+    if (!title) fail('Usage: jeriko notes --create <title> [--body text or stdin]');
+    let body = flags.body || '';
+    if (!body) {
+      const stdin = await readStdin();
+      if (stdin) body = stdin.trim();
+    }
+    body = esc(body);
+    const folder = esc(flags.folder || 'Notes');
+    osascript(`
+      tell application "Notes"
+        tell folder "${folder}"
+          make new note with properties {name:"${title}", body:"${body}"}
+        end tell
+      end tell
+    `);
+    return ok({ created: title, folder });
+  }
+
+  fail('Usage: jeriko notes --list|--search <q>|--read <name>|--create <title>');
+});

@@ -1,0 +1,11 @@
+node_modules/
+.env
+auth_info_baileys/
+*.log
+data/x-tokens.json
+data/chrome-profile/
+data/session.jsonl
+data/memory.json
+data/triggers.json
+data/trigger-log.json
+screenshots/

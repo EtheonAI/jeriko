@@ -1,0 +1,40 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+const MEDIA_DIR = require('os').tmpdir();
+
+run(async () => {
+  const { flags } = parseArgs(process.argv);
+
+  // Check ffmpeg
+  try { execSync('which ffmpeg', { stdio: 'ignore' }); } catch {
+    fail('ffmpeg not installed. Run: brew install ffmpeg', EXIT.NOT_FOUND);
+  }
+
+  if (flags.video) {
+    const duration = flags.duration || '5';
+    const filename = `camera-${Date.now()}.mp4`;
+    const filepath = path.join(MEDIA_DIR, filename);
+    try {
+      execSync(`ffmpeg -f avfoundation -framerate 30 -video_size 1280x720 -i "0:none" -t ${duration} -y "${filepath}" 2>/dev/null`, { timeout: (parseInt(duration) + 10) * 1000 });
+    } catch (e) {
+      fail(`Video capture failed: ${e.message}`);
+    }
+    process.stderr.write(`FILE:${filepath}\n`);
+    return ok({ path: filepath, filename, duration: `${duration}s` });
+  }
+
+  // Default: --photo
+  const filename = `camera-${Date.now()}.jpg`;
+  const filepath = path.join(MEDIA_DIR, filename);
+  try {
+    execSync(`ffmpeg -f avfoundation -framerate 30 -video_size 1280x720 -i "0:none" -frames:v 1 -y "${filepath}" 2>/dev/null`, { timeout: 10000 });
+  } catch (e) {
+    fail(`Photo capture failed: ${e.message}`);
+  }
+  process.stderr.write(`SCREENSHOT:${filepath}\n`);
+  ok({ path: filepath, filename });
+});

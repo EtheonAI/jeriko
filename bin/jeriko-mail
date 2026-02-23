@@ -1,0 +1,231 @@
+#!/usr/bin/env node
+// jeriko-mail — macOS Mail.app integration via AppleScript
+// Uses local Mail.app — no IMAP credentials needed
+const { parseArgs, ok, fail, run, readStdin, escapeAppleScript: esc, EXIT } = require('../lib/cli');
+const { execSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
+
+const REPLIED_FILE = path.join(__dirname, '..', 'data', 'mail-replied.json');
+
+function osascript(script, timeout = 30000) {
+  return execSync('osascript', { input: script, encoding: 'utf-8', timeout }).trim();
+}
+
+function getRepliedIds() {
+  try { return JSON.parse(fs.readFileSync(REPLIED_FILE, 'utf-8')); } catch { return []; }
+}
+
+function markReplied(msgId) {
+  const ids = getRepliedIds();
+  if (!ids.includes(String(msgId))) {
+    ids.push(String(msgId));
+    // Keep only last 200 IDs to prevent unbounded growth
+    if (ids.length > 200) ids.splice(0, ids.length - 200);
+    fs.writeFileSync(REPLIED_FILE, JSON.stringify(ids, null, 2));
+  }
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // --unread: get recent unread emails (newest first)
+  if (flags.unread) {
+    const limit = parseInt(flags.limit) || 5;
+    const raw = osascript(`
+      tell application "Mail"
+        set output to ""
+        set allMsgs to messages of mailbox "INBOX" of account 1
+        set cnt to 0
+        repeat with i from 1 to 50
+          if i > (count of allMsgs) then exit repeat
+          if cnt >= ${limit} then exit repeat
+          set m to item i of allMsgs
+          if read status of m is false then
+            set senderAddr to sender of m
+            set subj to subject of m
+            set dt to date received of m as string
+            set msgId to id of m
+            set output to output & msgId & "|||" & senderAddr & "|||" & subj & "|||" & dt & linefeed
+            set cnt to cnt + 1
+          end if
+        end repeat
+        return output
+      end tell
+    `, 15000);
+    const emails = raw.split('\n').filter(Boolean).map(line => {
+      const [id, from, subject, date] = line.split('|||');
+      return { id, from, subject, date };
+    });
+    return ok(emails);
+  }
+
+  // --search <query>: search recent emails by subject (newest first)
+  if (flags.search) {
+    const query = typeof flags.search === 'string' ? flags.search : positional[0];
+    if (!query) fail('Usage: jeriko mail --search <query>');
+    const safeQuery = esc(query);
+    const limit = parseInt(flags.limit) || 5;
+    const raw = osascript(`
+      tell application "Mail"
+        set output to ""
+        set allMsgs to messages of mailbox "INBOX" of account 1
+        set cnt to 0
+        repeat with i from 1 to 200
+          if i > (count of allMsgs) then exit repeat
+          if cnt >= ${limit} then exit repeat
+          set m to item i of allMsgs
+          set subj to subject of m
+          if subj contains "${safeQuery}" then
+            set senderAddr to sender of m
+            set dt to date received of m as string
+            set msgId to id of m
+            set isRead to read status of m
+            set bod to ""
+            try
+              set bod to content of m
+              if length of bod > 500 then set bod to text 1 thru 500 of bod
+            end try
+            set tid to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to return
+            set bod to (text items of bod) as text
+            set AppleScript's text item delimiters to (ASCII character 10)
+            set bod to (text items of bod) as text
+            set AppleScript's text item delimiters to tid
+            set output to output & msgId & "|||" & senderAddr & "|||" & subj & "|||" & dt & "|||" & isRead & "|||" & bod & "###REC###"
+            set cnt to cnt + 1
+          end if
+        end repeat
+        return output
+      end tell
+    `, 20000);
+    if (!raw) return ok([]);
+    const emails = raw.split('###REC###').filter(Boolean).map(line => {
+      const [id, from, subject, date, read, body] = line.split('|||');
+      return { id, from, subject, date, read: read === 'true', body: (body || '').trim() };
+    });
+    return ok(emails);
+  }
+
+  // --read <id>: read full email by message ID
+  if (flags.read) {
+    const msgId = typeof flags.read === 'string' ? flags.read : positional[0];
+    if (!msgId) fail('Usage: jeriko mail --read <message-id>');
+    const raw = osascript(`
+      tell application "Mail"
+        set m to first message of mailbox "INBOX" of account 1 whose id is ${parseInt(msgId)}
+        set senderAddr to sender of m
+        set subj to subject of m
+        set dt to date received of m as string
+        set bod to content of m
+        if length of bod > 3000 then set bod to text 1 thru 3000 of bod
+        return senderAddr & "|||" & subj & "|||" & dt & "|||" & bod
+      end tell
+    `, 15000);
+    const [from, subject, date, body] = raw.split('|||');
+    return ok({ from, subject, date, body });
+  }
+
+  // --reply <id> --message <text>: reply to an email
+  if (flags.reply) {
+    const msgId = typeof flags.reply === 'string' ? flags.reply : positional[0];
+    if (!msgId) fail('Usage: jeriko mail --reply <message-id> --message "text"');
+    let message = typeof flags.message === 'string' ? flags.message : '';
+    if (!message) {
+      const stdin = await readStdin(1000);
+      if (stdin) message = stdin.trim();
+    }
+    if (!message) fail('--message is required or pipe via stdin');
+    const safeMsg = esc(message);
+
+    osascript(`
+      tell application "Mail"
+        set m to first message of mailbox "INBOX" of account 1 whose id is ${parseInt(msgId)}
+        set replyMsg to reply m with opening window
+        delay 1
+        tell replyMsg
+          set content to "${safeMsg}"
+        end tell
+        send replyMsg
+      end tell
+    `, 20000);
+    markReplied(msgId);
+    return ok({ replied: true, messageId: msgId });
+  }
+
+  // --send: compose and send a new email
+  if (flags.send) {
+    const to = typeof flags.send === 'string' ? flags.send : positional[0];
+    if (!to) fail('Usage: jeriko mail --send <to@email.com> --subject "Subject" --message "Body"');
+    const subject = flags.subject || 'No Subject';
+    let message = typeof flags.message === 'string' ? flags.message : '';
+    if (!message) {
+      const stdin = await readStdin(1000);
+      if (stdin) message = stdin.trim();
+    }
+    if (!message) fail('--message is required');
+
+    osascript(`
+      tell application "Mail"
+        set newMsg to make new outgoing message with properties {subject:"${esc(subject)}", content:"${esc(message)}", visible:false}
+        tell newMsg
+          make new to recipient at end of to recipients with properties {address:"${esc(to)}"}
+        end tell
+        send newMsg
+      end tell
+    `, 15000);
+    return ok({ sent: true, to, subject });
+  }
+
+  // --check-for <query>: check for emails matching query in subject/sender (used by triggers)
+  if (flags['check-for']) {
+    const query = typeof flags['check-for'] === 'string' ? flags['check-for'] : positional[0];
+    if (!query) fail('Usage: jeriko mail --check-for <query>');
+    const safeQuery = esc(query);
+    const limit = parseInt(flags.limit) || 3;
+    const raw = osascript(`
+      tell application "Mail"
+        check for new mail
+        delay 2
+        set output to ""
+        set allMsgs to messages of mailbox "INBOX" of account 1
+        set cnt to 0
+        repeat with i from 1 to 100
+          if i > (count of allMsgs) then exit repeat
+          if cnt >= ${limit} then exit repeat
+          set m to item i of allMsgs
+          set subj to subject of m
+          set senderAddr to sender of m
+          if subj contains "${safeQuery}" or senderAddr contains "${safeQuery}" then
+            set dt to date received of m as string
+            set msgId to id of m
+            set isRead to read status of m
+            set bod to ""
+            try
+              set bod to content of m
+              if length of bod > 1000 then set bod to text 1 thru 1000 of bod
+            end try
+            set tid to AppleScript's text item delimiters
+            set AppleScript's text item delimiters to return
+            set bod to (text items of bod) as text
+            set AppleScript's text item delimiters to (ASCII character 10)
+            set bod to (text items of bod) as text
+            set AppleScript's text item delimiters to tid
+            set output to output & msgId & "|||" & senderAddr & "|||" & subj & "|||" & dt & "|||" & isRead & "|||" & bod & "###REC###"
+            set cnt to cnt + 1
+          end if
+        end repeat
+        return output
+      end tell
+    `, 25000);
+    if (!raw) return ok({ found: 0, emails: [] });
+    const repliedIds = getRepliedIds();
+    const emails = raw.split('###REC###').filter(Boolean).map(line => {
+      const [id, from, subject, date, read, body] = line.split('|||');
+      return { id, from, subject, date, read: read === 'true', body: (body || '').trim() };
+    }).filter(e => !repliedIds.includes(e.id));
+    return ok({ found: emails.length, emails });
+  }
+
+  fail('Usage: jeriko mail --unread|--search <q>|--read <id>|--reply <id> --message <text>|--send <to> --subject <subj> --message <text>|--check-for <query>');
+});

@@ -1,0 +1,35 @@
+{
+  "name": "jerikobot",
+  "version": "1.0.0",
+  "description": "Multi-machine control via Telegram/WhatsApp with Claude Code execution",
+  "main": "server/index.js",
+  "exports": {
+    ".": "./server/index.js",
+    "./lib/cli": "./lib/cli.js",
+    "./lib/plugins": "./lib/plugins.js"
+  },
+  "bin": {
+    "jeriko": "./bin/jeriko"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "agent": "node agent/agent.js",
+    "dev": "node --watch server/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.16",
+    "croner": "^10.0.1",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "imap": "^0.8.19",
+    "mailparser": "^3.9.3",
+    "node-notifier": "^10.0.1",
+    "playwright": "^1.58.2",
+    "qrcode": "^1.5.4",
+"systeminformation": "^5.31.1",
+    "telegraf": "^4.16.3",
+    "uuid": "^11.1.0",
+    "ws": "^8.18.0"
+  }
+}

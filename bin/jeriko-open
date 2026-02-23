@@ -1,0 +1,52 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run } = require('../lib/cli');
+const { execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  const target = positional[0] || flags.url || flags.file || flags.app;
+  if (!target) fail('Usage: jeriko open <url|file|app>\n  jeriko open https://example.com\n  jeriko open /path/to/file\n  jeriko open "Visual Studio Code"');
+
+  // Special shortcuts
+  if (target === 'server') {
+    const port = process.env.PROXY_PORT || 3000;
+    execSync(`open "http://localhost:${port}"`, { timeout: 5000 });
+    return ok({ opened: `http://localhost:${port}` });
+  }
+
+  // URL
+  if (target.match(/^https?:\/\//)) {
+    if (flags.chrome) {
+      execSync(`open -a "Google Chrome" "${target}"`, { timeout: 5000 });
+    } else {
+      execSync(`open "${target}"`, { timeout: 5000 });
+    }
+    return ok({ opened: target, type: 'url' });
+  }
+
+  // App name (no path separator, no extension)
+  if (!target.includes('/') && !target.includes('.') && !fs.existsSync(target)) {
+    execSync(`open -a "${target}"`, { timeout: 5000 });
+    return ok({ opened: target, type: 'app' });
+  }
+
+  // File or directory
+  const resolved = path.resolve(target);
+  if (!fs.existsSync(resolved)) fail(`Not found: ${resolved}`, 5);
+
+  if (flags.reveal) {
+    execSync(`open -R "${resolved}"`, { timeout: 5000 });
+    return ok({ revealed: resolved });
+  }
+
+  if (flags.with) {
+    execSync(`open -a "${flags.with}" "${resolved}"`, { timeout: 5000 });
+    return ok({ opened: resolved, app: flags.with });
+  }
+
+  execSync(`open "${resolved}"`, { timeout: 5000 });
+  return ok({ opened: resolved, type: fs.statSync(resolved).isDirectory() ? 'directory' : 'file' });
+});

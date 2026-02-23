@@ -1,0 +1,50 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, readStdin, run, EXIT } = require('../lib/cli');
+const { listDir, readFile, writeFile, findFiles, searchFiles, fileInfo } = require('../tools/files');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+  const target = positional[0];
+
+  if (flags.ls) {
+    const dir = typeof flags.ls === 'string' ? flags.ls : target || '.';
+    return ok(listDir(dir));
+  }
+
+  if (flags.cat) {
+    const file = typeof flags.cat === 'string' ? flags.cat : target;
+    if (!file) fail('Usage: jeriko fs --cat <path>', EXIT.GENERAL);
+    const content = readFile(file);
+    if (typeof content === 'object' && content.error) fail(content.error, EXIT.GENERAL);
+    return ok(content);
+  }
+
+  if (flags.write) {
+    const file = typeof flags.write === 'string' ? flags.write : target;
+    if (!file) fail('Usage: jeriko fs --write <path> (content via stdin)', EXIT.GENERAL);
+    const stdin = await readStdin(5000);
+    if (!stdin) fail('No content provided on stdin', EXIT.GENERAL);
+    return ok(writeFile(file, stdin, { append: !!flags.append }));
+  }
+
+  if (flags.find) {
+    const dir = typeof flags.find === 'string' ? flags.find : target || '.';
+    const pattern = positional[flags.find === true ? 0 : 1] || flags.pattern || '*';
+    return ok(findFiles(dir, pattern));
+  }
+
+  if (flags.grep) {
+    const dir = typeof flags.grep === 'string' ? flags.grep : target || '.';
+    const pattern = positional.slice(flags.grep === true ? 0 : 1).join(' ') || flags.pattern;
+    if (!pattern) fail('Usage: jeriko fs --grep <dir> <pattern>', EXIT.GENERAL);
+    return ok(searchFiles(dir, pattern, { glob: flags.glob }));
+  }
+
+  if (flags.info) {
+    const file = typeof flags.info === 'string' ? flags.info : target;
+    if (!file) fail('Usage: jeriko fs --info <path>', EXIT.GENERAL);
+    return ok(fileInfo(file));
+  }
+
+  fail('Usage: jeriko fs --ls|--cat|--write|--find|--grep|--info [path]');
+});

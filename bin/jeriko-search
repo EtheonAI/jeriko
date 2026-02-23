@@ -1,0 +1,17 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, readStdin, run } = require('../lib/cli');
+const { webSearch } = require('../tools/search');
+
+run(async () => {
+  const { positional } = parseArgs(process.argv);
+  let query = positional.join(' ');
+
+  if (!query) {
+    const stdin = await readStdin();
+    if (stdin) query = stdin.trim();
+  }
+
+  if (!query) fail('Usage: jeriko search <query>');
+
+  ok(await webSearch(query));
+});
