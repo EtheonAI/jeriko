@@ -1,4 +1,4 @@
-const { spawn, execSync } = require('child_process');
+const { execSync } = require('child_process');
 const path = require('path');
 
 // Lazy-require websocket to avoid side effects when imported from CLI chat
@@ -85,51 +85,93 @@ async function executeLocal(command, onChunk) {
   return executeClaude(command, onChunk);
 }
 
-// ========== CLAUDE BACKEND ==========
+// ========== CLAUDE BACKEND (Anthropic API) ==========
 
-function executeClaude(command, onChunk) {
-  return new Promise((resolve, reject) => {
-    const env = { ...process.env };
-    delete env.CLAUDECODE;
+const CLAUDE_BASH_TOOL = {
+  name: 'bash',
+  description: 'Execute a bash command on the machine and return stdout+stderr',
+  input_schema: {
+    type: 'object',
+    properties: {
+      command: { type: 'string', description: 'The bash command to run' },
+    },
+    required: ['command'],
+  },
+};
 
-    const proc = spawn('claude', [
-      '-p',
-      '--output-format', 'text',
-      '--dangerously-skip-permissions',
-      '--system-prompt', getSystemPrompt(),
-      command,
-    ], {
-      env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 5 * 60 * 1000,
+async function executeClaude(command, onChunk) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set in .env');
+
+  const model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+  const messages = [
+    { role: 'user', content: command },
+  ];
+
+  // Agent loop: call API, execute tools, repeat until text response
+  for (let turn = 0; turn < 15; turn++) {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model,
+        max_tokens: 4096,
+        system: getSystemPrompt(),
+        messages,
+        tools: [CLAUDE_BASH_TOOL],
+      }),
     });
 
-    const chunks = [];
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Anthropic API error ${res.status}: ${err}`);
+    }
 
-    proc.stdout.on('data', (data) => {
-      const text = data.toString();
-      chunks.push(text);
-      if (onChunk) onChunk(text);
-    });
+    const data = await res.json();
 
-    proc.stderr.on('data', (data) => {
-      const text = data.toString();
-      chunks.push(text);
-    });
+    // Collect text and tool_use blocks from response
+    const textParts = [];
+    const toolCalls = [];
+    for (const block of data.content) {
+      if (block.type === 'text') textParts.push(block.text);
+      if (block.type === 'tool_use') toolCalls.push(block);
+    }
 
-    proc.on('close', (code) => {
-      const output = chunks.join('');
-      if (code !== 0 && !output) {
-        reject(new Error(`claude exited with code ${code}`));
-      } else {
-        resolve(output || '(no output)');
+    // Stream any text to caller
+    if (textParts.length > 0 && onChunk) {
+      onChunk(textParts.join(''));
+    }
+
+    // Add assistant message to history
+    messages.push({ role: 'assistant', content: data.content });
+
+    // If no tool calls, we're done
+    if (data.stop_reason !== 'tool_use' || toolCalls.length === 0) {
+      return textParts.join('') || '(no output)';
+    }
+
+    // Execute tool calls and send results back
+    const toolResults = [];
+    for (const call of toolCalls) {
+      if (call.name === 'bash') {
+        const cmd = call.input?.command || '';
+        console.log(`[claude] bash: ${cmd.slice(0, 100)}`);
+        const result = runBash(cmd);
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: call.id,
+          content: result,
+        });
       }
-    });
+    }
+    messages.push({ role: 'user', content: toolResults });
+  }
 
-    proc.on('error', (err) => {
-      reject(new Error(`Failed to run claude: ${err.message}`));
-    });
-  });
+  return '(max tool call turns reached)';
 }
 
 // ========== OPENAI BACKEND ==========
