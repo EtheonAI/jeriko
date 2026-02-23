@@ -1,4 +1,4 @@
-const { execSync } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path = require('path');
 
 // Lazy-require websocket to avoid side effects when imported from CLI chat
@@ -9,7 +9,8 @@ function getWs() {
 }
 
 const DEFAULT_NODE = process.env.DEFAULT_NODE || 'local';
-const AI_BACKEND = process.env.AI_BACKEND || 'claude'; // 'claude' or 'openai'
+// 'claude-code' = Claude Code CLI (dev), 'claude' = Anthropic API (prod), 'openai' = OpenAI API
+const AI_BACKEND = process.env.AI_BACKEND || 'claude-code';
 
 // Absolute path to jeriko CLI — avoids PATH issues in non-interactive shells
 const JERIKO = path.join(__dirname, '..', 'bin', 'jeriko');
@@ -79,10 +80,52 @@ async function route(text, onChunk) {
 }
 
 async function executeLocal(command, onChunk) {
-  if (AI_BACKEND === 'openai') {
-    return executeOpenAI(command, onChunk);
-  }
-  return executeClaude(command, onChunk);
+  if (AI_BACKEND === 'openai') return executeOpenAI(command, onChunk);
+  if (AI_BACKEND === 'claude') return executeClaude(command, onChunk);
+  return executeClaudeCode(command, onChunk);
+}
+
+// ========== CLAUDE CODE CLI (dev only) ==========
+
+function executeClaudeCode(command, onChunk) {
+  return new Promise((resolve, reject) => {
+    const env = { ...process.env };
+    delete env.CLAUDECODE;
+
+    const proc = spawn('claude', [
+      '-p',
+      '--output-format', 'text',
+      '--dangerously-skip-permissions',
+      '--system-prompt', getSystemPrompt(),
+      command,
+    ], {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 5 * 60 * 1000,
+    });
+
+    const chunks = [];
+
+    proc.stdout.on('data', (data) => {
+      const text = data.toString();
+      chunks.push(text);
+      if (onChunk) onChunk(text);
+    });
+
+    proc.stderr.on('data', (data) => {
+      chunks.push(data.toString());
+    });
+
+    proc.on('close', (code) => {
+      const output = chunks.join('');
+      if (code !== 0 && !output) reject(new Error(`claude exited with code ${code}`));
+      else resolve(output || '(no output)');
+    });
+
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to run claude: ${err.message}`));
+    });
+  });
 }
 
 // ========== CLAUDE BACKEND (Anthropic API) ==========
