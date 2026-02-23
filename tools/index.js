@@ -469,6 +469,31 @@ const tools = {
     },
   },
 
+  // Twilio Voice + SMS/MMS
+  'twilio': {
+    description: 'Twilio — voice calls, SMS/MMS, recordings, phone numbers',
+    usage: '/twilio <command> [flags] — e.g. /twilio call +1... --say "hi" | /twilio sms +1... "hey" | /twilio account',
+    handler: async (args) => {
+      const data = jerikoExec(`twilio ${args.trim()}`, { timeout: 15000 });
+      if (Array.isArray(data)) {
+        return data.map(item => {
+          if (item.sid && item.body !== undefined) return `${item.sid} | ${item.to} ← ${item.from} | ${item.status} | ${item.body?.slice(0, 80) || ''}`;
+          if (item.sid && item.to && item.duration !== undefined) return `${item.sid} | ${item.to} ← ${item.from} | ${item.status} | ${item.duration || ''}s`;
+          if (item.sid && item.phone_number) return `${item.phone_number} | ${item.friendly_name} | voice:${item.capabilities?.voice} sms:${item.capabilities?.sms}`;
+          if (item.sid && item.call_sid) return `${item.sid} | call:${item.call_sid} | ${item.duration}s | ${item.status}`;
+          return JSON.stringify(item);
+        }).join('\n') || 'No results';
+      }
+      if (typeof data === 'object') {
+        if (data.sid && data.friendly_name) return `${data.friendly_name} | ${data.status} | Balance: ${data.balance || 'N/A'}`;
+        if (data.sid && data.body !== undefined) return `SMS ${data.sid} → ${data.to} | ${data.status} | ${data.body?.slice(0, 80) || ''}`;
+        if (data.sid && data.to) return `Call ${data.sid} → ${data.to} | ${data.status}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
   // Plugin management
   'install_plugin': {
     description: 'Install a JerikoBot plugin from npm or local path',

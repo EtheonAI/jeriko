@@ -11,11 +11,16 @@ run(async () => {
 
   if (flags.list) {
     const folder = esc(typeof flags.list === 'string' ? flags.list : 'Notes');
+    const limit = parseInt(flags.limit) || 20;
     const raw = osascript(`
       tell application "Notes"
         set output to ""
         set noteList to notes of folder "${folder}"
+        set maxCount to ${limit}
+        set i to 0
         repeat with n in noteList
+          set i to i + 1
+          if i > maxCount then exit repeat
           set output to output & id of n & "|" & name of n & "|" & modification date of n & linefeed
         end repeat
         return output

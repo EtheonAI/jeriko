@@ -4,23 +4,82 @@
 // Standalone CLI: jeriko stripe <resource> <action> [flags]
 // ============================================================
 const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
 
-const SK = process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SK;
 const BASE = 'https://api.stripe.com/v1';
+const ENV_PATH = path.join(__dirname, '..', '.env');
 
-if (!SK) {
-  console.error(JSON.stringify({ ok: false, error: 'STRIPE_SECRET_KEY not set in .env' }));
-  process.exit(EXIT.AUTH);
+// Colors
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+function getSK() {
+  return process.env.STRIPE_SECRET_KEY || process.env.STRIPE_SK;
+}
+
+function requireSK() {
+  const sk = getSK();
+  if (!sk) {
+    fail('STRIPE_SECRET_KEY not set. Run: jeriko stripe init', EXIT.AUTH);
+  }
+  return sk;
+}
+
+// ---- .env helpers ----
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  // Also set in current process
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
 }
 
 // ---- HTTP helpers ----
 
-async function stripe(method, path, params = {}) {
-  const url = path.startsWith('http') ? path : `${BASE}${path}`;
+async function stripe(method, urlPath, params = {}) {
+  const sk = requireSK();
+  const url = urlPath.startsWith('http') ? urlPath : `${BASE}${urlPath}`;
   const opts = {
     method,
     headers: {
-      'Authorization': `Bearer ${SK}`,
+      'Authorization': `Bearer ${sk}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
   };
@@ -60,13 +119,16 @@ function encodeParams(obj, prefix = '') {
 run(async () => {
   const args = process.argv.slice(2);
   const resource = args[0];
-  const action = args[1];
-  const { flags, positional } = parseArgs(['', '', ...args.slice(2)]);
+  // Parse flags from everything after resource (not after action) so init --key works
+  const { flags, positional: allPositional } = parseArgs(['', '', ...args.slice(1)]);
+  const action = allPositional[0];
+  const positional = allPositional.slice(1);
 
   if (!resource) {
     return ok({
       usage: 'jeriko stripe <resource> <action> [flags]',
       resources: {
+        init: 'interactive setup wizard',
         customers: 'list, create, get, update, delete',
         products: 'list, create, get, update, delete',
         prices: 'list, create, get',
@@ -83,6 +145,108 @@ run(async () => {
         links: 'list, create, get, update',
       },
     });
+  }
+
+  // ===================== INIT =====================
+  if (resource === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}Stripe Setup${C.reset}\n`);
+    w(`  ${C.dim}Payments, subscriptions, invoices${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko stripe init --key sk_xxx
+    if (flags.key) {
+      writeEnvKey('STRIPE_SECRET_KEY', flags.key);
+      // Verify
+      try {
+        const res = await fetch(`${BASE}/balance`, {
+          headers: { 'Authorization': `Bearer ${flags.key}` },
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        w(`  ${C.green}[ok]${C.reset} STRIPE_SECRET_KEY verified and saved\n\n`);
+      } catch (e) {
+        w(`  ${C.red}[!!]${C.reset} Key saved but verification failed: ${e.message}\n\n`);
+      }
+      return ok({ status: 'configured' });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+    const existing = env.STRIPE_SECRET_KEY || env.STRIPE_SK;
+
+    let key;
+    if (existing) {
+      w(`  ${C.dim}Current key: ${maskKey(existing)}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing key? (Y/n)', 'Y');
+      if (keep.toLowerCase() === 'n') {
+        key = await ask(rl, 'Stripe Secret Key (sk_...):');
+      } else {
+        key = existing;
+      }
+    } else {
+      w(`  ${C.dim}Get your key at: https://dashboard.stripe.com/apikeys${C.reset}\n`);
+      w(`  ${C.dim}Use a test key (sk_test_...) for development${C.reset}\n\n`);
+      key = await ask(rl, 'Stripe Secret Key (sk_...):');
+    }
+
+    if (!key) {
+      w(`\n  ${C.dim}Skipped — no key provided${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    // Verify
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    let verified = false;
+    let mode = '';
+    try {
+      const res = await fetch(`${BASE}/balance`, {
+        headers: { 'Authorization': `Bearer ${key}` },
+      });
+      clearInterval(spin);
+      if (res.ok) {
+        const data = await res.json();
+        verified = true;
+        mode = key.startsWith('sk_test_') ? 'test' : 'live';
+        const available = data.available?.[0];
+        process.stderr.write(`\r  ${C.green}[ok]${C.reset} Key verified (${mode} mode)${' '.repeat(20)}\n`);
+        if (available) {
+          w(`  ${C.green}[ok]${C.reset} Balance: ${(available.amount / 100).toFixed(2)} ${available.currency.toUpperCase()}\n`);
+        }
+      } else {
+        const body = await res.json().catch(() => ({}));
+        clearInterval(spin);
+        process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${body.error?.message || `HTTP ${res.status}`}${' '.repeat(20)}\n`);
+      }
+    } catch (e) {
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${e.message}${' '.repeat(20)}\n`);
+    }
+
+    writeEnvKey('STRIPE_SECRET_KEY', key);
+    w(`  ${C.green}[ok]${C.reset} STRIPE_SECRET_KEY saved to .env\n`);
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko stripe balance${C.reset}          ${C.dim}# check balance${C.reset}\n`);
+    w(`    ${C.cyan}jeriko stripe customers list${C.reset}   ${C.dim}# list customers${C.reset}\n`);
+    w(`    ${C.cyan}jeriko stripe products list${C.reset}    ${C.dim}# list products${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured', verified, mode });
   }
 
   // ===================== CUSTOMERS =====================

@@ -11,7 +11,21 @@ const crypto = require('crypto');
 const http = require('http');
 const { execSync } = require('child_process');
 
+const readline = require('readline');
+
 const BASE = 'https://api.x.com/2';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Colors
+const CLR = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+// Read env vars fresh (may be updated by init)
+function getEnv(key) { return process.env[key] || ''; }
+
 const BEARER = process.env.X_BEARER_TOKEN;
 const CLIENT_ID = process.env.X_CLIENT_ID;
 const CLIENT_SECRET = process.env.X_CLIENT_SECRET;
@@ -363,6 +377,46 @@ function formatTweets(data) {
   return tweets.map(t => formatTweet(t, users));
 }
 
+// ---- .env helpers ----
+
+function readEnvFile() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  process.env[key] = value;
+}
+
+function askQ(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${CLR.dim}(${defaultValue})${CLR.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${CLR.cyan}?${CLR.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
 // ---- Command router ----
 
 run(async () => {
@@ -374,6 +428,7 @@ run(async () => {
     return ok({
       usage: 'jeriko x <command> [flags]',
       commands: {
+        init: 'interactive setup wizard',
         auth: 'OAuth 2.0 PKCE login, --status, --revoke',
         post: '"text" | --reply <id> "text" | --quote <id> "text"',
         delete: '<tweet_id>',
@@ -397,6 +452,156 @@ run(async () => {
         unmute: '<handle>',
       },
     });
+  }
+
+  // ===================== INIT =====================
+  if (command === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${CLR.bold}${CLR.cyan}X.com (Twitter) Setup${CLR.reset}\n`);
+    w(`  ${CLR.dim}Post, search, timeline, DMs, follows${CLR.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko x init --bearer-token xxx --client-id xxx --client-secret xxx
+    if (flags['bearer-token'] || flags['client-id']) {
+      if (flags['bearer-token']) writeEnvKey('X_BEARER_TOKEN', flags['bearer-token']);
+      if (flags['client-id']) writeEnvKey('X_CLIENT_ID', flags['client-id']);
+      if (flags['client-secret']) writeEnvKey('X_CLIENT_SECRET', flags['client-secret']);
+      w(`  ${CLR.green}[ok]${CLR.reset} X credentials saved to .env\n\n`);
+      return ok({ status: 'configured' });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnvFile();
+
+    w(`  ${CLR.dim}Get your keys at: https://developer.x.com/en/portal/dashboard${CLR.reset}\n`);
+    w(`  ${CLR.dim}Create a project + app, then find keys under "Keys and tokens"${CLR.reset}\n`);
+    w('\n');
+
+    // Step 1: Bearer Token (read-only access)
+    w(`  ${CLR.bold}Step 1: Bearer Token${CLR.reset} ${CLR.dim}(read access — search, user lookup)${CLR.reset}\n`);
+    let bearer;
+    if (env.X_BEARER_TOKEN) {
+      w(`  ${CLR.dim}Current: ${maskKey(env.X_BEARER_TOKEN)}${CLR.reset}\n`);
+      const keep = await askQ(rl, 'Keep existing token? (Y/n)', 'Y');
+      bearer = keep.toLowerCase() === 'n' ? await askQ(rl, 'Bearer Token:') : env.X_BEARER_TOKEN;
+    } else {
+      bearer = await askQ(rl, 'Bearer Token:');
+    }
+    if (bearer && bearer !== env.X_BEARER_TOKEN) {
+      writeEnvKey('X_BEARER_TOKEN', bearer);
+      w(`  ${CLR.green}[ok]${CLR.reset} X_BEARER_TOKEN saved\n`);
+    } else if (bearer) {
+      w(`  ${CLR.green}[ok]${CLR.reset} Keeping existing Bearer Token\n`);
+    }
+
+    w('\n');
+
+    // Step 2: OAuth 2.0 credentials (write access)
+    w(`  ${CLR.bold}Step 2: OAuth 2.0 Client${CLR.reset} ${CLR.dim}(write access — post, like, follow)${CLR.reset}\n`);
+    w(`  ${CLR.dim}In your X app settings, enable OAuth 2.0 with PKCE${CLR.reset}\n`);
+    w(`  ${CLR.dim}Set callback URL to: http://localhost:9876/callback${CLR.reset}\n\n`);
+
+    let clientId;
+    if (env.X_CLIENT_ID) {
+      w(`  ${CLR.dim}Current Client ID: ${maskKey(env.X_CLIENT_ID)}${CLR.reset}\n`);
+      const keep = await askQ(rl, 'Keep existing Client ID? (Y/n)', 'Y');
+      clientId = keep.toLowerCase() === 'n' ? await askQ(rl, 'Client ID:') : env.X_CLIENT_ID;
+    } else {
+      clientId = await askQ(rl, 'Client ID:');
+    }
+    if (clientId && clientId !== env.X_CLIENT_ID) {
+      writeEnvKey('X_CLIENT_ID', clientId);
+      w(`  ${CLR.green}[ok]${CLR.reset} X_CLIENT_ID saved\n`);
+    } else if (clientId) {
+      w(`  ${CLR.green}[ok]${CLR.reset} Keeping existing Client ID\n`);
+    }
+
+    let clientSecret;
+    if (env.X_CLIENT_SECRET) {
+      w(`  ${CLR.dim}Current Client Secret: ${maskKey(env.X_CLIENT_SECRET)}${CLR.reset}\n`);
+      const keep = await askQ(rl, 'Keep existing Client Secret? (Y/n)', 'Y');
+      clientSecret = keep.toLowerCase() === 'n' ? await askQ(rl, 'Client Secret:') : env.X_CLIENT_SECRET;
+    } else {
+      clientSecret = await askQ(rl, 'Client Secret (optional — press Enter to skip):');
+    }
+    if (clientSecret && clientSecret !== env.X_CLIENT_SECRET) {
+      writeEnvKey('X_CLIENT_SECRET', clientSecret);
+      w(`  ${CLR.green}[ok]${CLR.reset} X_CLIENT_SECRET saved\n`);
+    }
+
+    w('\n');
+
+    // Verify bearer token
+    if (bearer) {
+      const frames = ['.  ', '.. ', '...', '   '];
+      let fi = 0;
+      const spin = setInterval(() => {
+        process.stderr.write(`\r  ${CLR.dim}Verifying bearer token${frames[fi++ % frames.length]}${CLR.reset}`);
+      }, 200);
+      try {
+        const res = await fetch(`${BASE}/users/me`, {
+          headers: { 'Authorization': `Bearer ${bearer}` },
+        });
+        clearInterval(spin);
+        if (res.ok || res.status === 403) {
+          // 403 means token works but app-only can't access /users/me — that's fine
+          process.stderr.write(`\r  ${CLR.green}[ok]${CLR.reset} Bearer token is valid${' '.repeat(20)}\n`);
+        } else {
+          const body = await res.json().catch(() => ({}));
+          process.stderr.write(`\r  ${CLR.red}[!!]${CLR.reset} Token issue: ${body.detail || `HTTP ${res.status}`}${' '.repeat(20)}\n`);
+        }
+      } catch (e) {
+        clearInterval(spin);
+        process.stderr.write(`\r  ${CLR.red}[!!]${CLR.reset} Verification failed: ${e.message}${' '.repeat(20)}\n`);
+      }
+    }
+
+    // Offer to run OAuth flow
+    if (clientId) {
+      w('\n');
+      const runAuth = await askQ(rl, 'Authenticate with X now? (Y/n)', 'Y');
+      if (runAuth.toLowerCase() !== 'n') {
+        w(`  ${CLR.dim}Opening browser for OAuth...${CLR.reset}\n`);
+        rl.close();
+        try {
+          const tokens = await startAuthFlow();
+          _myUserId = null;
+          try {
+            const me = await getMyUser();
+            w(`  ${CLR.green}[ok]${CLR.reset} Authenticated as @${me.username}\n`);
+          } catch {
+            w(`  ${CLR.green}[ok]${CLR.reset} Tokens saved\n`);
+          }
+        } catch (e) {
+          w(`  ${CLR.red}[!!]${CLR.reset} Auth failed: ${e.message}\n`);
+        }
+
+        w('\n');
+        w(`  ${CLR.bold}Next steps:${CLR.reset}\n`);
+        w(`    ${CLR.cyan}jeriko x me${CLR.reset}                ${CLR.dim}# your profile${CLR.reset}\n`);
+        w(`    ${CLR.cyan}jeriko x timeline${CLR.reset}          ${CLR.dim}# home timeline${CLR.reset}\n`);
+        w(`    ${CLR.cyan}jeriko x post "Hello!"${CLR.reset}     ${CLR.dim}# send a tweet${CLR.reset}\n`);
+        w('\n');
+        return ok({ status: 'configured', authenticated: true });
+      }
+    }
+
+    rl.close();
+
+    w('\n');
+    w(`  ${CLR.bold}Next steps:${CLR.reset}\n`);
+    w(`    ${CLR.cyan}jeriko x auth${CLR.reset}              ${CLR.dim}# authenticate later${CLR.reset}\n`);
+    w(`    ${CLR.cyan}jeriko x search "topic"${CLR.reset}    ${CLR.dim}# search tweets${CLR.reset}\n`);
+    w(`    ${CLR.cyan}jeriko x user @handle${CLR.reset}      ${CLR.dim}# lookup user${CLR.reset}\n`);
+    w('\n');
+
+    return ok({ status: 'configured' });
   }
 
   // ===================== AUTH =====================

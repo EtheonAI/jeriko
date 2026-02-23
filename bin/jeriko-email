@@ -2,10 +2,201 @@
 const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
+
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 6) return '***';
+  return key.slice(0, 3) + '...' + key.slice(-3);
+}
 
 run(async () => {
-  const { flags } = parseArgs(process.argv);
+  const { flags, positional } = parseArgs(process.argv);
 
+  // ===================== INIT =====================
+  if (positional[0] === 'init' || flags.init) {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}Email (IMAP) Setup${C.reset}\n`);
+    w(`  ${C.dim}Read emails from any IMAP provider${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive
+    if (flags.user && flags.password) {
+      writeEnvKey('IMAP_USER', flags.user);
+      writeEnvKey('IMAP_PASSWORD', flags.password);
+      if (flags.host) writeEnvKey('IMAP_HOST', flags.host);
+      if (flags.port) writeEnvKey('IMAP_PORT', flags.port);
+      w(`  ${C.green}[ok]${C.reset} IMAP credentials saved\n\n`);
+      return ok({ status: 'configured' });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+
+    // Provider selection
+    w(`    ${C.bold}1${C.reset}  ${C.bold}Gmail${C.reset}       ${C.dim}imap.gmail.com (use App Password)${C.reset}\n`);
+    w(`    ${C.bold}2${C.reset}  ${C.bold}Outlook${C.reset}     ${C.dim}outlook.office365.com${C.reset}\n`);
+    w(`    ${C.bold}3${C.reset}  ${C.bold}Yahoo${C.reset}       ${C.dim}imap.mail.yahoo.com${C.reset}\n`);
+    w(`    ${C.bold}4${C.reset}  ${C.bold}Custom${C.reset}      ${C.dim}enter IMAP host manually${C.reset}\n`);
+    w('\n');
+
+    const choice = await ask(rl, 'Provider (1-4):', '1');
+    const providers = {
+      '1': { host: 'imap.gmail.com', port: '993', name: 'Gmail' },
+      '2': { host: 'outlook.office365.com', port: '993', name: 'Outlook' },
+      '3': { host: 'imap.mail.yahoo.com', port: '993', name: 'Yahoo' },
+      'gmail': { host: 'imap.gmail.com', port: '993', name: 'Gmail' },
+      'outlook': { host: 'outlook.office365.com', port: '993', name: 'Outlook' },
+      'yahoo': { host: 'imap.mail.yahoo.com', port: '993', name: 'Yahoo' },
+    };
+    let provider = providers[choice.toLowerCase()];
+    let imapHost, imapPort;
+
+    if (provider) {
+      imapHost = provider.host;
+      imapPort = provider.port;
+      w(`  ${C.green}[ok]${C.reset} ${provider.name}: ${imapHost}\n`);
+    } else {
+      imapHost = await ask(rl, 'IMAP Host:', env.IMAP_HOST || 'imap.gmail.com');
+      imapPort = await ask(rl, 'IMAP Port:', env.IMAP_PORT || '993');
+    }
+
+    if (choice === '1' || choice.toLowerCase() === 'gmail') {
+      w('\n');
+      w(`  ${C.yellow}Gmail requires an App Password (not your real password)${C.reset}\n`);
+      w(`  ${C.dim}Generate one at: https://myaccount.google.com/apppasswords${C.reset}\n`);
+      w('\n');
+    }
+
+    const existingUser = env.IMAP_USER;
+    let user;
+    if (existingUser) {
+      w(`  ${C.dim}Current: ${existingUser}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing email? (Y/n)', 'Y');
+      user = keep.toLowerCase() === 'n' ? await ask(rl, 'Email address:') : existingUser;
+    } else {
+      user = await ask(rl, 'Email address:');
+    }
+
+    const existingPass = env.IMAP_PASSWORD;
+    let password;
+    if (existingPass) {
+      w(`  ${C.dim}Current password: ${maskKey(existingPass)}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing password? (Y/n)', 'Y');
+      password = keep.toLowerCase() === 'n' ? await ask(rl, 'Password / App Password:') : existingPass;
+    } else {
+      password = await ask(rl, 'Password / App Password:');
+    }
+
+    if (!user || !password) {
+      w(`\n  ${C.dim}Skipped — missing credentials${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    // Save
+    writeEnvKey('IMAP_HOST', imapHost);
+    writeEnvKey('IMAP_PORT', imapPort);
+    writeEnvKey('IMAP_USER', user);
+    writeEnvKey('IMAP_PASSWORD', password);
+
+    // Verify connection
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Connecting to ${imapHost}${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    try {
+      await new Promise((resolve, reject) => {
+        const imap = new Imap({
+          user, password,
+          host: imapHost,
+          port: parseInt(imapPort),
+          tls: true,
+          tlsOptions: { rejectUnauthorized: false },
+          connTimeout: 10000,
+        });
+        imap.once('ready', () => {
+          imap.end();
+          resolve();
+        });
+        imap.once('error', reject);
+        imap.connect();
+      });
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.green}[ok]${C.reset} Connected to ${imapHost}${' '.repeat(20)}\n`);
+    } catch (e) {
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Connection failed: ${e.message}${' '.repeat(20)}\n`);
+      if (e.message.includes('Invalid credentials') || e.message.includes('AUTHENTICATIONFAILED')) {
+        w(`  ${C.yellow}      Check your password — Gmail needs an App Password${C.reset}\n`);
+      }
+    }
+
+    w(`  ${C.green}[ok]${C.reset} IMAP credentials saved to .env\n`);
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko email${C.reset}                ${C.dim}# latest 10 emails${C.reset}\n`);
+    w(`    ${C.cyan}jeriko email --unread${C.reset}        ${C.dim}# unread only${C.reset}\n`);
+    w(`    ${C.cyan}jeriko email --search "term"${C.reset}  ${C.dim}# search emails${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured' });
+  }
+
+  // ===================== NORMAL EMAIL COMMANDS =====================
   const config = {
     user: process.env.IMAP_USER,
     password: process.env.IMAP_PASSWORD,
@@ -16,7 +207,7 @@ run(async () => {
   };
 
   if (!config.user || !config.password) {
-    fail('Set IMAP_USER and IMAP_PASSWORD in .env', EXIT.AUTH);
+    fail('IMAP not configured. Run: jeriko email init', EXIT.AUTH);
   }
 
   const limit = flags.limit ? parseInt(flags.limit) : 10;

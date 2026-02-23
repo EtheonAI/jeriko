@@ -9,8 +9,10 @@ function getWs() {
 }
 
 const DEFAULT_NODE = process.env.DEFAULT_NODE || 'local';
-// 'claude-code' = Claude Code CLI (dev), 'claude' = Anthropic API (prod), 'openai' = OpenAI API
+// 'claude-code' = Claude Code CLI (dev), 'claude' = Anthropic API (prod), 'openai' = OpenAI API, 'local' = Ollama/LM Studio/etc
 const AI_BACKEND = process.env.AI_BACKEND || 'claude-code';
+const LOCAL_MODEL_URL = process.env.LOCAL_MODEL_URL || 'http://localhost:11434/v1';
+const LOCAL_MODEL = process.env.LOCAL_MODEL || 'llama3.2';
 
 // Absolute path to jeriko CLI — avoids PATH issues in non-interactive shells
 const JERIKO = path.join(__dirname, '..', 'bin', 'jeriko');
@@ -62,12 +64,12 @@ function logSession(command, result) {
   }
 }
 
-async function route(text, onChunk) {
+async function route(text, onChunk, onStatus) {
   const { target, command } = parseCommand(text);
 
   let result;
   if (target === 'local') {
-    result = await executeLocal(command, onChunk);
+    result = await executeLocal(command, onChunk, onStatus);
   } else if (!getWs().isNodeConnected(target)) {
     throw new Error(`Node "${target}" is not connected. Use /nodes to see available machines.`);
   } else {
@@ -79,18 +81,21 @@ async function route(text, onChunk) {
   return result;
 }
 
-async function executeLocal(command, onChunk) {
-  if (AI_BACKEND === 'openai') return executeOpenAI(command, onChunk);
-  if (AI_BACKEND === 'claude') return executeClaude(command, onChunk);
-  return executeClaudeCode(command, onChunk);
+async function executeLocal(command, onChunk, onStatus) {
+  if (AI_BACKEND === 'local') return executeLocalModel(command, onChunk, onStatus);
+  if (AI_BACKEND === 'openai') return executeOpenAI(command, onChunk, onStatus);
+  if (AI_BACKEND === 'claude') return executeClaude(command, onChunk, onStatus);
+  return executeClaudeCode(command, onChunk, onStatus);
 }
 
 // ========== CLAUDE CODE CLI (dev only) ==========
 
-function executeClaudeCode(command, onChunk) {
+function executeClaudeCode(command, onChunk, onStatus) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     delete env.CLAUDECODE;
+
+    if (onStatus) onStatus({ type: 'thinking' });
 
     const proc = spawn('claude', [
       '-p',
@@ -105,10 +110,12 @@ function executeClaudeCode(command, onChunk) {
     });
 
     const chunks = [];
+    let firstChunk = true;
 
     proc.stdout.on('data', (data) => {
       const text = data.toString();
       chunks.push(text);
+      if (firstChunk && onStatus) { onStatus({ type: 'responding' }); firstChunk = false; }
       if (onChunk) onChunk(text);
     });
 
@@ -142,7 +149,7 @@ const CLAUDE_BASH_TOOL = {
   },
 };
 
-async function executeClaude(command, onChunk) {
+async function executeClaude(command, onChunk, onStatus) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set in .env');
 
@@ -150,6 +157,8 @@ async function executeClaude(command, onChunk) {
   const messages = [
     { role: 'user', content: command },
   ];
+
+  if (onStatus) onStatus({ type: 'thinking' });
 
   // Agent loop: call API, execute tools, repeat until text response
   for (let turn = 0; turn < 15; turn++) {
@@ -184,17 +193,21 @@ async function executeClaude(command, onChunk) {
       if (block.type === 'tool_use') toolCalls.push(block);
     }
 
-    // Stream any text to caller
-    if (textParts.length > 0 && onChunk) {
-      onChunk(textParts.join(''));
-    }
-
     // Add assistant message to history
     messages.push({ role: 'assistant', content: data.content });
 
-    // If no tool calls, we're done
+    // If no tool calls, we're done — stream final text
     if (data.stop_reason !== 'tool_use' || toolCalls.length === 0) {
+      if (textParts.length > 0) {
+        if (onStatus) onStatus({ type: 'responding' });
+        if (onChunk) onChunk(textParts.join(''));
+      }
       return textParts.join('') || '(no output)';
+    }
+
+    // Text alongside tool calls = reasoning/thinking text
+    if (textParts.length > 0) {
+      if (onStatus) onStatus({ type: 'thinking_text', text: textParts.join('') });
     }
 
     // Execute tool calls and send results back
@@ -202,8 +215,10 @@ async function executeClaude(command, onChunk) {
     for (const call of toolCalls) {
       if (call.name === 'bash') {
         const cmd = call.input?.command || '';
-        console.log(`[claude] bash: ${cmd.slice(0, 100)}`);
+        if (onStatus) onStatus({ type: 'tool_call', tool: 'bash', command: cmd });
+        if (!process.env.JERIKO_CHAT_QUIET) console.log(`[claude] bash: ${cmd.slice(0, 100)}`);
         const result = runBash(cmd);
+        if (onStatus) onStatus({ type: 'tool_result', tool: 'bash', command: cmd });
         toolResults.push({
           type: 'tool_result',
           tool_use_id: call.id,
@@ -211,6 +226,7 @@ async function executeClaude(command, onChunk) {
         });
       }
     }
+    if (onStatus) onStatus({ type: 'thinking' });
     messages.push({ role: 'user', content: toolResults });
   }
 
@@ -250,7 +266,7 @@ function runBash(command) {
   }
 }
 
-async function executeOpenAI(command, onChunk) {
+async function executeOpenAI(command, onChunk, onStatus) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not set in .env');
 
@@ -259,6 +275,8 @@ async function executeOpenAI(command, onChunk) {
     { role: 'system', content: getSystemPrompt() },
     { role: 'user', content: command },
   ];
+
+  if (onStatus) onStatus({ type: 'thinking' });
 
   // Agent loop: call API, execute tools, repeat until text response
   for (let turn = 0; turn < 15; turn++) {
@@ -292,8 +310,14 @@ async function executeOpenAI(command, onChunk) {
     // If no tool calls, we're done — return the text
     if (!msg.tool_calls || msg.tool_calls.length === 0) {
       const text = msg.content || '(no output)';
+      if (onStatus) onStatus({ type: 'responding' });
       if (onChunk) onChunk(text);
       return text;
+    }
+
+    // Text alongside tool calls = reasoning/thinking text
+    if (msg.content && onStatus) {
+      onStatus({ type: 'thinking_text', text: msg.content });
     }
 
     // Execute each tool call
@@ -303,8 +327,11 @@ async function executeOpenAI(command, onChunk) {
         try { args = JSON.parse(call.function.arguments); } catch {
           args = { command: call.function.arguments };
         }
-        console.log(`[openai] bash: ${args.command.slice(0, 100)}`);
-        const result = runBash(args.command);
+        const cmd = args.command || '';
+        if (onStatus) onStatus({ type: 'tool_call', tool: 'bash', command: cmd });
+        if (!process.env.JERIKO_CHAT_QUIET) console.log(`[openai] bash: ${cmd.slice(0, 100)}`);
+        const result = runBash(cmd);
+        if (onStatus) onStatus({ type: 'tool_result', tool: 'bash', command: cmd });
         messages.push({
           role: 'tool',
           tool_call_id: call.id,
@@ -312,6 +339,96 @@ async function executeOpenAI(command, onChunk) {
         });
       }
     }
+    if (onStatus) onStatus({ type: 'thinking' });
+  }
+
+  return '(max tool call turns reached)';
+}
+
+// ========== LOCAL MODEL BACKEND (Ollama / LM Studio / any OpenAI-compatible) ==========
+
+async function executeLocalModel(command, onChunk, onStatus) {
+  // Verify the local server is reachable
+  try {
+    const ping = await fetch(`${LOCAL_MODEL_URL}/models`, { signal: AbortSignal.timeout(3000) });
+    if (!ping.ok) throw new Error();
+  } catch {
+    throw new Error(`Local model server not reachable at ${LOCAL_MODEL_URL}. Is Ollama running? Start with: ollama serve`);
+  }
+
+  const messages = [
+    { role: 'system', content: getSystemPrompt() },
+    { role: 'user', content: command },
+  ];
+
+  if (onStatus) onStatus({ type: 'thinking' });
+
+  // Agent loop: call local model, execute tools, repeat until text response
+  // stream: false avoids the Ollama streaming bug that breaks tool_calls (OpenClaw Issue #5769)
+  for (let turn = 0; turn < 15; turn++) {
+    const headers = { 'Content-Type': 'application/json' };
+    // Some local servers support optional API keys
+    const localKey = process.env.LOCAL_API_KEY;
+    if (localKey) headers['Authorization'] = `Bearer ${localKey}`;
+
+    const res = await fetch(`${LOCAL_MODEL_URL}/chat/completions`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: LOCAL_MODEL,
+        messages,
+        tools: [BASH_TOOL],
+        tool_choice: 'auto',
+        max_tokens: 4096,
+        stream: false,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.text();
+      throw new Error(`Local model error ${res.status}: ${err}`);
+    }
+
+    const data = await res.json();
+    const choice = data.choices[0];
+    const msg = choice.message;
+
+    // Add assistant message to history
+    messages.push(msg);
+
+    // If no tool calls, we're done — return the text
+    if (!msg.tool_calls || msg.tool_calls.length === 0) {
+      const text = msg.content || '(no output)';
+      if (onStatus) onStatus({ type: 'responding' });
+      if (onChunk) onChunk(text);
+      return text;
+    }
+
+    // Text alongside tool calls = reasoning/thinking text
+    if (msg.content && onStatus) {
+      onStatus({ type: 'thinking_text', text: msg.content });
+    }
+
+    // Execute each tool call
+    for (const call of msg.tool_calls) {
+      if (call.function.name === 'bash') {
+        let args;
+        try { args = JSON.parse(call.function.arguments); } catch {
+          args = { command: call.function.arguments };
+        }
+        const cmd = args.command || '';
+        if (onStatus) onStatus({ type: 'tool_call', tool: 'bash', command: cmd });
+        if (!process.env.JERIKO_CHAT_QUIET) console.log(`[local:${LOCAL_MODEL}] bash: ${cmd.slice(0, 100)}`);
+        const result = runBash(cmd);
+        if (onStatus) onStatus({ type: 'tool_result', tool: 'bash', command: cmd });
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: result,
+        });
+      }
+    }
+    if (onStatus) onStatus({ type: 'thinking' });
   }
 
   return '(max tool call turns reached)';

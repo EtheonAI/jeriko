@@ -1,0 +1,98 @@
+@import "tailwindcss";
+
+:root {
+  --background: #050a12;
+  --foreground: #e2e8f0;
+  --surface: #0a1120;
+  --surface-light: #111d2e;
+  --surface-border: rgba(255, 255, 255, 0.06);
+  --accent-cyan: #22d3ee;
+  --accent-blue: #3b82f6;
+  --accent-purple: #a855f7;
+  --terminal-bg: #080d16;
+  --terminal-green: #4ade80;
+  --terminal-cyan: #22d3ee;
+  --terminal-yellow: #facc15;
+  --terminal-dim: #475569;
+  --glow-cyan: rgba(34, 211, 238, 0.15);
+  --glow-blue: rgba(59, 130, 246, 0.15);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-light: var(--surface-light);
+  --color-surface-border: var(--surface-border);
+  --color-accent-cyan: var(--accent-cyan);
+  --color-accent-blue: var(--accent-blue);
+  --color-accent-purple: var(--accent-purple);
+  --color-terminal-bg: var(--terminal-bg);
+  --color-terminal-green: var(--terminal-green);
+  --color-terminal-cyan: var(--terminal-cyan);
+  --color-terminal-yellow: var(--terminal-yellow);
+  --color-terminal-dim: var(--terminal-dim);
+  --color-glow-cyan: var(--glow-cyan);
+  --color-glow-blue: var(--glow-blue);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jetbrains-mono);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.1) transparent;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), system-ui, sans-serif;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.25);
+}
+
+/* Noise texture overlay */
+.noise::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 50;
+}
+
+/* Glow effect for cards */
+.card-glow {
+  position: relative;
+}
+.card-glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  background: linear-gradient(135deg, rgba(34, 211, 238, 0.2), transparent 40%, transparent 60%, rgba(59, 130, 246, 0.2));
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  z-index: -1;
+}
+.card-glow:hover::before {
+  opacity: 1;
+}
+
+/* Gradient text utility */
+.gradient-text {
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Grid background */
+.grid-bg {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 60px 60px;
+}

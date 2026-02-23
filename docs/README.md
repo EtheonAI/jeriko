@@ -95,6 +95,11 @@ jeriko x search "topic" --limit 10
 
 Full command reference: [CLAUDE.md](../CLAUDE.md)
 
+Architecture details and future design notes:
+- [System Architecture](ARCHITECTURE.md)
+- See `Future Direction: OS-Centric Memory + Thin Gateway` in [System Architecture](ARCHITECTURE.md)
+- See `OS Connectivity as First-Class Primitive` in [System Architecture](ARCHITECTURE.md)
+
 ## Connect an AI
 
 ### Claude Code (recommended)

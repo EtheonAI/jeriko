@@ -510,3 +510,233 @@ The agent (`agent/agent.js`) is 55 lines:
 4. Stream stdout/stderr chunks back to hub
 5. Send final result or error
 6. Auto-reconnect on disconnect (exponential backoff, max 30s)
+
+---
+
+## Future Direction: OS-Centric Memory + Thin Gateway
+
+This section captures the planned architecture direction for future Jeriko development.
+
+### Principle
+
+Keep the Node.js server as a thin control gateway. Make Unix/OS + CLI the primary execution and state plane.
+
+- Gateway handles transport: Telegram, WhatsApp, webhook ingress, node connectivity.
+- Runtime handles actions, state, memory, and policy enforcement locally.
+
+### OS Connectivity as First-Class Primitive
+
+Jeriko should treat OS-native connectivity as core capability, not an add-on:
+
+1. SSH (`secure remote execution`)
+- Execute commands on remote machines using OS-native trust and key management.
+- Reuse existing fleet practices (keys, bastions, host policies, audit forwarding).
+
+2. WebSocket (`streaming control plane`)
+- Use WebSocket for live task streaming, status updates, chunked output, and node presence.
+- Keep WS focused on transport and session routing, not heavy execution logic.
+
+3. Local OS networking/process primitives
+- Use native process, filesystem, and network primitives for action reliability.
+- Prefer deterministic command wrappers over custom in-app reimplementations.
+
+Target model:
+- OS/CLI is the data plane.
+- SSH/WS are the connectivity plane.
+- Policy/trust/audit are the safety plane.
+
+This preserves Unix leverage while keeping control and observability explicit.
+
+### Memory Model
+
+Use layered memory, not one memory bucket:
+
+1. RAM (`short-term`, volatile)
+- Active task context
+- Scheduler queues and multitask state
+- Recent tool outputs and temporary summaries
+
+2. Disk (`durable`, long-term)
+- Append-only event journal (source of truth)
+- Periodic snapshots (restart recovery)
+- Curated knowledge store (facts/preferences), separate from raw telemetry
+
+Why not cache-only memory:
+- Cache expiry loses critical history
+- Cache does not provide audit truth
+- Raw log streams are too noisy for direct prompt context
+
+### Filesystem Layout (Proposed)
+
+```text
+data/
+  events/
+    events-YYYY-MM-DD.jsonl       # append-only event journal
+  snapshots/
+    snapshot-latest.json          # last known runtime state
+    snapshot-<ts>.json            # periodic checkpoints
+  facts/
+    memory.json                   # curated long-term facts/preferences
+  replay/
+    jobs/
+      replay-<id>.json            # replay plan + status
+  indexes/
+    events.idx                    # optional index for fast replay/debug lookup
+```
+
+User-level security and plugin state remains under:
+
+```text
+~/.jeriko/
+  plugins/registry.json
+  audit.log
+```
+
+### Event Schema (Proposed)
+
+Each line in `events-*.jsonl` should be self-contained:
+
+```json
+{
+  "ts": "2026-02-23T18:00:00Z",
+  "traceId": "trc_abc123",
+  "sessionId": "sess_42",
+  "type": "command.exec",
+  "actor": "router.local",
+  "command": "jeriko sys --format text",
+  "cwd": "/Users/me/project",
+  "envHash": "sha256:...",
+  "stdinHash": "sha256:...",
+  "stdoutHash": "sha256:...",
+  "stderrHash": "sha256:...",
+  "exitCode": 0,
+  "durationMs": 184
+}
+```
+
+Suggested event types:
+- `command.exec`
+- `trigger.fire`
+- `webhook.receive`
+- `webhook.verify`
+- `plugin.install`
+- `plugin.trust.grant`
+- `plugin.trust.revoke`
+- `policy.decision`
+- `replay.start`
+- `replay.finish`
+
+### Snapshot Schema (Proposed)
+
+`snapshot-latest.json` should prioritize recovery-critical state only:
+
+```json
+{
+  "ts": "2026-02-23T18:05:00Z",
+  "scheduler": {
+    "running": ["task_1"],
+    "queued": ["task_2", "task_3"]
+  },
+  "triggers": {
+    "enabled": ["trig_a", "trig_b"]
+  },
+  "memory": {
+    "recentSummaries": [
+      "checked cpu usage",
+      "processed payment webhook"
+    ]
+  }
+}
+```
+
+### Context Assembly Rules (Proposed)
+
+When building AI context:
+
+1. Pull recent RAM summaries first (low latency, task-relevant).
+2. Pull curated facts from `data/facts/memory.json`.
+3. Pull only a bounded window of events by relevance (not raw full logs).
+4. Keep chain-of-thought non-persistent by default.
+
+### Audit, Debug, Replay
+
+Audit:
+- Append-only records for all security and trust lifecycle actions.
+- Include actor, action, status, and trace IDs.
+
+Debug:
+- End-to-end traceability: request -> tool call -> output -> user response.
+- Error taxonomy and retries captured as events.
+
+Replay:
+- Event-driven replay for incident analysis and regression checks.
+- Reproducibility bounds should be explicit (cwd/env/inputs may differ over time).
+
+### Thin Gateway Boundary
+
+Target gateway responsibilities:
+- Channel adapters and transport
+- Authentication and rate limiting
+- Webhook intake and routing
+- Node connectivity and fanout
+
+Avoid pushing runtime-heavy business logic into gateway services.
+
+### Risks and Mitigations
+
+Risk: Unsafe autonomy from tighter AI-Unix coupling.  
+Mitigation: policy gates, trust model, approvals, least-privilege env.
+
+Risk: Unbounded log growth.  
+Mitigation: retention windows, compaction, rotation, archive tiers.
+
+Risk: Long-term memory pollution.  
+Mitigation: keep curated fact store separate from event telemetry.
+
+### Implementation Study Plan
+
+Phase 1: Design
+- Finalize event/snapshot/fact schemas.
+- Define retention and compaction policies.
+- Define replay contract and determinism boundaries.
+
+Phase 2: Runtime
+- In-memory scheduler/task store.
+- Append-only event journal writer.
+- Snapshot write + restore path.
+
+Phase 3: AI Integration
+- Context assembler (RAM summaries + facts + selective events).
+- Bounded memory injection and redaction rules.
+
+Phase 4: Ops
+- `jeriko audit` and `jeriko replay` tooling.
+- Integrity checks and recovery conformance tests.
+
+### Engineering Note: Why Jeriko Ships Faster Than Larger Platforms
+
+Jeriko can ship feature work quickly because it is currently optimized for focused execution paths, while larger platforms often carry broad compatibility and operational guarantees.
+
+Key reasons:
+
+1. Scope profile
+- Jeriko: narrower feature surface and fewer abstraction layers.
+- Large platforms: many channels/providers/deployment modes for the same user-visible feature.
+
+2. Guarantee profile
+- Jeriko can prioritize fast iteration.
+- Mature platforms must preserve backward compatibility, migration safety, and stable behavior across versions.
+
+3. Governance overhead
+- Production-scale systems implement approvals, policy enforcement, audit surfaces, and security checks across every feature path.
+
+4. Normalization cost
+- Supporting one feature across multiple providers and runtimes requires adapters, retries, schema transforms, and fallback handling.
+
+5. Test and ops footprint
+- Large systems include extensive test matrices, observability hooks, and incident hardening, which increases code volume significantly.
+
+Practical guidance for Jeriko:
+- Keep the command-first architecture lean.
+- Add complexity only where real failures require it.
+- Preserve fast shipping in core runtime, but treat security-critical paths (auth/webhooks/plugins/memory) with strict test coverage and hardening.

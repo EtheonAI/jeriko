@@ -3,10 +3,10 @@ const readline = require('readline');
 const path = require('path');
 const { execSync } = require('child_process');
 
-// ── Colors ──────────────────────────────────────────────────────────
+// ── Colors & Symbols ────────────────────────────────────────────────
 const C = {
   blue: '\x1b[34m',
-  bBlue: '\x1b[94m',   // bright blue — robot body
+  bBlue: '\x1b[94m',
   cyan: '\x1b[36m',
   bold: '\x1b[1m',
   dim: '\x1b[2m',
@@ -14,6 +14,25 @@ const C = {
   gray: '\x1b[90m',
   white: '\x1b[37m',
   green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  red: '\x1b[31m',
+  italic: '\x1b[3m',
+  underline: '\x1b[4m',
+  bgDim: '\x1b[48;5;236m',
+};
+
+const SYM = {
+  dot: '\u2022',
+  arrow: '\u25B8',
+  check: '\u2713',
+  cross: '\u2717',
+  bar: '\u2502',
+  topLeft: '\u256D',
+  topRight: '\u256E',
+  botLeft: '\u2570',
+  botRight: '\u256F',
+  hLine: '\u2500',
+  thinking: '\u25CF',
 };
 
 const JERIKO = path.join(__dirname, 'jeriko');
@@ -28,7 +47,7 @@ function getVersion() {
 
 function getBackend() {
   try {
-    require(path.join(__dirname, '..', 'lib', 'cli.js')); // loads .env
+    require(path.join(__dirname, '..', 'lib', 'cli.js'));
   } catch { /* ignore */ }
   return process.env.AI_BACKEND || 'claude';
 }
@@ -36,9 +55,7 @@ function getBackend() {
 function getRecentActivity() {
   try {
     const raw = execSync(`node "${JERIKO}" memory --recent 3 --format json`, {
-      encoding: 'utf-8',
-      timeout: 3000,
-      stdio: ['ignore', 'pipe', 'ignore'],
+      encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'],
     });
     const parsed = JSON.parse(raw);
     if (parsed.ok && Array.isArray(parsed.data)) {
@@ -47,8 +64,57 @@ function getRecentActivity() {
         return cmd.length > 32 ? cmd.slice(0, 29) + '...' : cmd;
       }).filter(Boolean);
     }
-  } catch { /* no memory data */ }
+  } catch { /* ignore */ }
   return [];
+}
+
+function elapsed(ms) {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  return `${Math.floor(ms / 60000)}m ${Math.round((ms % 60000) / 1000)}s`;
+}
+
+function truncCmd(cmd, max = 60) {
+  const clean = cmd.replace(/\n/g, ' ').trim();
+  return clean.length > max ? clean.slice(0, max - 3) + '...' : clean;
+}
+
+// ── Spinner ─────────────────────────────────────────────────────────
+function createSpinner() {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  let interval = null;
+  let currentLabel = 'Thinking';
+  let lineLen = 0;
+  let startTime = Date.now();
+
+  function render() {
+    const dt = elapsed(Date.now() - startTime);
+    const frame = frames[i++ % frames.length];
+    const text = `  ${C.cyan}${frame}${C.reset} ${C.dim}${currentLabel}${C.reset} ${C.gray}${dt}${C.reset}`;
+    const visLen = text.replace(/\x1b\[[0-9;]*m/g, '').length;
+    const clearLen = Math.max(lineLen, visLen);
+    process.stdout.write(`\r${' '.repeat(clearLen)}\r${text}`);
+    lineLen = visLen;
+  }
+
+  return {
+    start(label) {
+      currentLabel = label || 'Thinking';
+      startTime = Date.now();
+      i = 0;
+      if (interval) clearInterval(interval);
+      render();
+      interval = setInterval(render, 80);
+    },
+    update(label) { currentLabel = label; },
+    stop() {
+      if (interval) { clearInterval(interval); interval = null; }
+      if (lineLen > 0) process.stdout.write(`\r${' '.repeat(lineLen)}\r`);
+      lineLen = 0;
+    },
+    get active() { return interval !== null; },
+  };
 }
 
 // ── Banner ──────────────────────────────────────────────────────────
@@ -58,15 +124,9 @@ function drawBanner() {
   const cwd = process.cwd().replace(process.env.HOME || '', '~');
   const recent = getRecentActivity();
 
-  const b = C.blue;
-  const bb = C.bBlue;
-  const c = C.cyan;
-  const d = C.dim;
-  const w = C.white;
-  const r = C.reset;
-  const bo = C.bold;
+  const b = C.blue, bb = C.bBlue, c = C.cyan, d = C.dim;
+  const w = C.white, r = C.reset, bo = C.bold;
 
-  // Build right panel lines
   const rightLines = [
     `${bo}${c}Tips${r}`,
     `${d}  Ask anything in plain text${r}`,
@@ -78,14 +138,11 @@ function drawBanner() {
   if (recent.length > 0) {
     rightLines.push('');
     rightLines.push(`${bo}${c}Recent${r}`);
-    for (const item of recent) {
-      rightLines.push(`${d}  > ${item}${r}`);
-    }
+    for (const item of recent) rightLines.push(`${d}  > ${item}${r}`);
   }
 
   const truncCwd = cwd.length > 25 ? '~/..' + cwd.slice(-22) : cwd;
 
-  // Left panel — blocky robot with both arms up
   const leftLines = [
     '',
     `   ${bo}${w}Welcome back!${r}`,
@@ -100,31 +157,25 @@ function drawBanner() {
     `   ${d}${backend} ${C.gray}${truncCwd}${r}`,
   ];
 
-  // Merge left + right panels
-  const leftWidth = 38;
-  const totalWidth = 70;
-
+  const leftWidth = 38, totalWidth = 70;
   const maxLines = Math.max(leftLines.length, rightLines.length);
   const bodyLines = [];
   for (let i = 0; i < maxLines; i++) {
     const left = leftLines[i] || '';
     const right = rightLines[i] || '';
-    // Strip ANSI for padding calculation
     const leftVisible = left.replace(/\x1b\[[0-9;]*m/g, '');
     const pad = Math.max(0, leftWidth - leftVisible.length);
-    bodyLines.push(`${b}|${r}${left}${' '.repeat(pad)}${b}|${r} ${right}`);
+    bodyLines.push(`${b}${SYM.bar}${r}${left}${' '.repeat(pad)}${b}${SYM.bar}${r} ${right}`);
   }
 
   const title = ` JerikoBot v${version} `;
-  const topPad = totalWidth - title.length - 3; // 3 for ╭── prefix
-  const top = `${b}╭──${bo}${c}${title}${r}${b}${'─'.repeat(Math.max(0, topPad))}╮${r}`;
-  const bot = `${b}╰${'─'.repeat(totalWidth - 1)}╯${r}`;
+  const topPad = totalWidth - title.length - 3;
+  const top = `${b}${SYM.topLeft}${SYM.hLine}${SYM.hLine}${bo}${c}${title}${r}${b}${SYM.hLine.repeat(Math.max(0, topPad))}${SYM.topRight}${r}`;
+  const bot = `${b}${SYM.botLeft}${SYM.hLine.repeat(totalWidth - 1)}${SYM.botRight}${r}`;
 
   console.log('');
   console.log(top);
-  for (const line of bodyLines) {
-    console.log(line);
-  }
+  for (const line of bodyLines) console.log(line);
   console.log(bot);
   console.log('');
 }
@@ -132,72 +183,118 @@ function drawBanner() {
 // ── Slash Commands ──────────────────────────────────────────────────
 function runJerikoSync(args) {
   try {
-    const out = execSync(`node "${JERIKO}" ${args}`, {
-      encoding: 'utf-8',
-      timeout: 10000,
-      stdio: ['ignore', 'pipe', 'pipe'],
+    return execSync(`node "${JERIKO}" ${args}`, {
+      encoding: 'utf-8', timeout: 10000, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    return out;
-  } catch (e) {
-    return e.stdout || e.stderr || e.message;
-  }
+  } catch (e) { return e.stdout || e.stderr || e.message; }
 }
 
-function handleSlash(input, rl) {
+function handleSlash(input) {
   const cmd = input.trim().toLowerCase();
-
   if (cmd === '/exit' || cmd === '/quit') {
     console.log(`\n${C.dim}Goodbye.${C.reset}\n`);
     process.exit(0);
   }
-
-  if (cmd === '/clear') {
-    console.clear();
-    drawBanner();
-    return true;
-  }
-
-  if (cmd === '/help') {
-    console.log(runJerikoSync('--help'));
-    return true;
-  }
-
-  if (cmd === '/commands') {
-    console.log(runJerikoSync('discover --list --format text'));
-    return true;
-  }
-
-  if (cmd === '/memory') {
-    console.log(runJerikoSync('memory --recent 10 --format text'));
-    return true;
-  }
-
+  if (cmd === '/clear') { console.clear(); drawBanner(); return true; }
+  if (cmd === '/help') { console.log(runJerikoSync('--help')); return true; }
+  if (cmd === '/commands') { console.log(runJerikoSync('discover --list --format text')); return true; }
+  if (cmd === '/memory') { console.log(runJerikoSync('memory --recent 10 --format text')); return true; }
   return false;
+}
+
+// ── Response Renderer ───────────────────────────────────────────────
+function createRenderer() {
+  let stepNum = 0;
+  let responseStarted = false;
+  let toolCalls = [];
+  const startTime = Date.now();
+
+  return {
+    get responseStarted() { return responseStarted; },
+    get startTime() { return startTime; },
+
+    showThinkingText(text) {
+      // Show reasoning/thinking text from the AI before tool calls
+      if (!text || !text.trim()) return;
+      const lines = text.trim().split('\n');
+      process.stdout.write(`\n`);
+      for (const line of lines) {
+        process.stdout.write(`  ${C.gray}${C.italic}${SYM.bar} ${line}${C.reset}\n`);
+      }
+    },
+
+    showToolCall(command) {
+      stepNum++;
+      const cmdStr = truncCmd(command);
+      toolCalls.push(cmdStr);
+
+      process.stdout.write(`\n`);
+      process.stdout.write(`  ${C.cyan}${SYM.arrow} Step ${stepNum}${C.reset} ${C.dim}${SYM.hLine.repeat(50)}${C.reset}\n`);
+      process.stdout.write(`  ${C.cyan}${SYM.bar}${C.reset} ${C.white}$ ${cmdStr}${C.reset}\n`);
+    },
+
+    showToolResult(command, success) {
+      const icon = success !== false ? `${C.green}${SYM.check}${C.reset}` : `${C.red}${SYM.cross}${C.reset}`;
+      process.stdout.write(`  ${C.cyan}${SYM.bar}${C.reset} ${icon} ${C.dim}done${C.reset}\n`);
+    },
+
+    startResponse() {
+      if (responseStarted) return;
+      responseStarted = true;
+      const dt = elapsed(Date.now() - startTime);
+      const steps = stepNum > 0 ? ` ${C.gray}${SYM.dot} ${stepNum} step${stepNum > 1 ? 's' : ''}${C.reset}` : '';
+      process.stdout.write(`\n`);
+      process.stdout.write(`  ${C.bold}${C.cyan}jeriko${C.reset}${steps} ${C.gray}${dt}${C.reset}\n`);
+      process.stdout.write(`  ${C.dim}${SYM.hLine.repeat(56)}${C.reset}\n`);
+    },
+
+    writeChunk(text) {
+      // Indent response lines with a subtle bar
+      const lines = text.split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        if (i < lines.length - 1) {
+          // Complete line
+          process.stdout.write(`  ${C.white}${lines[i]}${C.reset}\n`);
+        } else if (lines[i]) {
+          // Partial line (no newline yet)
+          process.stdout.write(`  ${C.white}${lines[i]}${C.reset}`);
+        }
+      }
+    },
+
+    finish() {
+      const dt = elapsed(Date.now() - startTime);
+      process.stdout.write(`${C.reset}\n`);
+      process.stdout.write(`  ${C.dim}${SYM.hLine.repeat(56)}${C.reset}\n`);
+      process.stdout.write(`  ${C.gray}${dt}${stepNum > 0 ? ` ${SYM.dot} ${stepNum} tool call${stepNum > 1 ? 's' : ''}` : ''}${C.reset}\n`);
+      process.stdout.write('\n');
+    },
+
+    showError(msg) {
+      process.stdout.write(`${C.reset}\n`);
+      process.stdout.write(`  ${C.red}${SYM.cross} error${C.reset} ${msg}\n\n`);
+    },
+  };
 }
 
 // ── Main REPL ───────────────────────────────────────────────────────
 async function main() {
-  // Load .env so AI_BACKEND and API keys are available
   try {
     require(path.join(__dirname, '..', 'lib', 'cli.js'));
   } catch { /* ignore */ }
 
   drawBanner();
-
-  // Suppress router log lines in interactive mode
   process.env.JERIKO_CHAT_QUIET = '1';
 
-  // Lazy-load router (now safe — websocket is lazy too)
   const { route } = require(path.join(__dirname, '..', 'server', 'router.js'));
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${C.cyan}jeriko>${C.reset} `,
+    prompt: `  ${C.blue}>${C.reset} `,
     terminal: true,
   });
 
-  // Clean exit on Ctrl+C
   rl.on('SIGINT', () => {
     console.log(`\n${C.dim}Goodbye.${C.reset}\n`);
     process.exit(0);
@@ -207,36 +304,62 @@ async function main() {
 
   rl.on('line', async (line) => {
     const input = line.trim();
+    if (!input) { rl.prompt(); return; }
+    if (input.startsWith('/') && handleSlash(input)) { rl.prompt(); return; }
 
-    // Empty input → re-prompt
-    if (!input) {
-      rl.prompt();
-      return;
-    }
+    rl.pause();
+    const spin = createSpinner();
+    const render = createRenderer();
 
-    // Slash commands
-    if (input.startsWith('/')) {
-      if (handleSlash(input, rl)) {
-        rl.prompt();
-        return;
+    const onStatus = (event) => {
+      switch (event.type) {
+        case 'thinking':
+          spin.start(render.responseStarted ? 'Thinking' : 'Thinking');
+          break;
+
+        case 'thinking_text':
+          // Reasoning text emitted before tool calls
+          spin.stop();
+          render.showThinkingText(event.text);
+          break;
+
+        case 'tool_call':
+          spin.stop();
+          render.showToolCall(event.command);
+          spin.start('Running');
+          break;
+
+        case 'tool_result':
+          spin.stop();
+          render.showToolResult(event.command);
+          break;
+
+        case 'responding':
+          spin.stop();
+          render.startResponse();
+          break;
       }
-      // Unknown slash command — treat as chat
-    }
+    };
 
-    // Route to AI
+    const onChunk = (text) => {
+      if (spin.active) spin.stop();
+      if (!render.responseStarted) render.startResponse();
+      render.writeChunk(text);
+    };
+
     try {
-      // Pause readline while AI is responding
-      rl.pause();
-      process.stdout.write(`\n${C.dim}`);
+      spin.start('Thinking');
+      await route(input, onChunk, onStatus);
+      spin.stop();
 
-      await route(input, (chunk) => {
-        process.stdout.write(chunk);
-      });
-
-      process.stdout.write(`${C.reset}\n\n`);
+      if (render.responseStarted) {
+        render.finish();
+      } else {
+        process.stdout.write(`\n  ${C.dim}(no response)${C.reset}\n\n`);
+      }
     } catch (err) {
-      process.stdout.write(`${C.reset}\n`);
-      console.error(`${C.blue}error:${C.reset} ${err.message}\n`);
+      spin.stop();
+      render.showError(err.message);
     }
 
     rl.resume();

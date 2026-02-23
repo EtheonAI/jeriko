@@ -124,9 +124,10 @@ jeriko camera --video --duration 10  # record 10s video
 ```
 
 ### jeriko email
-Read emails via IMAP. Set `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_HOST` in `.env`.
+Read emails via IMAP. Run `jeriko email init` to set up.
 
 ```bash
+jeriko email init                 # interactive IMAP setup (Gmail, Outlook, Yahoo, custom)
 jeriko email                      # latest 10 emails
 jeriko email --unread             # unread only
 jeriko email --search "invoice"   # search emails
@@ -320,9 +321,13 @@ jeriko open server                  # open http://localhost:3000
 ```
 
 ### jeriko stripe
-Full Stripe integration via REST API. Set `STRIPE_SECRET_KEY` in `.env`.
+Full Stripe integration via REST API. Run `jeriko stripe init` to set up.
 
 ```bash
+# Setup
+jeriko stripe init                     # interactive setup wizard
+jeriko stripe init --key sk_xxx        # non-interactive
+
 # Customers
 jeriko stripe customers list [--limit N] [--email user@example.com]
 jeriko stripe customers create --name "John Doe" --email "john@example.com"
@@ -377,9 +382,13 @@ jeriko stripe webhooks create --url https://example.com/hook --events "payment_i
 ```
 
 ### jeriko x
-Full X.com (Twitter) API integration. Set `X_BEARER_TOKEN`, `X_CLIENT_ID`, `X_CLIENT_SECRET` in `.env`.
+Full X.com (Twitter) API integration. Run `jeriko x init` to set up.
 
 ```bash
+# Setup
+jeriko x init                              # interactive setup wizard
+jeriko x init --bearer-token xxx --client-id xxx  # non-interactive
+
 # Auth (OAuth 2.0 PKCE)
 jeriko x auth                              # login via browser
 jeriko x auth --status                     # show auth state
@@ -437,6 +446,61 @@ jeriko x mute <handle>
 jeriko x unmute <handle>
 ```
 
+### jeriko twilio
+Full Twilio Voice + SMS/MMS integration. Run `jeriko twilio init` to set up.
+
+```bash
+# Setup
+jeriko twilio init                                 # interactive 3-step wizard
+jeriko twilio init --sid ACxxx --token xxx --phone +1xxx  # non-interactive
+
+# Make a call
+jeriko twilio call +1234567890 --say "Hello world"     # text-to-speech call
+jeriko twilio call +1234567890 --say "Hi" --voice man  # custom voice
+jeriko twilio call +1234567890 --play https://example.com/audio.mp3  # play audio
+jeriko twilio call +1234567890 --url https://handler.twiml.url       # TwiML URL
+jeriko twilio call +1234567890 --say "Hi" --record     # call + record
+
+# List calls
+jeriko twilio calls                                # recent calls (default: 20)
+jeriko twilio calls --limit 5
+jeriko twilio calls --status completed
+jeriko twilio calls --to +1234567890
+jeriko twilio calls --from +1234567890
+
+# Call details / management
+jeriko twilio call-status CA_SID                   # get call details
+jeriko twilio hangup CA_SID                        # end an active call
+jeriko twilio delete CA_SID                        # delete call record
+
+# SMS / MMS
+jeriko twilio sms +1234567890 "Hello from JerikoBot"   # send SMS
+jeriko twilio sms +1234567890 --media https://example.com/image.png  # send MMS (image only)
+jeriko twilio sms +1234567890 "Check this out" --media https://example.com/img.jpg  # SMS + MMS
+
+# List messages
+jeriko twilio messages                             # recent messages (default: 20)
+jeriko twilio messages --limit 5
+jeriko twilio messages --to +1234567890
+jeriko twilio messages --from +1234567890
+
+# Message details / management
+jeriko twilio message-status SM_SID                # get message details
+jeriko twilio delete-message SM_SID                # delete message record
+
+# Recordings
+jeriko twilio recordings                           # list all recordings
+jeriko twilio recordings --call CA_SID             # recordings for a call
+jeriko twilio recordings --limit 5
+jeriko twilio recording RE_SID                     # get recording details
+jeriko twilio recording RE_SID --delete            # delete a recording
+
+# Account & numbers
+jeriko twilio account                              # name, status, balance
+jeriko twilio numbers                              # list owned phone numbers
+jeriko twilio numbers --limit 5
+```
+
 ## Piping Patterns
 
 ```bash
@@ -492,13 +556,53 @@ jeriko plugin test ./my-plugin         # run commands and verify output format
 ```
 
 ### jeriko init
-First-run onboarding.
+First-run onboarding. 6-step interactive wizard: AI backend, Telegram, security, tunnel, server, verify.
 
 ```bash
-jeriko init                            # interactive setup wizard
+jeriko init                            # interactive 6-step wizard
 jeriko init --ai claude --yes          # non-interactive
 jeriko init --skip-ai --skip-telegram  # minimal setup
+
+# Third-party service setup (each has its own init wizard):
+jeriko stripe init                     # Stripe payments
+jeriko x init                          # X.com (Twitter)
+jeriko email init                      # Email (IMAP)
 ```
+
+## Local Model Configuration
+
+JerikoBot can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
+
+```bash
+# .env configuration
+AI_BACKEND=local
+LOCAL_MODEL_URL=http://localhost:11434/v1   # Ollama default
+LOCAL_MODEL=llama3.2                        # model name
+# LOCAL_API_KEY=                            # optional, for secured endpoints
+```
+
+| Runtime | Default URL | Notes |
+|---------|------------|-------|
+| Ollama | `http://localhost:11434/v1` | Most popular, auto-detected by `jeriko init` |
+| LM Studio | `http://localhost:1234/v1` | GUI-based, easy setup |
+| vLLM | `http://localhost:8000/v1` | Production-grade serving |
+| llama.cpp server | `http://localhost:8080/v1` | Lightweight C++ |
+| Any OpenAI-compatible | Custom URL | Just set `LOCAL_MODEL_URL` |
+
+**Setup:**
+```bash
+# Option 1: Interactive wizard (auto-detects Ollama, lists models)
+jeriko init
+
+# Option 2: Non-interactive
+jeriko init --ai local --local-url http://localhost:11434/v1 --local-model llama3.2 --yes
+
+# Option 3: Manual .env edit
+echo "AI_BACKEND=local" >> .env
+echo "LOCAL_MODEL=llama3.2" >> .env
+```
+
+**How it works:** The local backend uses the OpenAI-compatible `/v1/chat/completions` endpoint with `stream: false`. The model receives the same system prompt (auto-generated via `jeriko discover`) and bash tool definition. No streaming avoids the Ollama tool_calls streaming bug.
 
 ## Plugins
 
@@ -562,6 +666,7 @@ bin/
   jeriko-open      # open URLs, files, apps
   jeriko-stripe    # Stripe payments, customers, subscriptions, invoices
   jeriko-x         # X.com (Twitter) — post, search, timeline, DMs, follows
+  jeriko-twilio    # Twilio Voice + SMS/MMS — calls, messages, recordings, numbers
   jeriko-install   # plugin installer (npm + local, upgrade)
   jeriko-uninstall # plugin remover
   jeriko-trust     # plugin trust management
@@ -585,7 +690,7 @@ data/
   trigger-log.json # trigger execution log
 server/
   index.js         # main entry point (Express + WebSocket + Telegram + WhatsApp)
-  router.js        # AI backend (Claude/OpenAI, auto-discovers commands, injects memory)
+  router.js        # AI backend (Claude/OpenAI/local, auto-discovers commands, injects memory)
   auth.js          # HMAC token auth + admin ID validation
   telegram.js      # Telegram bot with all slash commands + triggers
   whatsapp.js      # WhatsApp integration via Baileys
