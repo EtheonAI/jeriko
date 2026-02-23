@@ -38,7 +38,7 @@ if command -v git &>/dev/null; then
   if [ -d "$INSTALL_DIR/repo" ]; then
     cd "$INSTALL_DIR/repo" && git pull
   else
-    git clone https://github.com/yourusername/jerikobot.git "$INSTALL_DIR/repo"
+    git clone https://github.com/khaleel737/jerikobot.git "$INSTALL_DIR/repo"
   fi
   cd "$INSTALL_DIR/repo"
 else
