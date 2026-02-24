@@ -98,8 +98,9 @@ if ($DryRun) {
 else {
     # Backup existing
     if (Test-Path $Dir) {
-        $backup = "$Dir.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-        Move-Item $Dir $backup
+        $timestamp = Get-Date -Format 'yyyyMMddHHmmss'
+        $backup = "${Dir}.bak.${timestamp}"
+        Move-Item -Path $Dir -Destination $backup -Force
         Write-Info "Backed up existing $Dir"
     }
 
