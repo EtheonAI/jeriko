@@ -2,5 +2,7 @@
   "name": "expo",
   "description": "React Native with Expo",
   "command": "npx create-expo-app@latest {{name}}",
-  "postInstall": "cd {{name}} && npm install"
+  "postInstall": "cd {{name}} && npm install",
+  "devCommand": "npx expo start",
+  "devPort": 8081
 }

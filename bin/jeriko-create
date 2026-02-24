@@ -131,6 +131,15 @@ run(async () => {
     await exec(postCmd, { timeout, cwd: baseDir });
   }
 
+  // Write .jeriko-meta.json for framework detection by jeriko dev
+  const meta = {
+    template: template.name,
+    devCommand: template.devCommand || null,
+    devPort: template.devPort || 3000,
+    createdAt: new Date().toISOString(),
+  };
+  fs.writeFileSync(path.join(targetDir, '.jeriko-meta.json'), JSON.stringify(meta, null, 2));
+
   // Detect editor
   const editor = detectEditor();
 
@@ -142,6 +151,22 @@ run(async () => {
     editor: editor ? editor.name : null,
     openCommand: editor ? `${editor.cmd} "${targetDir}"` : null,
   };
+
+  // --dev flag: auto-start dev server after scaffolding
+  if (flags.dev && meta.devCommand) {
+    try {
+      const devBin = path.join(__dirname, 'jeriko-dev');
+      execSync(`node "${devBin}" --start "${projectName}" --format json`, {
+        timeout: 15000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      response.devServer = true;
+      response.devUrl = `http://localhost:${meta.devPort}`;
+    } catch (e) {
+      response.devServer = false;
+      response.devError = e.message || 'Failed to start dev server';
+    }
+  }
 
   ok(response);
 });

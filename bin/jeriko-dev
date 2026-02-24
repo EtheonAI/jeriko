@@ -1,0 +1,330 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { spawn, execSync } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+
+const JERIKO_DIR = path.join(os.homedir(), '.jeriko');
+const PROJECTS_DIR = path.join(JERIKO_DIR, 'projects');
+const LOGS_DIR = path.join(JERIKO_DIR, 'logs');
+const STATE_FILE = path.join(JERIKO_DIR, 'dev-servers.json');
+
+// Ensure directories exist
+for (const dir of [JERIKO_DIR, LOGS_DIR]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+// ========== State management ==========
+
+function loadState() {
+  try { return JSON.parse(fs.readFileSync(STATE_FILE, 'utf-8')); } catch { return {}; }
+}
+
+function saveState(state) {
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+// ========== Framework detection ==========
+
+const FRAMEWORKS = [
+  { name: 'nextjs',  test: pkg => pkg.dependencies?.next, cmd: 'npm run dev', port: 3000 },
+  { name: 'vite',    test: pkg => pkg.devDependencies?.vite || pkg.dependencies?.vite, cmd: 'npm run dev', port: 5173 },
+  { name: 'cra',     test: pkg => pkg.dependencies?.['react-scripts'], cmd: 'npm start', port: 3000 },
+  { name: 'express', test: pkg => pkg.dependencies?.express, cmd: 'npm start', port: 3000 },
+];
+
+function detectFramework(projectDir) {
+  // 1. Check .jeriko-meta.json (written by jeriko create)
+  const metaPath = path.join(projectDir, '.jeriko-meta.json');
+  if (fs.existsSync(metaPath)) {
+    try {
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'));
+      if (meta.devCommand) {
+        return { framework: meta.template || 'meta', cmd: meta.devCommand, port: meta.devPort || 3000 };
+      }
+    } catch {}
+  }
+
+  // 2. Check package.json
+  const pkgPath = path.join(projectDir, 'package.json');
+  if (fs.existsSync(pkgPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+      for (const fw of FRAMEWORKS) {
+        if (fw.test(pkg)) return { framework: fw.name, cmd: fw.cmd, port: fw.port };
+      }
+      // Fallback: has scripts.dev
+      if (pkg.scripts?.dev) return { framework: 'unknown', cmd: 'npm run dev', port: 3000 };
+      if (pkg.scripts?.start) return { framework: 'unknown', cmd: 'npm start', port: 3000 };
+    } catch {}
+  }
+
+  // 3. Check for Python (Flask)
+  const appPy = path.join(projectDir, 'app.py');
+  const requirements = path.join(projectDir, 'requirements.txt');
+  if (fs.existsSync(appPy) || fs.existsSync(requirements)) {
+    // Check for venv
+    const venvFlask = path.join(projectDir, 'venv', 'bin', 'flask');
+    const cmd = fs.existsSync(venvFlask) ? './venv/bin/flask run' : 'flask run';
+    return { framework: 'flask', cmd, port: 5000 };
+  }
+
+  // 4. Static site (only index.html, no package.json)
+  const indexHtml = path.join(projectDir, 'index.html');
+  if (fs.existsSync(indexHtml) && !fs.existsSync(pkgPath)) {
+    return { framework: 'static', cmd: 'npx serve .', port: 3000 };
+  }
+
+  return null;
+}
+
+// ========== Port detection from logs ==========
+
+function parsePortFromLog(logFile) {
+  try {
+    const content = fs.readFileSync(logFile, 'utf-8');
+    // Common patterns: localhost:3000, 127.0.0.1:5173, port 3000, :8080
+    const match = content.match(/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)/i)
+      || content.match(/port\s+(\d+)/i)
+      || content.match(/on\s+:(\d+)/i);
+    if (match) return parseInt(match[1], 10);
+  } catch {}
+  return null;
+}
+
+function detectPortFromLog(logFile, timeout = 8000) {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const port = parsePortFromLog(logFile);
+    if (port) return port;
+    // Sleep 300ms
+    const end = Date.now() + 300;
+    while (Date.now() < end) {}
+  }
+  return null;
+}
+
+// Re-check port from log and update state if it was initially set to default
+function refreshPort(name, state) {
+  const entry = state[name];
+  if (!entry || !entry.logFile) return;
+  const logPort = parsePortFromLog(entry.logFile);
+  if (logPort && logPort !== entry.port) {
+    entry.port = logPort;
+    saveState(state);
+  }
+}
+
+// ========== Process helpers ==========
+
+function isProcessRunning(pid) {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+function killProcessGroup(pid) {
+  try {
+    // Kill process group (negative PID)
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    // Fallback: kill just the process
+    try { process.kill(pid, 'SIGTERM'); } catch {}
+  }
+}
+
+// ========== Resolve project directory ==========
+
+function resolveProject(nameOrPath, flags) {
+  if (flags.path) {
+    const p = path.resolve(flags.path);
+    if (!fs.existsSync(p)) fail(`Directory not found: ${p}`, EXIT.NOT_FOUND);
+    return { name: path.basename(p), dir: p };
+  }
+  if (nameOrPath) {
+    // Check ~/.jeriko/projects/<name>
+    const projectDir = path.join(PROJECTS_DIR, nameOrPath);
+    if (fs.existsSync(projectDir)) return { name: nameOrPath, dir: projectDir };
+    // Check if it's an absolute/relative path
+    const resolved = path.resolve(nameOrPath);
+    if (fs.existsSync(resolved)) return { name: path.basename(resolved), dir: resolved };
+    fail(`Project not found: ${nameOrPath} (checked ${projectDir} and ${resolved})`, EXIT.NOT_FOUND);
+  }
+  // Check if current directory is a project
+  const cwd = process.cwd();
+  return { name: path.basename(cwd), dir: cwd };
+}
+
+// ========== Commands ==========
+
+async function startServer(nameOrPath, flags) {
+  const { name, dir } = resolveProject(nameOrPath, flags);
+  const state = loadState();
+
+  // Check if already running
+  if (state[name] && isProcessRunning(state[name].pid)) {
+    fail(`Dev server "${name}" is already running (PID ${state[name].pid}, port ${state[name].port})`);
+  }
+
+  // Detect framework
+  const detection = detectFramework(dir);
+  if (!detection) fail(`Cannot detect framework in ${dir}. No package.json, app.py, or index.html found.`);
+
+  const logFile = path.join(LOGS_DIR, `${name}.log`);
+  const logFd = fs.openSync(logFile, 'w');
+
+  // Start the dev server in the background
+  const proc = spawn('bash', ['-c', detection.cmd], {
+    cwd: dir,
+    stdio: ['ignore', logFd, logFd],
+    detached: true,
+    env: { ...process.env, PORT: String(detection.port) },
+  });
+
+  proc.unref();
+  fs.closeSync(logFd);
+
+  // Try to detect actual port from log output (8s timeout for npx-based tools)
+  const actualPort = detectPortFromLog(logFile, 8000) || detection.port;
+
+  // Save state
+  state[name] = {
+    pid: proc.pid,
+    port: actualPort,
+    framework: detection.framework,
+    command: detection.cmd,
+    path: dir,
+    logFile,
+    startedAt: new Date().toISOString(),
+  };
+  saveState(state);
+
+  ok({
+    action: 'started',
+    project: name,
+    pid: proc.pid,
+    port: actualPort,
+    framework: detection.framework,
+    url: `http://localhost:${actualPort}`,
+    logFile,
+  });
+}
+
+async function stopServer(nameOrPath, flags) {
+  const { name } = resolveProject(nameOrPath, flags);
+  const state = loadState();
+
+  if (!state[name]) fail(`No dev server found for "${name}"`, EXIT.NOT_FOUND);
+
+  const entry = state[name];
+  if (isProcessRunning(entry.pid)) {
+    killProcessGroup(entry.pid);
+  }
+
+  delete state[name];
+  saveState(state);
+
+  ok({ action: 'stopped', project: name, pid: entry.pid });
+}
+
+async function showStatus() {
+  const state = loadState();
+  const servers = [];
+
+  for (const [name, entry] of Object.entries(state)) {
+    const running = isProcessRunning(entry.pid);
+    if (!running) {
+      // Clean up stale entries
+      delete state[name];
+      continue;
+    }
+    // Re-detect port from logs (fixes cases where initial detection timed out)
+    refreshPort(name, state);
+    servers.push({
+      project: name,
+      pid: entry.pid,
+      port: state[name].port,
+      framework: entry.framework,
+      url: `http://localhost:${state[name].port}`,
+      path: entry.path,
+      startedAt: entry.startedAt,
+    });
+  }
+
+  saveState(state);
+  ok(servers);
+}
+
+async function showLogs(nameOrPath, flags) {
+  const { name } = resolveProject(nameOrPath, flags);
+  const state = loadState();
+
+  // Check state for log file, or construct default path
+  const logFile = state[name]?.logFile || path.join(LOGS_DIR, `${name}.log`);
+  if (!fs.existsSync(logFile)) fail(`No log file for "${name}" at ${logFile}`, EXIT.NOT_FOUND);
+
+  const tail = parseInt(flags.tail) || 50;
+  const content = fs.readFileSync(logFile, 'utf-8');
+  const lines = content.split('\n');
+  const output = lines.slice(-tail).join('\n').trim();
+
+  ok({ project: name, lines: Math.min(lines.length, tail), logFile, output });
+}
+
+async function openPreview(nameOrPath, flags) {
+  const { name } = resolveProject(nameOrPath, flags);
+  const state = loadState();
+
+  if (!state[name]) fail(`No dev server found for "${name}". Start one with: jeriko dev --start ${name}`, EXIT.NOT_FOUND);
+
+  const entry = state[name];
+  if (!isProcessRunning(entry.pid)) {
+    delete state[name];
+    saveState(state);
+    fail(`Dev server "${name}" is not running (PID ${entry.pid} is dead). Restart with: jeriko dev --start ${name}`);
+  }
+
+  // Re-detect port from logs
+  refreshPort(name, state);
+  const url = `http://localhost:${state[name].port}`;
+  try {
+    execSync(`open "${url}"`, { timeout: 5000 });
+  } catch {
+    // Fallback for non-macOS
+    try { execSync(`xdg-open "${url}"`, { timeout: 5000 }); } catch {}
+  }
+
+  ok({ action: 'preview', project: name, url });
+}
+
+// ========== Main ==========
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+  const target = positional[0];
+
+  if (flags.start) {
+    const name = typeof flags.start === 'string' ? flags.start : target;
+    return startServer(name, flags);
+  }
+
+  if (flags.stop) {
+    const name = typeof flags.stop === 'string' ? flags.stop : target;
+    return stopServer(name, flags);
+  }
+
+  if (flags.status) {
+    return showStatus();
+  }
+
+  if (flags.logs) {
+    const name = typeof flags.logs === 'string' ? flags.logs : target;
+    return showLogs(name, flags);
+  }
+
+  if (flags.preview) {
+    const name = typeof flags.preview === 'string' ? flags.preview : target;
+    return openPreview(name, flags);
+  }
+
+  fail('Usage: jeriko dev --start <name> | --stop <name> | --status | --logs <name> | --preview <name>\n\nFlags:\n  --start <name|--path dir>  Start dev server\n  --stop <name|--path dir>   Stop dev server\n  --status                   List running servers\n  --logs <name> [--tail N]   Show server logs\n  --preview <name>           Open in browser\n  --path <dir>               Use specific directory');
+});

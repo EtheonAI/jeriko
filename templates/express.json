@@ -2,5 +2,7 @@
   "name": "express",
   "description": "Express.js API server",
   "command": "mkdir -p {{name}} && cd {{name}} && npm init -y && npm install express",
-  "postInstall": ""
+  "postInstall": "",
+  "devCommand": "npm start",
+  "devPort": 3000
 }

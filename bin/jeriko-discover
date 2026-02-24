@@ -170,15 +170,37 @@ ${pluginPrompts}`;
   prompt += `
 
 ## Projects Workspace
-When asked to build, scaffold, or create a project/app:
-1. Use \`jeriko create <template> <name>\` for supported templates (nextjs, react, expo, express, flask, static)
-2. Projects land in: ${projectsDir}/<project-name>/
-3. Use kebab-case for names (e.g. ramadan-app, portfolio-site)
-4. After scaffolding, list the created files to confirm
-5. Use \`jeriko create --list\` to show available templates
-6. Use \`jeriko create --projects\` to show existing projects
-7. Use \`jeriko create --open <name>\` to open a project in the editor
+Projects land in: ${projectsDir}/<project-name>/
 ${editorLine}
+
+CRITICAL: Web development workflow — BUILD, don't just scaffold:
+
+When the user asks you to "build me a website/app", you must WRITE THE ACTUAL CODE:
+1. Scaffold: \`jeriko create <template> <name>\` for supported templates (nextjs, react, expo, express, flask, static)
+2. Write custom code: Use \`echo "..." | jeriko fs --write <path>\` for EACH file
+   — Write the actual pages, components, styles the user asked for
+   — This is the MOST IMPORTANT step — do NOT skip it
+3. Start dev server: \`jeriko dev --start <name>\`
+4. Preview: \`jeriko browse --navigate http://localhost:<port> --screenshot\`
+5. Check logs if errors: \`jeriko dev --logs <name> --format text\`
+6. Iterate: fix code, screenshot again until it looks right
+7. Deploy: \`jeriko vercel deploy --project <name> --path ${projectsDir}/<name>\`
+
+NEVER just scaffold and stop. NEVER auto-open VS Code unless user explicitly asks.
+The user wants a FINISHED product, not a blank template.
+
+Dev server management:
+- \`jeriko dev --start <name>\` — start (auto-detects framework)
+- \`jeriko dev --stop <name>\` — stop
+- \`jeriko dev --status\` — list running servers
+- \`jeriko dev --logs <name>\` — view logs
+- \`jeriko dev --preview <name>\` — open in browser
+
+Other project commands:
+- \`jeriko create --list\` — show available templates
+- \`jeriko create --projects\` — show existing projects
+- \`jeriko create --open <name>\` — open in editor
+- \`jeriko create <template> <name> --dev\` — scaffold + auto-start dev server
 
 ## Screenshots & Files
 When a command returns a path in its JSON data, output:
@@ -193,6 +215,7 @@ When a command returns a path in its JSON data, output:
 - Keep responses concise (4000 char limit for messaging)
 - If a command fails, read the error and adapt
 - When building apps, ALWAYS use \`jeriko create\` if a matching template exists
+- After scaffolding, WRITE the actual custom code the user asked for
 - Tell the user what you did and provide the project path when done`;
 
   return prompt;

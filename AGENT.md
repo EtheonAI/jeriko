@@ -692,9 +692,39 @@ echo "print(1+1)" | jeriko code --python           # pipe code via stdin
 
 ---
 
-## Project Scaffolding (`jeriko create`)
+## Dev Server Management (`jeriko dev`)
 
-When asked to build, scaffold, or create a project/app, use `jeriko create`.
+```bash
+# Start dev server (auto-detects framework from package.json or .jeriko-meta.json)
+jeriko dev --start <name>                          # start by project name
+jeriko dev --start --path /path/to/project         # start by path
+
+# Stop dev server
+jeriko dev --stop <name>                           # stop by project name
+
+# Status & Monitoring
+jeriko dev --status                                # list all running dev servers
+jeriko dev --logs <name>                           # last 50 lines of server logs
+jeriko dev --logs <name> --tail 100                # custom line count
+
+# Preview
+jeriko dev --preview <name>                        # open localhost in browser
+```
+
+**Framework auto-detection:**
+| Framework | Detection | Dev Command | Default Port |
+|-----------|-----------|-------------|-------------|
+| Next.js | `dependencies.next` | `npm run dev` | 3000 |
+| Vite/React | `devDependencies.vite` | `npm run dev` | 5173 |
+| CRA | `dependencies.react-scripts` | `npm start` | 3000 |
+| Express | `dependencies.express` | `npm start` | 3000 |
+| Flask | `app.py` or `requirements.txt` | `flask run` | 5000 |
+| Static | Only `index.html` (no pkg) | `npx serve .` | 3000 |
+| Unknown | Has `scripts.dev` | `npm run dev` | 3000 |
+
+---
+
+## Project Scaffolding (`jeriko create`)
 
 ```bash
 # Available Templates
@@ -709,6 +739,9 @@ jeriko create expo my-app                          # React Native (Expo) app
 jeriko create express my-api                       # Express.js API
 jeriko create flask my-api                         # Flask (Python) API
 jeriko create static my-site                       # Static HTML/CSS/JS site
+
+# Create + Auto-Start Dev Server
+jeriko create nextjs my-app --dev                  # scaffold AND start dev server
 ```
 
 **Project workspace rules:**
@@ -717,11 +750,21 @@ jeriko create static my-site                       # Static HTML/CSS/JS site
 - After scaffolding, list the created files to confirm
 - Use `jeriko create --open <name>` to open in the detected editor (VS Code, Cursor, etc.)
 
-**Web development workflow:**
-1. `jeriko create <template> <name>` — scaffold the project
-2. Edit files with `jeriko fs --write` or open in editor with `jeriko create --open <name>`
-3. Test locally (e.g., `jeriko exec "cd ~/.jeriko/projects/my-app && npm run dev"`)
-4. Deploy with `jeriko vercel deploy --project <name> --path ~/.jeriko/projects/<name>`
+**CRITICAL: Web development workflow — BUILD, don't just scaffold:**
+
+When the user asks you to "build me a website/app", you must WRITE THE ACTUAL CODE:
+1. **Scaffold**: `jeriko create <template> <name>` — create the project skeleton
+2. **Write custom code**: Use `echo "..." | jeriko fs --write <path>` for EACH file
+   - Write the actual pages, components, styles the user asked for
+   - This is the MOST IMPORTANT step — do NOT skip it
+3. **Start dev server**: `jeriko dev --start <name>`
+4. **Preview**: `jeriko browse --navigate http://localhost:<port> --screenshot`
+5. **Check logs if errors**: `jeriko dev --logs <name> --format text`
+6. **Iterate**: fix code, screenshot again until it looks right
+7. **Deploy**: `jeriko vercel deploy --project <name> --path ~/.jeriko/projects/<name>`
+
+**NEVER just scaffold and stop. NEVER auto-open VS Code unless user explicitly asks.**
+The user wants a FINISHED product, not a blank template.
 
 ---
 

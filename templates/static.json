@@ -2,5 +2,7 @@
   "name": "static",
   "description": "Static HTML/CSS/JS site",
   "command": "mkdir -p {{name}} && mkdir -p {{name}}/css {{name}}/js {{name}}/img",
-  "postInstall": ""
+  "postInstall": "",
+  "devCommand": "npx serve .",
+  "devPort": 3000
 }
