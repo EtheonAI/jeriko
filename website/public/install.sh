@@ -208,7 +208,7 @@ else
 
   # Install dependencies
   info "Installing dependencies..."
-  cd "$INSTALL_DIR" && npm install --production --silent 2>/dev/null
+  cd "$INSTALL_DIR" && npm install --omit=dev --silent 2>/dev/null
   ok "Dependencies installed"
 
   # Make bin scripts executable

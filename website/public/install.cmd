@@ -86,7 +86,7 @@ REM ── Install dependencies ────────────────
 
 echo   Installing dependencies...
 pushd "%INSTALL_DIR%"
-call npm install --production >nul 2>nul
+call npm install --omit=dev >nul 2>nul
 popd
 echo   [ok] Dependencies installed
 
