@@ -70,10 +70,12 @@ run(async () => {
   const host = flags.host || getHostname();
   const outputRaw = flags.raw;
 
-  // Read FULL CLAUDE.md — every section
+  // Read AGENT.md (agent prompt) — falls back to CLAUDE.md if not found
+  const agentMd = path.join(BIN_DIR, '..', 'AGENT.md');
   const claudeMd = path.join(BIN_DIR, '..', 'CLAUDE.md');
   let docs = '';
-  if (fs.existsSync(claudeMd)) docs = fs.readFileSync(claudeMd, 'utf-8');
+  if (fs.existsSync(agentMd)) docs = fs.readFileSync(agentMd, 'utf-8');
+  else if (fs.existsSync(claudeMd)) docs = fs.readFileSync(claudeMd, 'utf-8');
 
   let fullDocs;
   if (docs) {

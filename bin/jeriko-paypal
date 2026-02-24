@@ -1,0 +1,746 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-paypal — Full PayPal CLI built on PayPal REST API
+// Standalone CLI: jeriko paypal <resource> <action> [flags]
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
+
+const SANDBOX_BASE = 'https://api-m.sandbox.paypal.com';
+const LIVE_BASE = 'https://api-m.paypal.com';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Colors
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+function getBase() {
+  return (process.env.PAYPAL_MODE || 'sandbox') === 'live' ? LIVE_BASE : SANDBOX_BASE;
+}
+
+function getClientId() {
+  return process.env.PAYPAL_CLIENT_ID;
+}
+
+function getClientSecret() {
+  return process.env.PAYPAL_CLIENT_SECRET;
+}
+
+function requireCreds() {
+  const id = getClientId();
+  const secret = getClientSecret();
+  if (!id || !secret) {
+    fail('PAYPAL_CLIENT_ID / PAYPAL_CLIENT_SECRET not set. Run: jeriko paypal init', EXIT.AUTH);
+  }
+  return { id, secret };
+}
+
+// ---- .env helpers ----
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
+// ---- OAuth2 Token Cache ----
+
+let tokenCache = { token: null, expiresAt: 0 };
+
+async function getAccessToken() {
+  if (tokenCache.token && Date.now() < tokenCache.expiresAt) return tokenCache.token;
+  const { id, secret } = requireCreds();
+  const base = getBase();
+  const res = await fetch(`${base}/v1/oauth2/token`, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Basic ' + Buffer.from(`${id}:${secret}`).toString('base64'),
+      'Content-Type': 'application/x-www-form-urlencoded',
+    },
+    body: 'grant_type=client_credentials',
+  });
+  const data = await res.json();
+  if (!res.ok) {
+    const msg = data.error_description || data.error || JSON.stringify(data);
+    fail(`PayPal auth failed: ${msg}`, EXIT.AUTH);
+  }
+  tokenCache.token = data.access_token;
+  tokenCache.expiresAt = Date.now() + (data.expires_in * 1000) - 60000;
+  return tokenCache.token;
+}
+
+// ---- HTTP helpers ----
+
+async function paypal(method, urlPath, body = null, query = null) {
+  const token = await getAccessToken();
+  const base = getBase();
+  let url = urlPath.startsWith('http') ? urlPath : `${base}${urlPath}`;
+  if (query) {
+    const qs = new URLSearchParams(query).toString();
+    if (qs) url += '?' + qs;
+  }
+  const opts = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+  };
+  if (body && method !== 'GET') {
+    opts.body = JSON.stringify(body);
+  }
+  const res = await fetch(url, opts);
+  // Some PayPal endpoints return 204 No Content
+  if (res.status === 204) return {};
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = data.message || data.error_description || data.name || JSON.stringify(data);
+    const code = res.status === 401 || res.status === 403 ? EXIT.AUTH
+      : res.status === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+    fail(`PayPal ${res.status}: ${msg}`, code);
+  }
+  return data;
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const resource = args[0];
+  const { flags, positional: allPositional } = parseArgs(['', '', ...args.slice(1)]);
+  const action = allPositional[0];
+  const positional = allPositional.slice(1);
+
+  if (!resource) {
+    return ok({
+      usage: 'jeriko paypal <resource> <action> [flags]',
+      resources: {
+        init: 'interactive setup wizard',
+        orders: 'create, get, capture, authorize',
+        payments: 'get, refund',
+        subscriptions: 'list, get, create, cancel, suspend, activate',
+        plans: 'list, get, create',
+        products: 'list, get, create',
+        invoices: 'list, get, create, send, cancel, remind',
+        payouts: 'create, get',
+        disputes: 'list, get',
+        webhooks: 'list, create, delete',
+      },
+    });
+  }
+
+  // ===================== INIT =====================
+  if (resource === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}PayPal Setup${C.reset}\n`);
+    w(`  ${C.dim}Orders, subscriptions, invoices, payouts${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko paypal init --client-id xxx --secret xxx
+    if (flags['client-id'] && flags.secret) {
+      const mode = flags.live ? 'live' : 'sandbox';
+      writeEnvKey('PAYPAL_CLIENT_ID', flags['client-id']);
+      writeEnvKey('PAYPAL_CLIENT_SECRET', flags.secret);
+      writeEnvKey('PAYPAL_MODE', mode);
+      // Verify
+      const base = mode === 'live' ? LIVE_BASE : SANDBOX_BASE;
+      try {
+        const res = await fetch(`${base}/v1/oauth2/token`, {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Basic ' + Buffer.from(`${flags['client-id']}:${flags.secret}`).toString('base64'),
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'grant_type=client_credentials',
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        w(`  ${C.green}[ok]${C.reset} Credentials verified and saved (${mode} mode)\n\n`);
+      } catch (e) {
+        w(`  ${C.red}[!!]${C.reset} Credentials saved but verification failed: ${e.message}\n\n`);
+      }
+      return ok({ status: 'configured', mode });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+    const existingId = env.PAYPAL_CLIENT_ID;
+    const existingSecret = env.PAYPAL_CLIENT_SECRET;
+
+    let clientId, clientSecret;
+    if (existingId) {
+      w(`  ${C.dim}Current Client ID: ${maskKey(existingId)}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing credentials? (Y/n)', 'Y');
+      if (keep.toLowerCase() === 'n') {
+        w(`  ${C.dim}Get credentials at: https://developer.paypal.com/dashboard/applications${C.reset}\n\n`);
+        clientId = await ask(rl, 'PayPal Client ID:');
+        clientSecret = await ask(rl, 'PayPal Client Secret:');
+      } else {
+        clientId = existingId;
+        clientSecret = existingSecret;
+      }
+    } else {
+      w(`  ${C.dim}Get credentials at: https://developer.paypal.com/dashboard/applications${C.reset}\n`);
+      w(`  ${C.dim}Use sandbox credentials for development${C.reset}\n\n`);
+      clientId = await ask(rl, 'PayPal Client ID:');
+      clientSecret = await ask(rl, 'PayPal Client Secret:');
+    }
+
+    if (!clientId || !clientSecret) {
+      w(`\n  ${C.dim}Skipped — no credentials provided${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    const mode = flags.live ? 'live' : (flags.sandbox !== undefined ? 'sandbox' : (await ask(rl, 'Mode? (sandbox/live)', 'sandbox')));
+
+    // Verify
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    let verified = false;
+    const base = mode === 'live' ? LIVE_BASE : SANDBOX_BASE;
+    try {
+      const res = await fetch(`${base}/v1/oauth2/token`, {
+        method: 'POST',
+        headers: {
+          'Authorization': 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64'),
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'grant_type=client_credentials',
+      });
+      clearInterval(spin);
+      if (res.ok) {
+        verified = true;
+        process.stderr.write(`\r  ${C.green}[ok]${C.reset} Credentials verified (${mode} mode)${' '.repeat(20)}\n`);
+      } else {
+        const body = await res.json().catch(() => ({}));
+        process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${body.error_description || `HTTP ${res.status}`}${' '.repeat(20)}\n`);
+      }
+    } catch (e) {
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${e.message}${' '.repeat(20)}\n`);
+    }
+
+    writeEnvKey('PAYPAL_CLIENT_ID', clientId);
+    writeEnvKey('PAYPAL_CLIENT_SECRET', clientSecret);
+    writeEnvKey('PAYPAL_MODE', mode);
+    w(`  ${C.green}[ok]${C.reset} Credentials saved to .env\n`);
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko paypal products list${C.reset}      ${C.dim}# list products${C.reset}\n`);
+    w(`    ${C.cyan}jeriko paypal orders create${C.reset}      ${C.dim}# create an order${C.reset}\n`);
+    w(`    ${C.cyan}jeriko paypal invoices list${C.reset}      ${C.dim}# list invoices${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured', verified, mode });
+  }
+
+  // ===================== ORDERS =====================
+  if (resource === 'orders') {
+    if (action === 'create') {
+      const amount = flags.amount;
+      if (!amount) fail('Usage: jeriko paypal orders create --amount 50.00 --currency USD [--description "text"]');
+      const currency = flags.currency || 'USD';
+      const body = {
+        intent: 'CAPTURE',
+        purchase_units: [{
+          amount: {
+            currency_code: currency.toUpperCase(),
+            value: String(amount),
+          },
+        }],
+      };
+      if (flags.description) {
+        body.purchase_units[0].description = flags.description;
+      }
+      const data = await paypal('POST', '/v2/checkout/orders', body);
+      return ok({
+        id: data.id,
+        status: data.status,
+        amount: amount,
+        currency: currency.toUpperCase(),
+        links: data.links?.map(l => ({ rel: l.rel, href: l.href })),
+      });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal orders get --id ORDER_ID');
+      const data = await paypal('GET', `/v2/checkout/orders/${id}`);
+      return ok(data);
+    }
+    if (action === 'capture') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal orders capture --id ORDER_ID');
+      const data = await paypal('POST', `/v2/checkout/orders/${id}/capture`, {});
+      return ok({
+        id: data.id,
+        status: data.status,
+        payer: data.payer ? { email: data.payer.email_address, name: data.payer.name?.given_name } : null,
+      });
+    }
+    if (action === 'authorize') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal orders authorize --id ORDER_ID');
+      const data = await paypal('POST', `/v2/checkout/orders/${id}/authorize`, {});
+      return ok({
+        id: data.id,
+        status: data.status,
+      });
+    }
+    fail(`Unknown action: paypal orders ${action || ''}\nActions: create, get, capture, authorize`);
+  }
+
+  // ===================== PAYMENTS =====================
+  if (resource === 'payments') {
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal payments get --id CAPTURE_ID');
+      const data = await paypal('GET', `/v2/payments/captures/${id}`);
+      return ok(data);
+    }
+    if (action === 'refund') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal payments refund --id CAPTURE_ID [--amount 10.00]');
+      const body = {};
+      if (flags.amount) {
+        body.amount = {
+          value: String(flags.amount),
+          currency_code: (flags.currency || 'USD').toUpperCase(),
+        };
+      }
+      const data = await paypal('POST', `/v2/payments/captures/${id}/refund`, body);
+      return ok({
+        id: data.id,
+        status: data.status,
+        amount: data.amount,
+      });
+    }
+    fail(`Unknown action: paypal payments ${action || ''}\nActions: get, refund`);
+  }
+
+  // ===================== SUBSCRIPTIONS =====================
+  if (resource === 'subscriptions') {
+    if (action === 'list') {
+      const q = {};
+      if (flags.plan) q.plan_id = flags.plan;
+      if (flags.status) q.status = flags.status.toUpperCase();
+      // PayPal subscriptions list requires plan_id
+      if (!q.plan_id) fail('Usage: jeriko paypal subscriptions list --plan PLAN_ID [--status ACTIVE|SUSPENDED|CANCELLED]');
+      const data = await paypal('GET', '/v1/billing/subscriptions', null, q);
+      const subs = data.subscriptions || [];
+      return ok(subs.map(s => ({
+        id: s.id,
+        status: s.status,
+        plan_id: s.plan_id,
+        start_time: s.start_time,
+        subscriber: s.subscriber?.email_address,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal subscriptions get --id SUB_ID');
+      const data = await paypal('GET', `/v1/billing/subscriptions/${id}`);
+      return ok({
+        id: data.id,
+        status: data.status,
+        plan_id: data.plan_id,
+        start_time: data.start_time,
+        subscriber: data.subscriber,
+        billing_info: data.billing_info,
+      });
+    }
+    if (action === 'create') {
+      const planId = flags.plan || flags['plan-id'];
+      if (!planId) fail('Usage: jeriko paypal subscriptions create --plan PLAN_ID');
+      const body = { plan_id: planId };
+      if (flags.email) {
+        body.subscriber = { email_address: flags.email };
+      }
+      const data = await paypal('POST', '/v1/billing/subscriptions', body);
+      return ok({
+        id: data.id,
+        status: data.status,
+        links: data.links?.map(l => ({ rel: l.rel, href: l.href })),
+      });
+    }
+    if (action === 'cancel') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal subscriptions cancel --id SUB_ID [--reason "text"]');
+      await paypal('POST', `/v1/billing/subscriptions/${id}/cancel`, {
+        reason: flags.reason || 'Cancelled via Jeriko CLI',
+      });
+      return ok({ id, status: 'CANCELLED' });
+    }
+    if (action === 'suspend') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal subscriptions suspend --id SUB_ID [--reason "text"]');
+      await paypal('POST', `/v1/billing/subscriptions/${id}/suspend`, {
+        reason: flags.reason || 'Suspended via Jeriko CLI',
+      });
+      return ok({ id, status: 'SUSPENDED' });
+    }
+    if (action === 'activate') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal subscriptions activate --id SUB_ID');
+      await paypal('POST', `/v1/billing/subscriptions/${id}/activate`, {
+        reason: flags.reason || 'Reactivated via Jeriko CLI',
+      });
+      return ok({ id, status: 'ACTIVE' });
+    }
+    fail(`Unknown action: paypal subscriptions ${action || ''}\nActions: list, get, create, cancel, suspend, activate`);
+  }
+
+  // ===================== PLANS =====================
+  if (resource === 'plans') {
+    if (action === 'list' || !action) {
+      const q = { page_size: flags.limit || '10' };
+      if (flags.product) q.product_id = flags.product;
+      const data = await paypal('GET', '/v1/billing/plans', null, q);
+      const plans = data.plans || [];
+      return ok(plans.map(p => ({
+        id: p.id,
+        name: p.name,
+        status: p.status,
+        product_id: p.product_id,
+        description: p.description,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal plans get --id PLAN_ID');
+      const data = await paypal('GET', `/v1/billing/plans/${id}`);
+      return ok(data);
+    }
+    if (action === 'create') {
+      const productId = flags.product || flags['product-id'];
+      const name = flags.name;
+      const amount = flags.amount;
+      const interval = flags.interval;
+      if (!productId || !name || !amount || !interval) {
+        fail('Usage: jeriko paypal plans create --product PROD_ID --name "Monthly" --amount 9.99 --interval MONTH');
+      }
+      const body = {
+        product_id: productId,
+        name,
+        billing_cycles: [{
+          frequency: {
+            interval_unit: interval.toUpperCase(),
+            interval_count: 1,
+          },
+          tenure_type: 'REGULAR',
+          sequence: 1,
+          total_cycles: 0,
+          pricing_scheme: {
+            fixed_price: {
+              value: String(amount),
+              currency_code: (flags.currency || 'USD').toUpperCase(),
+            },
+          },
+        }],
+        payment_preferences: {
+          auto_bill_outstanding: true,
+          payment_failure_threshold: 3,
+        },
+      };
+      if (flags.description) body.description = flags.description;
+      const data = await paypal('POST', '/v1/billing/plans', body);
+      return ok({
+        id: data.id,
+        name: data.name,
+        status: data.status,
+        product_id: data.product_id,
+      });
+    }
+    fail(`Unknown action: paypal plans ${action || ''}\nActions: list, get, create`);
+  }
+
+  // ===================== PRODUCTS =====================
+  if (resource === 'products') {
+    if (action === 'list' || !action) {
+      const q = { page_size: flags.limit || '10' };
+      const data = await paypal('GET', '/v1/catalogs/products', null, q);
+      const products = data.products || [];
+      return ok(products.map(p => ({
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        description: p.description,
+        create_time: p.create_time,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal products get --id PROD_ID');
+      const data = await paypal('GET', `/v1/catalogs/products/${id}`);
+      return ok(data);
+    }
+    if (action === 'create') {
+      if (!flags.name) fail('Usage: jeriko paypal products create --name "My Product" [--type SERVICE|PHYSICAL|DIGITAL] [--description "text"]');
+      const body = {
+        name: flags.name,
+        type: (flags.type || 'SERVICE').toUpperCase(),
+      };
+      if (flags.description) body.description = flags.description;
+      if (flags.category) body.category = flags.category;
+      const data = await paypal('POST', '/v1/catalogs/products', body);
+      return ok({
+        id: data.id,
+        name: data.name,
+        type: data.type,
+        create_time: data.create_time,
+      });
+    }
+    fail(`Unknown action: paypal products ${action || ''}\nActions: list, get, create`);
+  }
+
+  // ===================== INVOICES =====================
+  if (resource === 'invoices') {
+    if (action === 'list' || !action) {
+      const q = { page_size: flags.limit || '10' };
+      if (flags.status) q.status = flags.status.toUpperCase();
+      // PayPal invoices list uses POST with search
+      const body = {
+        total_required: true,
+      };
+      if (flags.status) {
+        body.status = [flags.status.toUpperCase()];
+      }
+      const data = await paypal('POST', '/v2/invoicing/search-invoices', body, { page_size: flags.limit || 10, page: 1 });
+      const invoices = data.items || [];
+      return ok(invoices.map(inv => ({
+        id: inv.id,
+        status: inv.status,
+        amount: inv.amount?.value,
+        currency: inv.amount?.currency_code,
+        recipient: inv.primary_recipients?.[0]?.billing_info?.email_address,
+        invoice_date: inv.detail?.invoice_date,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal invoices get --id INV_ID');
+      const data = await paypal('GET', `/v2/invoicing/invoices/${id}`);
+      return ok(data);
+    }
+    if (action === 'create') {
+      const recipient = flags.recipient || flags.email;
+      const amount = flags.amount;
+      if (!recipient || !amount) fail('Usage: jeriko paypal invoices create --recipient "email@example.com" --amount 100.00 [--description "text"]');
+      const body = {
+        detail: {
+          currency_code: (flags.currency || 'USD').toUpperCase(),
+        },
+        primary_recipients: [{
+          billing_info: {
+            email_address: recipient,
+          },
+        }],
+        items: [{
+          name: flags.description || 'Service',
+          quantity: '1',
+          unit_amount: {
+            currency_code: (flags.currency || 'USD').toUpperCase(),
+            value: String(amount),
+          },
+        }],
+      };
+      if (flags.note) body.detail.note = flags.note;
+      const data = await paypal('POST', '/v2/invoicing/invoices', body);
+      return ok({
+        id: data.id,
+        status: data.status,
+        href: data.href,
+        links: data.links?.map(l => ({ rel: l.rel, href: l.href })),
+      });
+    }
+    if (action === 'send') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal invoices send --id INV_ID');
+      await paypal('POST', `/v2/invoicing/invoices/${id}/send`, {
+        send_to_recipient: true,
+      });
+      return ok({ id, status: 'SENT' });
+    }
+    if (action === 'cancel') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal invoices cancel --id INV_ID');
+      await paypal('POST', `/v2/invoicing/invoices/${id}/cancel`, {
+        send_to_recipient: true,
+        subject: 'Invoice cancelled',
+        note: flags.reason || 'Cancelled via Jeriko CLI',
+      });
+      return ok({ id, status: 'CANCELLED' });
+    }
+    if (action === 'remind') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal invoices remind --id INV_ID');
+      await paypal('POST', `/v2/invoicing/invoices/${id}/remind`, {
+        send_to_recipient: true,
+        subject: 'Payment reminder',
+        note: flags.note || 'Friendly reminder: your invoice is due.',
+      });
+      return ok({ id, reminded: true });
+    }
+    fail(`Unknown action: paypal invoices ${action || ''}\nActions: list, get, create, send, cancel, remind`);
+  }
+
+  // ===================== PAYOUTS =====================
+  if (resource === 'payouts') {
+    if (action === 'create') {
+      const email = flags.email;
+      const amount = flags.amount;
+      if (!email || !amount) fail('Usage: jeriko paypal payouts create --email "user@example.com" --amount 25.00 [--currency USD]');
+      const body = {
+        sender_batch_header: {
+          sender_batch_id: `jeriko_${Date.now()}`,
+          email_subject: flags.subject || 'You have a payout!',
+          email_message: flags.message || 'You received a payout via Jeriko.',
+        },
+        items: [{
+          recipient_type: 'EMAIL',
+          amount: {
+            value: String(amount),
+            currency: (flags.currency || 'USD').toUpperCase(),
+          },
+          receiver: email,
+          note: flags.note || 'Payout via Jeriko CLI',
+        }],
+      };
+      const data = await paypal('POST', '/v1/payments/payouts', body);
+      return ok({
+        batch_id: data.batch_header?.payout_batch_id,
+        status: data.batch_header?.batch_status,
+        links: data.links?.map(l => ({ rel: l.rel, href: l.href })),
+      });
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal payouts get --id BATCH_ID');
+      const data = await paypal('GET', `/v1/payments/payouts/${id}`);
+      return ok({
+        batch_id: data.batch_header?.payout_batch_id,
+        status: data.batch_header?.batch_status,
+        amount: data.batch_header?.amount,
+        fees: data.batch_header?.fees,
+        items: data.items?.map(i => ({
+          payout_item_id: i.payout_item_id,
+          status: i.transaction_status,
+          amount: i.payout_item?.amount,
+          receiver: i.payout_item?.receiver,
+        })),
+      });
+    }
+    fail(`Unknown action: paypal payouts ${action || ''}\nActions: create, get`);
+  }
+
+  // ===================== DISPUTES =====================
+  if (resource === 'disputes') {
+    if (action === 'list' || !action) {
+      const q = {};
+      if (flags.status) q.dispute_state = flags.status.toUpperCase();
+      if (flags.limit) q.page_size = flags.limit;
+      const data = await paypal('GET', '/v1/customer/disputes', null, q);
+      const disputes = data.items || [];
+      return ok(disputes.map(d => ({
+        id: d.dispute_id,
+        status: d.status,
+        reason: d.reason,
+        amount: d.dispute_amount,
+        create_time: d.create_time,
+        update_time: d.update_time,
+      })));
+    }
+    if (action === 'get') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal disputes get --id DISPUTE_ID');
+      const data = await paypal('GET', `/v1/customer/disputes/${id}`);
+      return ok(data);
+    }
+    fail(`Unknown action: paypal disputes ${action || ''}\nActions: list, get`);
+  }
+
+  // ===================== WEBHOOKS =====================
+  if (resource === 'webhooks') {
+    if (action === 'list' || !action) {
+      const data = await paypal('GET', '/v1/notifications/webhooks');
+      const webhooks = data.webhooks || [];
+      return ok(webhooks.map(w => ({
+        id: w.id,
+        url: w.url,
+        event_types: w.event_types?.map(e => e.name),
+      })));
+    }
+    if (action === 'create') {
+      if (!flags.url) fail('Usage: jeriko paypal webhooks create --url "https://example.com/hook" --events "PAYMENT.CAPTURE.COMPLETED,BILLING.SUBSCRIPTION.CANCELLED"');
+      const events = flags.events ? flags.events.split(',').map(e => ({ name: e.trim() })) : [{ name: '*' }];
+      const body = {
+        url: flags.url,
+        event_types: events,
+      };
+      const data = await paypal('POST', '/v1/notifications/webhooks', body);
+      return ok({
+        id: data.id,
+        url: data.url,
+        event_types: data.event_types?.map(e => e.name),
+      });
+    }
+    if (action === 'delete') {
+      const id = flags.id || positional[0];
+      if (!id) fail('Usage: jeriko paypal webhooks delete --id WEBHOOK_ID');
+      await paypal('DELETE', `/v1/notifications/webhooks/${id}`);
+      return ok({ id, deleted: true });
+    }
+    fail(`Unknown action: paypal webhooks ${action || ''}\nActions: list, create, delete`);
+  }
+
+  fail(`Unknown command: paypal ${resource} ${action || ''}\nRun "jeriko paypal" for usage.`);
+});

@@ -105,12 +105,15 @@ function logSession(command, result) {
   }
 }
 
-async function route(text, onChunk, onStatus) {
+// history (optional): an array of prior messages for multi-turn conversation.
+// When passed, backends append to it in-place so the caller retains full history.
+// Telegram/WhatsApp omit history (stateless). jeriko-chat passes it (stateful).
+async function route(text, onChunk, onStatus, history) {
   const { target, command } = parseCommand(text);
 
   let result;
   if (target === 'local') {
-    result = await executeLocal(command, onChunk, onStatus);
+    result = await executeLocal(command, onChunk, onStatus, history);
   } else if (!getWs().isNodeConnected(target)) {
     throw new Error(`Node "${target}" is not connected. Use /nodes to see available machines.`);
   } else {
@@ -122,10 +125,10 @@ async function route(text, onChunk, onStatus) {
   return result;
 }
 
-async function executeLocal(command, onChunk, onStatus) {
-  if (AI_BACKEND === 'local') return executeLocalModel(command, onChunk, onStatus);
-  if (AI_BACKEND === 'openai') return executeOpenAI(command, onChunk, onStatus);
-  if (AI_BACKEND === 'claude') return executeClaude(command, onChunk, onStatus);
+async function executeLocal(command, onChunk, onStatus, history) {
+  if (AI_BACKEND === 'local') return executeLocalModel(command, onChunk, onStatus, history);
+  if (AI_BACKEND === 'openai') return executeOpenAI(command, onChunk, onStatus, history);
+  if (AI_BACKEND === 'claude') return executeClaude(command, onChunk, onStatus, history);
   return executeClaudeCode(command, onChunk, onStatus);
 }
 
@@ -214,14 +217,15 @@ const CLAUDE_BASH_TOOL = {
   },
 };
 
-async function executeClaude(command, onChunk, onStatus) {
+async function executeClaude(command, onChunk, onStatus, history) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set in .env');
 
   const model = process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
-  const messages = [
-    { role: 'user', content: command },
-  ];
+
+  // Use conversation history if provided (multi-turn chat), otherwise start fresh
+  const messages = history ? [...history] : [];
+  messages.push({ role: 'user', content: command });
 
   if (onStatus) onStatus({ type: 'thinking' });
 
@@ -263,11 +267,17 @@ async function executeClaude(command, onChunk, onStatus) {
 
     // If no tool calls, we're done — stream final text
     if (data.stop_reason !== 'tool_use' || toolCalls.length === 0) {
+      const finalText = textParts.join('') || '(no output)';
       if (textParts.length > 0) {
         if (onStatus) onStatus({ type: 'responding' });
-        if (onChunk) onChunk(textParts.join(''));
+        if (onChunk) onChunk(finalText);
       }
-      return textParts.join('') || '(no output)';
+      // Sync conversation history back to caller for multi-turn
+      if (history) {
+        history.length = 0;
+        for (const m of messages) history.push(m);
+      }
+      return finalText;
     }
 
     // Text alongside tool calls = reasoning/thinking text
@@ -295,6 +305,11 @@ async function executeClaude(command, onChunk, onStatus) {
     messages.push({ role: 'user', content: toolResults });
   }
 
+  // Sync history even on max turns
+  if (history) {
+    history.length = 0;
+    for (const m of messages) history.push(m);
+  }
   return '(max tool call turns reached)';
 }
 
@@ -338,15 +353,19 @@ function runBash(command) {
   }
 }
 
-async function executeOpenAI(command, onChunk, onStatus) {
+async function executeOpenAI(command, onChunk, onStatus, history) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not set in .env');
 
   const model = process.env.OPENAI_MODEL || 'gpt-4o';
-  const messages = [
-    { role: 'system', content: getSystemPrompt() },
-    { role: 'user', content: command },
-  ];
+
+  // Use conversation history if provided (multi-turn chat), otherwise start fresh
+  // OpenAI format: system message first, then conversation
+  const messages = [{ role: 'system', content: getSystemPrompt() }];
+  if (history) {
+    for (const m of history) messages.push(m);
+  }
+  messages.push({ role: 'user', content: command });
 
   if (onStatus) onStatus({ type: 'thinking' });
 
@@ -384,6 +403,11 @@ async function executeOpenAI(command, onChunk, onStatus) {
       const text = msg.content || '(no output)';
       if (onStatus) onStatus({ type: 'responding' });
       if (onChunk) onChunk(text);
+      // Sync conversation history (skip system message at index 0)
+      if (history) {
+        history.length = 0;
+        for (let i = 1; i < messages.length; i++) history.push(messages[i]);
+      }
       return text;
     }
 
@@ -414,12 +438,16 @@ async function executeOpenAI(command, onChunk, onStatus) {
     if (onStatus) onStatus({ type: 'thinking' });
   }
 
+  if (history) {
+    history.length = 0;
+    for (let i = 1; i < messages.length; i++) history.push(messages[i]);
+  }
   return '(max tool call turns reached)';
 }
 
 // ========== LOCAL MODEL BACKEND (Ollama / LM Studio / any OpenAI-compatible) ==========
 
-async function executeLocalModel(command, onChunk, onStatus) {
+async function executeLocalModel(command, onChunk, onStatus, history) {
   // Verify the local server is reachable
   try {
     const ping = await fetch(`${LOCAL_MODEL_URL}/models`, { signal: AbortSignal.timeout(3000) });
@@ -428,10 +456,12 @@ async function executeLocalModel(command, onChunk, onStatus) {
     throw new Error(`Local model server not reachable at ${LOCAL_MODEL_URL}. Is Ollama running? Start with: ollama serve`);
   }
 
-  const messages = [
-    { role: 'system', content: getSystemPrompt() },
-    { role: 'user', content: command },
-  ];
+  // Use conversation history if provided (multi-turn chat), otherwise start fresh
+  const messages = [{ role: 'system', content: getSystemPrompt() }];
+  if (history) {
+    for (const m of history) messages.push(m);
+  }
+  messages.push({ role: 'user', content: command });
 
   if (onStatus) onStatus({ type: 'thinking' });
 
@@ -473,6 +503,11 @@ async function executeLocalModel(command, onChunk, onStatus) {
       const text = msg.content || '(no output)';
       if (onStatus) onStatus({ type: 'responding' });
       if (onChunk) onChunk(text);
+      // Sync conversation history (skip system message at index 0)
+      if (history) {
+        history.length = 0;
+        for (let i = 1; i < messages.length; i++) history.push(messages[i]);
+      }
       return text;
     }
 
@@ -503,6 +538,10 @@ async function executeLocalModel(command, onChunk, onStatus) {
     if (onStatus) onStatus({ type: 'thinking' });
   }
 
+  if (history) {
+    history.length = 0;
+    for (let i = 1; i < messages.length; i++) history.push(messages[i]);
+  }
   return '(max tool call turns reached)';
 }
 

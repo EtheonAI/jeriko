@@ -1182,6 +1182,135 @@ jeriko stripe webhooks create --url https://example.com/hook --events "payment_i
 
 ---
 
+### jeriko paypal
+
+Full PayPal integration via REST API (OAuth2 client credentials). Manage orders, payments, subscriptions, plans, products, invoices, payouts, disputes, and webhooks.
+
+**Platform:** All
+
+**Required env vars:** `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MODE` (set by `jeriko paypal init`)
+
+#### Setup
+
+```bash
+jeriko paypal init                                    # interactive setup wizard
+jeriko paypal init --client-id xxx --secret xxx       # non-interactive (sandbox)
+jeriko paypal init --client-id xxx --secret xxx --live  # non-interactive (live)
+```
+
+#### Orders
+
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `orders create` | subcommand | - | Create a checkout order |
+| `--amount` | number | - | Order amount (e.g., 50.00) |
+| `--currency` | string | `USD` | Currency code |
+| `--description` | string | - | Order description |
+| `orders get` | subcommand | - | Get order details |
+| `--id` | string | - | Order ID |
+| `orders capture` | subcommand | - | Capture an approved order |
+| `orders authorize` | subcommand | - | Authorize an approved order |
+
+```bash
+jeriko paypal orders create --amount 50.00 --currency USD --description "Widget"
+jeriko paypal orders get --id ORDER_ID
+jeriko paypal orders capture --id ORDER_ID
+jeriko paypal orders authorize --id ORDER_ID
+```
+
+#### Payments
+
+```bash
+jeriko paypal payments get --id CAPTURE_ID
+jeriko paypal payments refund --id CAPTURE_ID [--amount 10.00] [--currency USD]
+```
+
+#### Subscriptions
+
+```bash
+jeriko paypal subscriptions list --plan PLAN_ID [--status ACTIVE|SUSPENDED|CANCELLED]
+jeriko paypal subscriptions get --id SUB_ID
+jeriko paypal subscriptions create --plan PLAN_ID [--email subscriber@example.com]
+jeriko paypal subscriptions cancel --id SUB_ID [--reason "text"]
+jeriko paypal subscriptions suspend --id SUB_ID [--reason "text"]
+jeriko paypal subscriptions activate --id SUB_ID
+```
+
+#### Plans
+
+```bash
+jeriko paypal plans list [--limit 10] [--product PROD_ID]
+jeriko paypal plans get --id PLAN_ID
+jeriko paypal plans create --product PROD_ID --name "Monthly" --amount 9.99 --interval MONTH [--currency USD]
+```
+
+#### Products
+
+```bash
+jeriko paypal products list [--limit 10]
+jeriko paypal products get --id PROD_ID
+jeriko paypal products create --name "My Product" [--type SERVICE|PHYSICAL|DIGITAL] [--description "text"]
+```
+
+#### Invoices
+
+```bash
+jeriko paypal invoices list [--limit 10] [--status DRAFT|SENT|PAID|CANCELLED]
+jeriko paypal invoices get --id INV_ID
+jeriko paypal invoices create --recipient "email@example.com" --amount 100.00 [--description "text"] [--currency USD]
+jeriko paypal invoices send --id INV_ID
+jeriko paypal invoices cancel --id INV_ID [--reason "text"]
+jeriko paypal invoices remind --id INV_ID [--note "text"]
+```
+
+#### Payouts
+
+```bash
+jeriko paypal payouts create --email "user@example.com" --amount 25.00 [--currency USD]
+jeriko paypal payouts get --id BATCH_ID
+```
+
+#### Disputes
+
+```bash
+jeriko paypal disputes list [--status OPEN|WAITING|RESOLVED] [--limit 10]
+jeriko paypal disputes get --id DISPUTE_ID
+```
+
+#### Webhooks
+
+```bash
+jeriko paypal webhooks list
+jeriko paypal webhooks create --url "https://example.com/hook" --events "PAYMENT.CAPTURE.COMPLETED,BILLING.SUBSCRIPTION.CANCELLED"
+jeriko paypal webhooks delete --id WEBHOOK_ID
+```
+
+**Output (JSON) -- orders create:**
+```json
+{
+  "ok": true,
+  "data": {
+    "id": "ORDER_ID",
+    "status": "CREATED",
+    "amount": "50.00",
+    "currency": "USD",
+    "links": [{"rel": "approve", "href": "https://..."}]
+  }
+}
+```
+
+**Output (JSON) -- products list:**
+```json
+{
+  "ok": true,
+  "data": [
+    { "id": "PROD-xxx", "name": "My Product", "type": "SERVICE", "create_time": "2026-02-24T..." }
+  ]
+}
+```
+
+---
+
 ### jeriko stripe-hook
 
 Stripe webhook event formatter. Reads a `TRIGGER_EVENT` environment variable containing a Stripe webhook payload, formats it into a human-readable message, and sends it via `jeriko notify`. This is an internal command used by the trigger system, not typically invoked directly.
@@ -1894,7 +2023,8 @@ The local backend uses the OpenAI-compatible `/v1/chat/completions` endpoint wit
 | 24 | `jeriko location` | Location | All | IP-based geolocation |
 | 25 | `jeriko stripe` | Payments & APIs | All | Stripe payments integration |
 | 26 | `jeriko stripe-hook` | Payments & APIs | All | Stripe webhook event formatter |
-| 27 | `jeriko x` | Payments & APIs | All | X.com (Twitter) integration |
+| 27 | `jeriko paypal` | Payments & APIs | All | PayPal orders, subscriptions, invoices, payouts |
+| 28 | `jeriko x` | Payments & APIs | All | X.com (Twitter) integration |
 | 28 | `jeriko twilio` | Payments & APIs | All | Twilio Voice + SMS/MMS |
 | 29 | `jeriko server` | Server | All | Server lifecycle management |
 | 30 | `jeriko chat` | Server | All | Interactive AI chat REPL |

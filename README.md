@@ -105,6 +105,7 @@ jeriko github init     # GitHub API
 jeriko vercel init     # Vercel deployments
 jeriko gdrive init     # Google Drive
 jeriko onedrive init   # OneDrive
+jeriko paypal init     # PayPal payments
 ```
 
 See [docs/INSTALL.md](docs/INSTALL.md) for the full installation guide.
@@ -445,6 +446,17 @@ Projects are scaffolded to `~/.jeriko/projects/<name>/`. Editor auto-detection: 
 | `jeriko stripe events list` | Event history |
 | `jeriko stripe webhooks list` / `create` / `delete` | Webhook endpoints |
 | `jeriko stripe hook` | Format webhook event and notify (used by triggers) |
+| `jeriko paypal init` | Interactive PayPal setup (OAuth2 client credentials) |
+| `jeriko paypal orders create --amount 50.00 --currency USD` | Create order |
+| `jeriko paypal orders get --id ORDER_ID` / `capture` / `authorize` | Order operations |
+| `jeriko paypal payments get` / `refund` | Capture & refund management |
+| `jeriko paypal subscriptions list` / `create` / `cancel` / `suspend` / `activate` | Subscription management |
+| `jeriko paypal plans list` / `create` / `get` | Billing plans |
+| `jeriko paypal products list` / `create` / `get` | Product catalog |
+| `jeriko paypal invoices list` / `create` / `send` / `cancel` / `remind` | Invoice management |
+| `jeriko paypal payouts create --email "..." --amount 25.00` | Send payouts |
+| `jeriko paypal disputes list` / `get` | Dispute management |
+| `jeriko paypal webhooks list` / `create` / `delete` | Webhook endpoints |
 | `jeriko x init` | Interactive X.com setup |
 | `jeriko x auth` | OAuth 2.0 PKCE login |
 | `jeriko x post "Hello world"` | Create tweet |
@@ -1008,6 +1020,9 @@ All configuration is in `.env` at the project root. See `.env.example` for the t
 | `TWILIO_AUTH_TOKEN` | For Twilio | — | Twilio Auth Token |
 | `TWILIO_PHONE_NUMBER` | For Twilio | — | Twilio phone number |
 | `GITHUB_TOKEN` | For GitHub | — | GitHub Personal Access Token (`jeriko github init`) |
+| `PAYPAL_CLIENT_ID` | For PayPal | — | PayPal OAuth2 client ID (`jeriko paypal init`) |
+| `PAYPAL_CLIENT_SECRET` | For PayPal | — | PayPal OAuth2 client secret |
+| `PAYPAL_MODE` | For PayPal | `sandbox` | PayPal environment: `sandbox` or `live` |
 | `VERCEL_TOKEN` | For Vercel | — | Vercel API token (`jeriko vercel init`) |
 | `GOOGLE_DRIVE_CLIENT_ID` | For GDrive | — | Google OAuth2 client ID (`jeriko gdrive init`) |
 | `GOOGLE_DRIVE_CLIENT_SECRET` | For GDrive | — | Google OAuth2 client secret |
@@ -1393,6 +1408,7 @@ bin/
   jeriko-open          # open URLs, files, apps
   jeriko-stripe        # Stripe payments, customers, subscriptions, invoices, webhook hook
   jeriko-stripe-hook   # backward-compat shim → jeriko stripe hook
+  jeriko-paypal        # PayPal REST API — orders, subscriptions, invoices, payouts, disputes
   jeriko-x             # X.com (Twitter) — post, search, timeline, DMs, follows
   jeriko-twilio        # Twilio Voice + SMS/MMS — calls, messages, recordings
   jeriko-github        # GitHub REST API — repos, issues, PRs, actions, releases, gists
