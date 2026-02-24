@@ -232,10 +232,25 @@ Auto-discover installed commands and generate system prompts for any AI.
 
 ```bash
 jeriko discover                   # generate system prompt (JSON)
-jeriko discover --format raw      # raw text prompt (for piping to AI)
+jeriko discover --raw             # raw text prompt (for piping to AI)
 jeriko discover --list            # list available commands
 jeriko discover --json            # structured command metadata
 jeriko discover --name "MyBot"    # custom bot name in prompt
+```
+
+### jeriko prompt
+Generate the FULL system prompt for any LLM backend. Includes every command, flag,
+example, template, piping pattern, plugin doc, architecture, and runtime rule.
+This is what gets sent to Claude, OpenAI, Ollama, or any other model.
+
+```bash
+jeriko prompt                     # full system prompt (JSON with metadata)
+jeriko prompt --raw               # raw text prompt (pipe to any LLM)
+jeriko prompt --name "MyBot"      # custom bot name
+jeriko prompt --all-prompts       # include all trusted plugin PROMPT.md
+jeriko prompt --plugins weather   # include specific plugin prompts
+jeriko prompt --list              # list available commands
+jeriko prompt --json              # structured command metadata
 ```
 
 ### jeriko memory
@@ -250,6 +265,21 @@ jeriko memory --get "key"         # retrieve key-value
 jeriko memory --context           # get context block for system prompt
 jeriko memory --log --command "jeriko sys" --result '{"ok":true}'  # log entry
 jeriko memory --clear             # clear session log
+```
+
+### jeriko chat
+Interactive REPL for human-AI conversation. Launched automatically when `jeriko` is run with no arguments.
+Features: color-coded output, spinner with elapsed time, tool call visualization, slash commands.
+
+```bash
+jeriko                            # launch interactive chat (default)
+jeriko chat                       # same as above
+# Slash commands inside chat:
+#   /exit or /quit                # exit
+#   /clear                        # clear screen
+#   /help                         # show commands
+#   /commands                     # list all jeriko commands
+#   /memory                       # show recent memory
 ```
 
 ### jeriko window
@@ -379,6 +409,9 @@ jeriko stripe refunds create --charge ch_xxx [--amount 500]
 jeriko stripe events list [--type payment_intent.succeeded]
 jeriko stripe webhooks list
 jeriko stripe webhooks create --url https://example.com/hook --events "payment_intent.succeeded,invoice.paid"
+
+# Webhook Event Hook (used by trigger system)
+jeriko stripe hook                    # format TRIGGER_EVENT env var → notify
 ```
 
 ### jeriko x
@@ -658,6 +691,23 @@ jeriko email --send "to@email.com" --subject "Report" --attach report.pdf
 echo "email body" | jeriko email --send "to@email.com" --subject "Piped"
 ```
 
+### jeriko mail
+macOS Mail.app integration via AppleScript. No IMAP credentials needed — uses the local Mail app directly.
+
+```bash
+jeriko mail --unread                              # recent unread emails (default: 5)
+jeriko mail --unread --limit 10                   # more unread
+jeriko mail --search "invoice"                    # search by subject
+jeriko mail --search "invoice" --limit 3          # limited search
+jeriko mail --read <message-id>                   # read full email by ID
+jeriko mail --reply <message-id> --message "text" # reply to email
+echo "reply text" | jeriko mail --reply <id>      # reply via stdin
+jeriko mail --send "to@email.com" --subject "Hi" --message "Body"  # compose and send
+jeriko mail --check-for "query"                   # check for matching emails (used by triggers)
+```
+
+Platform: macOS only (uses AppleScript + Mail.app).
+
 ### jeriko github
 Full GitHub integration via REST API. Run `jeriko github init` to set up.
 
@@ -882,6 +932,27 @@ jeriko gdrive init                     # Google Drive
 jeriko onedrive init                   # OneDrive
 ```
 
+### jeriko create
+Scaffold projects from templates into `~/.jeriko/projects/`.
+
+```bash
+jeriko create --list                          # list available templates
+jeriko create --projects                      # list created projects
+jeriko create nextjs my-app                   # scaffold Next.js app
+jeriko create react portfolio-site            # scaffold React (Vite) app
+jeriko create expo mobile-app                 # scaffold Expo (React Native) app
+jeriko create express api-server              # scaffold Express.js API
+jeriko create flask ml-service                # scaffold Flask (Python) app
+jeriko create static landing-page             # scaffold static HTML/CSS/JS
+jeriko create --open my-app                   # open project in detected editor
+jeriko create nextjs my-app --cwd /tmp        # override target directory
+```
+
+Templates: `nextjs`, `react`, `expo`, `express`, `flask`, `static`
+
+Projects are created in `~/.jeriko/projects/<name>/` by default.
+After scaffolding, the response includes the detected editor and open command.
+
 ## Local Model Configuration
 
 JerikoBot can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
@@ -961,6 +1032,7 @@ bin/
   jeriko-notify    # telegram notifications
   jeriko-camera    # webcam photo/video
   jeriko-email     # IMAP email reader + SMTP sender
+  jeriko-mail      # macOS Mail.app integration (AppleScript)
   jeriko-notes     # Apple Notes
   jeriko-remind    # Apple Reminders
   jeriko-calendar  # Apple Calendar
@@ -971,13 +1043,16 @@ bin/
   jeriko-msg       # iMessage
   jeriko-location  # IP geolocation
   jeriko-discover  # auto-generate system prompts for AI
+  jeriko-prompt    # full system prompt for any LLM backend
   jeriko-memory    # session memory & key-value store
+  jeriko-chat      # interactive REPL (launched by `jeriko` with no args)
   jeriko-window    # window/app management (macOS)
   jeriko-proc      # process management
   jeriko-net       # network utilities (ping, dns, curl, download)
   jeriko-server    # server lifecycle (start/stop/restart)
   jeriko-open      # open URLs, files, apps
-  jeriko-stripe    # Stripe payments, customers, subscriptions, invoices
+  jeriko-stripe    # Stripe payments, customers, subscriptions, invoices, webhook hook
+  jeriko-stripe-hook # shim → delegates to jeriko stripe hook
   jeriko-x         # X.com (Twitter) — post, search, timeline, DMs, follows
   jeriko-twilio    # Twilio Voice + SMS/MMS — calls, messages, recordings, numbers
   jeriko-install   # plugin installer (npm + local, upgrade)

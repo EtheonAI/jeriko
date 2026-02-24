@@ -141,6 +141,7 @@ run(async () => {
         refunds: 'list, create, get',
         events: 'list, get',
         webhooks: 'list, create, delete',
+        hook: 'format webhook event → notify (used by triggers)',
         checkout: 'create',
         links: 'list, create, get, update',
       },
@@ -642,6 +643,63 @@ run(async () => {
       const data = await stripe('DELETE', `/webhook_endpoints/${id}`);
       return ok({ id: data.id, deleted: data.deleted });
     }
+  }
+
+  // ===================== WEBHOOK EVENT HOOK =====================
+  // Formats incoming Stripe webhook events into clean notifications.
+  // Used by trigger system: TRIGGER_EVENT env var → formatted message → jeriko notify
+  if (resource === 'hook') {
+    const raw = process.env.TRIGGER_EVENT || (action ? action : null);
+    if (!raw) fail('No webhook event. Set TRIGGER_EVENT env var or pass JSON as argument.');
+
+    let event;
+    try { event = JSON.parse(raw); } catch { fail('Invalid JSON in webhook event'); }
+
+    const body = event.body || event;
+    const type = body.type || 'unknown';
+    const obj = body.data?.object || {};
+
+    const titles = {
+      'customer.created': 'New Customer', 'customer.updated': 'Customer Updated', 'customer.deleted': 'Customer Deleted',
+      'product.created': 'New Product', 'product.updated': 'Product Updated', 'price.created': 'New Price',
+      'payment_intent.created': 'Payment Created', 'payment_intent.succeeded': 'Payment Succeeded', 'payment_intent.payment_failed': 'Payment Failed',
+      'charge.succeeded': 'Charge Succeeded', 'charge.failed': 'Charge Failed', 'charge.refunded': 'Charge Refunded',
+      'invoice.created': 'Invoice Created', 'invoice.paid': 'Invoice Paid', 'invoice.payment_failed': 'Invoice Payment Failed', 'invoice.sent': 'Invoice Sent',
+      'subscription.created': 'New Subscription', 'subscription.updated': 'Subscription Updated', 'subscription.deleted': 'Subscription Cancelled',
+      'payout.paid': 'Payout Sent', 'payout.failed': 'Payout Failed',
+    };
+
+    const title = titles[type] || type.replace(/[._]/g, ' ');
+    const lines = [`STRIPE: ${title.toUpperCase()}`, ''];
+
+    if (obj.amount !== undefined) {
+      lines.push(`Amount: $${(obj.amount / 100).toFixed(2)} ${(obj.currency || 'usd').toUpperCase()}`);
+    }
+    if (obj.name) lines.push(`Name: ${obj.name}`);
+    if (obj.email) lines.push(`Email: ${obj.email}`);
+    if (obj.customer && typeof obj.customer === 'string') lines.push(`Customer: ${obj.customer}`);
+    if (obj.status) lines.push(`Status: ${obj.status}`);
+    if (obj.description) lines.push(`Description: ${obj.description}`);
+    if (obj.hosted_invoice_url) lines.push(`Pay: ${obj.hosted_invoice_url}`);
+    if (obj.receipt_url) lines.push(`Receipt: ${obj.receipt_url}`);
+    lines.push('', `ID: ${obj.id || 'n/a'}`);
+
+    const message = lines.join('\n');
+
+    // --notify: also send to Telegram (default when called from triggers)
+    if (flags.notify !== false) {
+      try {
+        const JERIKO = `node ${path.join(__dirname, 'jeriko')}`;
+        require('child_process').execSync(`${JERIKO} notify`, {
+          input: message, encoding: 'utf-8', timeout: 10000,
+          stdio: ['pipe', 'inherit', 'inherit'],
+        });
+      } catch (e) {
+        // Notification failed but still return the formatted event
+      }
+    }
+
+    return ok({ type, title, message, id: obj.id || null });
   }
 
   // ===================== CHECKOUT SESSIONS =====================

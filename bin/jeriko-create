@@ -3,8 +3,14 @@ const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
 const { exec } = require('../tools/shell');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { execSync } = require('child_process');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
+const PROJECTS_DIR = path.join(os.homedir(), '.jeriko', 'projects');
+
+// Ensure projects dir exists
+if (!fs.existsSync(PROJECTS_DIR)) fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 
 function loadTemplates() {
   const files = fs.readdirSync(TEMPLATES_DIR).filter(f => f.endsWith('.json'));
@@ -12,6 +18,25 @@ function loadTemplates() {
     const data = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, f), 'utf-8'));
     return data;
   });
+}
+
+// Detect installed editor
+function detectEditor() {
+  const editors = [
+    { cmd: 'code', name: 'VS Code' },
+    { cmd: 'cursor', name: 'Cursor' },
+    { cmd: 'subl', name: 'Sublime Text' },
+    { cmd: 'webstorm', name: 'WebStorm' },
+    { cmd: 'zed', name: 'Zed' },
+    { cmd: 'vim', name: 'Vim' },
+  ];
+  for (const e of editors) {
+    try {
+      execSync(`command -v ${e.cmd}`, { stdio: 'ignore', timeout: 2000 });
+      return e;
+    } catch {}
+  }
+  return null;
 }
 
 run(async () => {
@@ -24,12 +49,42 @@ run(async () => {
     return;
   }
 
+  // List projects
+  if (flags.projects) {
+    if (!fs.existsSync(PROJECTS_DIR)) return ok([]);
+    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        const projectPath = path.join(PROJECTS_DIR, d.name);
+        const pkgPath = path.join(projectPath, 'package.json');
+        let description = '';
+        try {
+          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+          description = pkg.description || '';
+        } catch {}
+        return { name: d.name, path: projectPath, description };
+      });
+    return ok(dirs);
+  }
+
+  // Open project in editor
+  if (flags.open) {
+    const name = typeof flags.open === 'string' ? flags.open : positional[0];
+    if (!name) fail('Usage: jeriko create --open <project-name>');
+    const projectPath = path.join(PROJECTS_DIR, name);
+    if (!fs.existsSync(projectPath)) fail(`Project not found: ${projectPath}`, EXIT.NOT_FOUND);
+    const editor = detectEditor();
+    if (!editor) fail('No editor detected. Install VS Code: https://code.visualstudio.com/download');
+    execSync(`${editor.cmd} "${projectPath}"`, { timeout: 10000 });
+    return ok({ opened: name, editor: editor.name, path: projectPath });
+  }
+
   // Create from template
   const templateName = positional[0];
   const projectName = positional[1] || flags.name;
 
   if (!templateName) {
-    fail('Usage: jeriko create <template> <project-name>\n       jeriko create --list');
+    fail('Usage: jeriko create <template> <project-name> [--open]\n       jeriko create --list\n       jeriko create --projects\n       jeriko create --open <project>');
   }
 
   if (!projectName) {
@@ -50,18 +105,21 @@ run(async () => {
 
   const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
 
-  // Replace {{name}} placeholder
-  const command = template.command.replace(/\{\{name\}\}/g, projectName);
+  // Target: ~/.jeriko/projects/<name> (unless --cwd flag overrides)
+  const baseDir = flags.cwd || PROJECTS_DIR;
+  const targetDir = path.join(baseDir, projectName);
 
   // Check if directory already exists
-  const targetDir = path.resolve(projectName);
   if (fs.existsSync(targetDir)) {
     fail(`Directory already exists: ${targetDir}`);
   }
 
-  // Run scaffold command
+  // Replace {{name}} placeholder
+  const command = template.command.replace(/\{\{name\}\}/g, projectName);
+
+  // Run scaffold command in the projects directory
   const timeout = flags.timeout ? parseInt(flags.timeout) : 120000;
-  const result = await exec(command, { timeout, cwd: process.cwd() });
+  const result = await exec(command, { timeout, cwd: baseDir });
 
   if (result.code !== 0 && result.stderr && !result.stdout) {
     fail(`Scaffold failed: ${result.stderr.trim()}`);
@@ -70,13 +128,20 @@ run(async () => {
   // Run post-install if defined
   if (template.postInstall) {
     const postCmd = template.postInstall.replace(/\{\{name\}\}/g, projectName);
-    await exec(postCmd, { timeout, cwd: process.cwd() });
+    await exec(postCmd, { timeout, cwd: baseDir });
   }
 
-  ok({
+  // Detect editor
+  const editor = detectEditor();
+
+  const response = {
     template: template.name,
     project: projectName,
     path: targetDir,
     description: template.description,
-  });
+    editor: editor ? editor.name : null,
+    openCommand: editor ? `${editor.cmd} "${targetDir}"` : null,
+  };
+
+  ok(response);
 });

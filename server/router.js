@@ -16,20 +16,58 @@ const LOCAL_MODEL = process.env.LOCAL_MODEL || 'llama3.2';
 
 // Absolute path to jeriko CLI — avoids PATH issues in non-interactive shells
 const JERIKO = path.join(__dirname, '..', 'bin', 'jeriko');
+const os = require('os');
+const fs = require('fs');
 
-// Auto-discover system prompt from installed commands
+// Projects directory — where AI-built projects land
+const PROJECTS_DIR = path.join(os.homedir(), '.jeriko', 'projects');
+if (!fs.existsSync(PROJECTS_DIR)) fs.mkdirSync(PROJECTS_DIR, { recursive: true });
+
+// Detect installed editor (checked once on startup)
+function detectEditor() {
+  const editors = [
+    { cmd: 'code', name: 'VS Code', open: 'code' },
+    { cmd: 'cursor', name: 'Cursor', open: 'cursor' },
+    { cmd: 'subl', name: 'Sublime Text', open: 'subl' },
+    { cmd: 'webstorm', name: 'WebStorm', open: 'webstorm' },
+    { cmd: 'idea', name: 'IntelliJ IDEA', open: 'idea' },
+    { cmd: 'zed', name: 'Zed', open: 'zed' },
+    { cmd: 'atom', name: 'Atom', open: 'atom' },
+    { cmd: 'vim', name: 'Vim', open: 'vim' },
+    { cmd: 'nano', name: 'Nano', open: 'nano' },
+  ];
+  for (const e of editors) {
+    try {
+      execSync(`command -v ${e.cmd}`, { stdio: 'ignore', timeout: 2000 });
+      return e;
+    } catch { /* not found */ }
+  }
+  return null;
+}
+
+const EDITOR = detectEditor();
+
+// Load FULL system prompt via jeriko prompt (includes ALL commands, templates, piping, plugins, architecture)
 let BASE_PROMPT;
 try {
-  const raw = execSync(`node ${JERIKO} discover --raw`, { encoding: 'utf-8', timeout: 5000 });
+  const raw = execSync(`node ${JERIKO} prompt --raw`, { encoding: 'utf-8', timeout: 10000 });
   BASE_PROMPT = raw;
 } catch {
-  BASE_PROMPT = `You are JerikoBot. Run "node ${JERIKO} discover --list" to see available commands.`;
+  // Fallback to discover if prompt command not available
+  try {
+    const raw = execSync(`node ${JERIKO} discover --raw`, { encoding: 'utf-8', timeout: 5000 });
+    BASE_PROMPT = raw;
+  } catch {
+    BASE_PROMPT = `You are JerikoBot. Run "node ${JERIKO} prompt --list" to see available commands.`;
+  }
 }
 if (!process.env.JERIKO_CHAT_QUIET) {
-  console.log('[router] System prompt loaded via jeriko discover');
+  console.log(`[router] System prompt loaded via jeriko prompt (${BASE_PROMPT.split('\n').length} lines)`);
+  console.log(`[router] Projects dir: ${PROJECTS_DIR}`);
+  console.log(`[router] Editor: ${EDITOR ? EDITOR.name : 'none detected'}`);
 }
 
-// Build system prompt with session context injected
+// Build system prompt with session context (workspace + editor already in BASE_PROMPT)
 function getSystemPrompt() {
   let context = '';
   try {
@@ -37,7 +75,10 @@ function getSystemPrompt() {
   } catch {
     // No context available
   }
-  return context ? `${BASE_PROMPT}\n\n${context}` : BASE_PROMPT;
+
+  let prompt = BASE_PROMPT;
+  if (context) prompt += `\n\n${context}`;
+  return prompt;
 }
 
 // Kept for backward compat
@@ -106,30 +147,54 @@ function executeClaudeCode(command, onChunk, onStatus) {
     ], {
       env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 5 * 60 * 1000,
+      timeout: 10 * 60 * 1000, // 10 minutes for complex tasks
     });
 
     const chunks = [];
     let firstChunk = true;
+    let stderrLines = [];
+
+    // Heartbeat: report activity every 15s so Telegram shows progress
+    let lastActivity = Date.now();
+    const heartbeat = setInterval(() => {
+      if (onStatus) {
+        const elapsed = Math.round((Date.now() - lastActivity) / 1000);
+        onStatus({ type: 'thinking' });
+      }
+    }, 15000);
 
     proc.stdout.on('data', (data) => {
       const text = data.toString();
       chunks.push(text);
+      lastActivity = Date.now();
       if (firstChunk && onStatus) { onStatus({ type: 'responding' }); firstChunk = false; }
       if (onChunk) onChunk(text);
     });
 
     proc.stderr.on('data', (data) => {
-      chunks.push(data.toString());
+      const text = data.toString();
+      lastActivity = Date.now();
+      // Preserve stderr markers (SCREENSHOT:, FILE:) but don't mix diagnostics into output
+      for (const line of text.split('\n')) {
+        if (line.startsWith('SCREENSHOT:') || line.startsWith('FILE:')) {
+          stderrLines.push(line);
+        }
+      }
     });
 
     proc.on('close', (code) => {
-      const output = chunks.join('');
+      clearInterval(heartbeat);
+      let output = chunks.join('');
+      // Append file markers from stderr
+      if (stderrLines.length > 0) {
+        output = output + '\n' + stderrLines.join('\n');
+      }
       if (code !== 0 && !output) reject(new Error(`claude exited with code ${code}`));
       else resolve(output || '(no output)');
     });
 
     proc.on('error', (err) => {
+      clearInterval(heartbeat);
       reject(new Error(`Failed to run claude: ${err.message}`));
     });
   });

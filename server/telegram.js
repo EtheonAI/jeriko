@@ -16,7 +16,7 @@ function setup() {
     return null;
   }
 
-  bot = new Telegraf(token);
+  bot = new Telegraf(token, { handlerTimeout: 600_000 }); // 10 min — complex tasks (app building) need time
 
   // Catch Telegraf errors so they don't crash the process
   bot.catch((err, ctx) => {
@@ -230,50 +230,85 @@ function setup() {
     if (!text || text.startsWith('/')) return;
 
     const statusMsg = await ctx.reply('Processing...');
+    const chatId = ctx.chat.id;
+    const msgId = statusMsg.message_id;
 
-    try {
-      const result = await route(text);
+    // Run in background — don't let Telegraf's handler timeout kill long tasks
+    (async () => {
+      try {
+        // Track status for progress updates
+        let lastStatus = 'thinking';
+        let toolCallCount = 0;
+        let lastUpdate = Date.now();
+        const MIN_UPDATE_INTERVAL = 3000; // Don't spam edits
 
-      // Extract file/screenshot paths from Claude's output
-      const files = extractFiles(result);
-      const cleanText = result
-        .replace(/SCREENSHOT:\S+/g, '')
-        .replace(/FILE:\S+/g, '')
-        .trim();
+        const onStatus = async (status) => {
+          const now = Date.now();
+          if (now - lastUpdate < MIN_UPDATE_INTERVAL) return;
 
-      // Send any screenshots/files as photos or documents
-      for (const file of files) {
-        if (fs.existsSync(file.path)) {
-          if (file.type === 'photo') {
-            await ctx.replyWithPhoto({ source: fs.createReadStream(file.path) });
+          let statusText;
+          if (status.type === 'thinking') {
+            statusText = toolCallCount > 0
+              ? `Working... (${toolCallCount} command${toolCallCount > 1 ? 's' : ''} executed)`
+              : 'Thinking...';
+          } else if (status.type === 'tool_call') {
+            toolCallCount++;
+            const cmd = status.command?.slice(0, 60) || '';
+            statusText = `Running: ${cmd}${cmd.length >= 60 ? '...' : ''}\n(${toolCallCount} command${toolCallCount > 1 ? 's' : ''})`;
+          } else if (status.type === 'tool_result') {
+            statusText = `Working... (${toolCallCount} command${toolCallCount > 1 ? 's' : ''} executed)`;
+          } else if (status.type === 'responding') {
+            statusText = 'Finishing up...';
           } else {
-            await ctx.replyWithDocument({ source: fs.createReadStream(file.path) });
+            return;
+          }
+
+          if (statusText && statusText !== lastStatus) {
+            lastStatus = statusText;
+            lastUpdate = now;
+            try {
+              await ctx.telegram.editMessageText(chatId, msgId, undefined, statusText);
+            } catch { /* edit might fail if message unchanged */ }
+          }
+        };
+
+        const result = await route(text, null, onStatus);
+
+        // Extract file/screenshot paths from Claude's output
+        const files = extractFiles(result);
+        const cleanText = result
+          .replace(/SCREENSHOT:\S+/g, '')
+          .replace(/FILE:\S+/g, '')
+          .trim();
+
+        // Send any screenshots/files as photos or documents
+        for (const file of files) {
+          if (fs.existsSync(file.path)) {
+            try {
+              if (file.type === 'photo') {
+                await ctx.replyWithPhoto({ source: fs.createReadStream(file.path) });
+              } else {
+                await ctx.replyWithDocument({ source: fs.createReadStream(file.path) });
+              }
+            } catch { /* file send failed — continue */ }
           }
         }
-      }
 
-      // Send text response (edit the "Processing..." message)
-      const response = truncate(cleanText, 4000);
-      if (response) {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id, statusMsg.message_id, undefined,
-          response, { parse_mode: undefined }
-        );
-      } else if (files.length > 0) {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id, statusMsg.message_id, undefined, 'Done.'
-        );
-      } else {
-        await ctx.telegram.editMessageText(
-          ctx.chat.id, statusMsg.message_id, undefined, '(empty response)'
-        );
+        // Send text response (edit the "Processing..." message)
+        const response = truncate(cleanText, 4000);
+        if (response) {
+          await ctx.telegram.editMessageText(chatId, msgId, undefined, response, { parse_mode: undefined });
+        } else if (files.length > 0) {
+          await ctx.telegram.editMessageText(chatId, msgId, undefined, 'Done.');
+        } else {
+          await ctx.telegram.editMessageText(chatId, msgId, undefined, '(empty response)');
+        }
+      } catch (err) {
+        try {
+          await ctx.telegram.editMessageText(chatId, msgId, undefined, `Error: ${err.message}`);
+        } catch { /* edit might fail */ }
       }
-    } catch (err) {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, statusMsg.message_id, undefined,
-        `Error: ${err.message}`
-      );
-    }
+    })();
   });
 
   bot.launch();
