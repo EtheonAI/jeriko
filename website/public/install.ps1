@@ -2,26 +2,18 @@
 # iwr -useb https://jerikobot.vercel.app/install.ps1 | iex
 #
 # Parameters:
-#   -InstallMethod npm|git   (default: npm)
-#   -Version <version>       (default: latest)
-#   -GitDir <path>           git clone target (default: $HOME\.jerikobot)
-#   -NoOnboard               skip jeriko init
-#   -DryRun                  show what would happen
+#   -Dir <path>        install directory (default: $HOME\.jerikobot)
+#   -NoOnboard         skip jeriko init
+#   -DryRun            show what would happen
 
 param(
-    [ValidateSet("npm", "git")]
-    [string]$InstallMethod = "npm",
-
-    [string]$Version = "latest",
-
-    [string]$GitDir = "$env:USERPROFILE\.jerikobot",
-
+    [string]$Dir = "$env:USERPROFILE\.jerikobot",
     [switch]$NoOnboard,
-
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
+$DownloadUrl = "https://jerikobot.vercel.app/jerikobot.zip"
 
 # ── Helpers ─────────────────────────────────────────────────────────
 
@@ -81,7 +73,6 @@ if (Test-Command "node") {
         Write-Err "Node.js 18+ required (found v$nodeVer)"
         Write-Info "Installing Node.js..."
         Install-WithPackageManager -Package "Node.js" -WingetId "OpenJS.NodeJS.LTS" -ChocoName "nodejs-lts" -ScoopName "nodejs-lts"
-        # Refresh PATH
         $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
     }
     else {
@@ -91,112 +82,71 @@ if (Test-Command "node") {
 else {
     Write-Info "Node.js not found. Installing..."
     Install-WithPackageManager -Package "Node.js" -WingetId "OpenJS.NodeJS.LTS" -ChocoName "nodejs-lts" -ScoopName "nodejs-lts"
-    # Refresh PATH
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
     Write-Ok "Node.js installed"
 }
 
-# ── Step 2: Check git (for git method) ──────────────────────────────
+# ── Step 2: Download & extract ──────────────────────────────────────
 
-if ($InstallMethod -eq "git") {
-    if (-not (Test-Command "git")) {
-        Write-Info "git not found. Installing..."
-        Install-WithPackageManager -Package "Git" -WingetId "Git.Git" -ChocoName "git" -ScoopName "git"
-        $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
-    }
-    Write-Ok "git $(git --version 2>$null)"
-}
+Write-Info "Downloading JerikoBot..."
 
-# ── Step 3: Install ────────────────────────────────────────────────
-
-if ($InstallMethod -eq "npm") {
-    # ── npm global install ──
-    $pkg = if ($Version -eq "latest") { "jerikobot" } else { "jerikobot@$Version" }
-    Write-Info "Installing JerikoBot via npm..."
-
-    if ($DryRun) {
-        Write-Dry "npm install -g $pkg"
-    }
-    else {
-        npm install -g $pkg
-        Write-Ok "Installed $pkg globally"
-    }
-
-    # Ensure npm global bin is in user PATH
-    $npmPrefix = (npm config get prefix).Trim()
-    $npmBin = "$npmPrefix"  # On Windows, npm prefix IS the bin dir
-    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-
-    if ($currentUserPath -notlike "*$npmBin*") {
-        Write-Info "Adding npm global bin to user PATH..."
-        if (-not $DryRun) {
-            [Environment]::SetEnvironmentVariable("Path", "$currentUserPath;$npmBin", "User")
-            $env:Path = "$env:Path;$npmBin"
-        }
-        else {
-            Write-Dry "Add $npmBin to user PATH"
-        }
-    }
+if ($DryRun) {
+    Write-Dry "Download $DownloadUrl"
+    Write-Dry "Extract to $Dir"
+    Write-Dry "npm install --production"
 }
 else {
-    # ── git clone install ──
-    Write-Info "Installing JerikoBot via git clone..."
-
-    if ($DryRun) {
-        Write-Dry "git clone https://github.com/khaleel737/jerikobot.git $GitDir"
-        Write-Dry "npm install --production in $GitDir"
+    # Backup existing
+    if (Test-Path $Dir) {
+        $backup = "$Dir.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
+        Move-Item $Dir $backup
+        Write-Info "Backed up existing $Dir"
     }
-    else {
-        if (Test-Path "$GitDir\.git") {
-            Write-Info "Updating existing installation..."
-            Push-Location $GitDir
-            git pull --ff-only
-            Pop-Location
-            Write-Ok "Updated $GitDir"
-        }
-        else {
-            if (Test-Path $GitDir) {
-                $backup = "$GitDir.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-                Move-Item $GitDir $backup
-                Write-Info "Backed up existing $GitDir"
-            }
-            if ($Version -ne "latest") {
-                git clone --branch "v$Version" --depth 1 "https://github.com/khaleel737/jerikobot.git" $GitDir
-            }
-            else {
-                git clone --depth 1 "https://github.com/khaleel737/jerikobot.git" $GitDir
-            }
-            Write-Ok "Cloned to $GitDir"
-        }
 
-        Write-Info "Installing dependencies..."
-        Push-Location $GitDir
-        npm install --production 2>$null
-        Pop-Location
-        Write-Ok "Dependencies installed"
+    # Download zip
+    $tmpZip = "$env:TEMP\jerikobot-install.zip"
+    $tmpExtract = "$env:TEMP\jerikobot-extract"
 
-        # Create wrapper batch file in a PATH location
-        $wrapperDir = "$env:USERPROFILE\.local\bin"
-        if (-not (Test-Path $wrapperDir)) { New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null }
+    Invoke-WebRequest -Uri $DownloadUrl -OutFile $tmpZip -UseBasicParsing
+    Write-Ok "Downloaded"
 
-        $wrapperPath = "$wrapperDir\jeriko.cmd"
-        Set-Content -Path $wrapperPath -Value "@echo off`nnode `"$GitDir\bin\jeriko`" %*"
-        Write-Ok "Created wrapper: $wrapperPath"
+    # Extract
+    if (Test-Path $tmpExtract) { Remove-Item $tmpExtract -Recurse -Force }
+    Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
 
-        # Add to user PATH if needed
-        $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
-        if ($currentUserPath -notlike "*$wrapperDir*") {
-            [Environment]::SetEnvironmentVariable("Path", "$currentUserPath;$wrapperDir", "User")
-            $env:Path = "$env:Path;$wrapperDir"
-            Write-Info "Added $wrapperDir to user PATH"
-        }
+    # Move into place
+    Move-Item "$tmpExtract\jerikobot" $Dir
+    Remove-Item $tmpZip -Force
+    Remove-Item $tmpExtract -Recurse -Force
+    Write-Ok "Installed to $Dir"
+
+    # Install dependencies
+    Write-Info "Installing dependencies..."
+    Push-Location $Dir
+    npm install --production 2>$null
+    Pop-Location
+    Write-Ok "Dependencies installed"
+
+    # Create wrapper batch file so 'jeriko' works from any terminal
+    $wrapperDir = "$env:USERPROFILE\.local\bin"
+    if (-not (Test-Path $wrapperDir)) { New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null }
+
+    $wrapperPath = "$wrapperDir\jeriko.cmd"
+    Set-Content -Path $wrapperPath -Value "@echo off`nnode `"$Dir\bin\jeriko`" %*"
+    Write-Ok "Created wrapper: $wrapperPath"
+
+    # Add to user PATH if needed
+    $currentUserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    if ($currentUserPath -notlike "*$wrapperDir*") {
+        [Environment]::SetEnvironmentVariable("Path", "$currentUserPath;$wrapperDir", "User")
+        $env:Path = "$env:Path;$wrapperDir"
+        Write-Info "Added $wrapperDir to user PATH"
     }
 }
 
-# ── Step 4: Verify ─────────────────────────────────────────────────
+# ── Step 3: Verify ─────────────────────────────────────────────────
 
 if (-not $DryRun) {
-    # Refresh PATH one more time
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [Environment]::GetEnvironmentVariable("Path", "User")
 
     if (Test-Command "jeriko") {
@@ -207,7 +157,7 @@ if (-not $DryRun) {
     }
 }
 
-# ── Step 5: Onboarding ─────────────────────────────────────────────
+# ── Step 4: Onboarding ─────────────────────────────────────────────
 
 if ($NoOnboard) {
     Write-Host ""

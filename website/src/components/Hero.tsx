@@ -7,7 +7,6 @@ import TerminalDemo from "./TerminalDemo";
 const installTabs = [
   { label: "macOS / Linux", cmd: "curl -fsSL https://jerikobot.vercel.app/install.sh | bash" },
   { label: "Windows", cmd: "iwr -useb https://jerikobot.vercel.app/install.ps1 | iex" },
-  { label: "npm", cmd: "npm install -g jerikobot" },
 ];
 
 export default function Hero() {

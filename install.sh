@@ -5,18 +5,14 @@ set -e
 # curl -fsSL https://jerikobot.vercel.app/install.sh | bash
 #
 # Flags:
-#   --install-method npm|git   (default: npm)
-#   --version <version>        (default: latest)
-#   --no-onboard               skip jeriko init
-#   --git-dir <path>           git clone target (default: ~/.jerikobot)
-#   --dry-run                  show what would happen
-#   --verbose                  detailed output
+#   --dir <path>       install directory (default: ~/.jerikobot)
+#   --no-onboard       skip jeriko init
+#   --dry-run          show what would happen
+#   --verbose          detailed output
 
-REPO="https://github.com/khaleel737/jerikobot.git"
+DOWNLOAD_URL="https://jerikobot.vercel.app/jerikobot.tar.gz"
 INSTALL_DIR="$HOME/.jerikobot"
 BIN_NAME="jeriko"
-INSTALL_METHOD="npm"
-VERSION="latest"
 NO_ONBOARD=0
 DRY_RUN=0
 VERBOSE=0
@@ -43,25 +39,13 @@ dry()   { echo -e "  ${BLUE}[dry-run]${RESET} $1"; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --install-method)
-      INSTALL_METHOD="$2"
-      if [ "$INSTALL_METHOD" != "npm" ] && [ "$INSTALL_METHOD" != "git" ]; then
-        err "Invalid install method: $INSTALL_METHOD (use npm or git)"
-        exit 1
-      fi
-      shift 2
-      ;;
-    --version)
-      VERSION="$2"
+    --dir)
+      INSTALL_DIR="$2"
       shift 2
       ;;
     --no-onboard)
       NO_ONBOARD=1
       shift
-      ;;
-    --git-dir)
-      INSTALL_DIR="$2"
-      shift 2
       ;;
     --dry-run)
       DRY_RUN=1
@@ -75,13 +59,11 @@ while [ $# -gt 0 ]; do
       echo "Usage: install.sh [flags]"
       echo ""
       echo "Flags:"
-      echo "  --install-method npm|git   Install method (default: npm)"
-      echo "  --version <version>        Package version (default: latest)"
-      echo "  --no-onboard               Skip jeriko init after install"
-      echo "  --git-dir <path>           Git clone directory (default: ~/.jerikobot)"
-      echo "  --dry-run                  Show what would happen without doing it"
-      echo "  --verbose                  Detailed output"
-      echo "  --help                     Show this help"
+      echo "  --dir <path>       Install directory (default: ~/.jerikobot)"
+      echo "  --no-onboard       Skip jeriko init after install"
+      echo "  --dry-run          Show what would happen without doing it"
+      echo "  --verbose          Detailed output"
+      echo "  --help             Show this help"
       exit 0
       ;;
     *)
@@ -97,7 +79,7 @@ echo ""
 echo -e "  ${BOLD}${CYAN}JerikoBot Installer${RESET}"
 echo -e "  ${DIM}Unix-first AI toolkit${RESET}"
 echo ""
-debug "Method: $INSTALL_METHOD | Version: $VERSION | Dir: $INSTALL_DIR"
+debug "Dir: $INSTALL_DIR"
 
 # ── Detect OS ───────────────────────────────────────────────────────
 
@@ -125,7 +107,7 @@ if [ "$OS" = "unknown" ]; then
 fi
 
 if [ "$OS" = "windows" ]; then
-  warn "For native Windows, use install.ps1 or install.cmd instead"
+  warn "For native Windows, use install.ps1 instead"
   warn "Continuing with MSYS/Git Bash install..."
 fi
 
@@ -199,136 +181,81 @@ if [ "$install_nvm" = "1" ]; then
   fi
 fi
 
-# ── Step 2: Check git ──────────────────────────────────────────────
+# ── Step 2: Download & extract ──────────────────────────────────────
 
-if ! command -v git &>/dev/null; then
-  if [ "$INSTALL_METHOD" = "git" ]; then
-    install_pkg git
-    ok "git installed"
-  else
-    debug "git not found (not required for npm method)"
-  fi
+info "Downloading JerikoBot..."
+
+if [ "$DRY_RUN" = "1" ]; then
+  dry "curl -fsSL $DOWNLOAD_URL | tar xz -C tmpdir"
+  dry "Move to $INSTALL_DIR"
+  dry "npm install --production"
 else
-  ok "git $(git --version | cut -d' ' -f3)"
+  # Backup existing
+  if [ -d "$INSTALL_DIR" ]; then
+    mv "$INSTALL_DIR" "$INSTALL_DIR.bak.$(date +%s)"
+    info "Backed up existing $INSTALL_DIR"
+  fi
+
+  # Download and extract to temp dir
+  TMP_DIR=$(mktemp -d)
+  curl -fsSL "$DOWNLOAD_URL" | tar xz -C "$TMP_DIR"
+  ok "Downloaded"
+
+  # Move into place
+  mv "$TMP_DIR/jerikobot" "$INSTALL_DIR"
+  rm -rf "$TMP_DIR"
+  ok "Installed to $INSTALL_DIR"
+
+  # Install dependencies
+  info "Installing dependencies..."
+  cd "$INSTALL_DIR" && npm install --production --silent 2>/dev/null
+  ok "Dependencies installed"
+
+  # Make bin scripts executable
+  chmod +x "$INSTALL_DIR/bin/"* 2>/dev/null || true
+
+  # Symlink jeriko to PATH
+  JERIKO_BIN="$INSTALL_DIR/bin/$BIN_NAME"
+
+  LINK_DIR="/usr/local/bin"
+  if [ ! -w "$LINK_DIR" ] && ! sudo -n true 2>/dev/null; then
+    LINK_DIR="$HOME/.local/bin"
+    mkdir -p "$LINK_DIR"
+  fi
+
+  if [ "$LINK_DIR" = "/usr/local/bin" ] && [ ! -w "$LINK_DIR" ]; then
+    info "Creating symlink (requires sudo)..."
+    sudo ln -sf "$JERIKO_BIN" "$LINK_DIR/$BIN_NAME"
+  else
+    ln -sf "$JERIKO_BIN" "$LINK_DIR/$BIN_NAME"
+  fi
+
+  # Ensure ~/.local/bin is in PATH
+  if [ "$LINK_DIR" = "$HOME/.local/bin" ]; then
+    case ":$PATH:" in
+      *":$LINK_DIR:"*) ;;
+      *)
+        SHELL_RC=""
+        if [ -f "$HOME/.zshrc" ]; then
+          SHELL_RC="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ]; then
+          SHELL_RC="$HOME/.bashrc"
+        elif [ -f "$HOME/.profile" ]; then
+          SHELL_RC="$HOME/.profile"
+        fi
+        if [ -n "$SHELL_RC" ]; then
+          echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
+          info "Added ~/.local/bin to PATH in $(basename "$SHELL_RC")"
+        fi
+        export PATH="$LINK_DIR:$PATH"
+        ;;
+    esac
+  fi
+
+  ok "Linked: $BIN_NAME -> $JERIKO_BIN"
 fi
 
-# ── Step 3: Install ────────────────────────────────────────────────
-
-if [ "$INSTALL_METHOD" = "npm" ]; then
-  # ── npm install ──
-  info "Installing JerikoBot via npm..."
-
-  NPM_PKG="jerikobot"
-  if [ "$VERSION" != "latest" ]; then
-    NPM_PKG="jerikobot@$VERSION"
-  fi
-
-  if [ "$DRY_RUN" = "1" ]; then
-    dry "npm install -g $NPM_PKG"
-  else
-    npm install -g "$NPM_PKG"
-    ok "Installed jerikobot@$(jeriko --version 2>/dev/null || echo "$VERSION") globally"
-  fi
-
-  # Ensure npm global bin is in PATH
-  NPM_BIN="$(npm config get prefix)/bin"
-  case ":$PATH:" in
-    *":$NPM_BIN:"*) ;;
-    *)
-      debug "npm global bin ($NPM_BIN) not in PATH, adding..."
-      SHELL_RC=""
-      if [ -f "$HOME/.zshrc" ]; then
-        SHELL_RC="$HOME/.zshrc"
-      elif [ -f "$HOME/.bashrc" ]; then
-        SHELL_RC="$HOME/.bashrc"
-      elif [ -f "$HOME/.profile" ]; then
-        SHELL_RC="$HOME/.profile"
-      fi
-      if [ -n "$SHELL_RC" ] && ! grep -q "$NPM_BIN" "$SHELL_RC" 2>/dev/null; then
-        echo "export PATH=\"$NPM_BIN:\$PATH\"" >> "$SHELL_RC"
-        info "Added npm bin to PATH in $(basename "$SHELL_RC")"
-      fi
-      export PATH="$NPM_BIN:$PATH"
-      ;;
-  esac
-
-else
-  # ── git install ──
-  info "Installing JerikoBot via git clone..."
-
-  if [ "$DRY_RUN" = "1" ]; then
-    dry "git clone $REPO $INSTALL_DIR"
-    dry "cd $INSTALL_DIR && npm install --production"
-    dry "Symlink $INSTALL_DIR/bin/$BIN_NAME to PATH"
-  else
-    if [ -d "$INSTALL_DIR/.git" ]; then
-      info "Updating existing installation..."
-      cd "$INSTALL_DIR" && git pull --ff-only
-      ok "Updated $INSTALL_DIR"
-    else
-      if [ -d "$INSTALL_DIR" ]; then
-        mv "$INSTALL_DIR" "$INSTALL_DIR.bak.$(date +%s)"
-        info "Backed up existing $INSTALL_DIR"
-      fi
-      if [ "$VERSION" != "latest" ]; then
-        git clone --branch "v$VERSION" --depth 1 "$REPO" "$INSTALL_DIR"
-      else
-        git clone --depth 1 "$REPO" "$INSTALL_DIR"
-      fi
-      ok "Cloned to $INSTALL_DIR"
-    fi
-
-    info "Installing dependencies..."
-    cd "$INSTALL_DIR" && npm install --production --silent 2>/dev/null
-    ok "Dependencies installed"
-
-    # Symlink jeriko to PATH
-    JERIKO_BIN="$INSTALL_DIR/bin/$BIN_NAME"
-    chmod +x "$JERIKO_BIN"
-
-    # Make all bin/ scripts executable
-    chmod +x "$INSTALL_DIR"/bin/jeriko-* 2>/dev/null || true
-
-    LINK_DIR="/usr/local/bin"
-    if [ ! -w "$LINK_DIR" ] && ! sudo -n true 2>/dev/null; then
-      LINK_DIR="$HOME/.local/bin"
-      mkdir -p "$LINK_DIR"
-    fi
-
-    if [ "$LINK_DIR" = "/usr/local/bin" ] && [ ! -w "$LINK_DIR" ]; then
-      info "Creating symlink (requires sudo)..."
-      sudo ln -sf "$JERIKO_BIN" "$LINK_DIR/$BIN_NAME"
-    else
-      ln -sf "$JERIKO_BIN" "$LINK_DIR/$BIN_NAME"
-    fi
-
-    # Ensure ~/.local/bin is in PATH
-    if [ "$LINK_DIR" = "$HOME/.local/bin" ]; then
-      case ":$PATH:" in
-        *":$LINK_DIR:"*) ;;
-        *)
-          SHELL_RC=""
-          if [ -f "$HOME/.zshrc" ]; then
-            SHELL_RC="$HOME/.zshrc"
-          elif [ -f "$HOME/.bashrc" ]; then
-            SHELL_RC="$HOME/.bashrc"
-          elif [ -f "$HOME/.profile" ]; then
-            SHELL_RC="$HOME/.profile"
-          fi
-          if [ -n "$SHELL_RC" ]; then
-            echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$SHELL_RC"
-            info "Added ~/.local/bin to PATH in $(basename "$SHELL_RC")"
-          fi
-          export PATH="$LINK_DIR:$PATH"
-          ;;
-      esac
-    fi
-
-    ok "Linked: $BIN_NAME -> $JERIKO_BIN"
-  fi
-fi
-
-# ── Step 4: Verify ─────────────────────────────────────────────────
+# ── Step 3: Verify ─────────────────────────────────────────────────
 
 if [ "$DRY_RUN" = "0" ]; then
   if command -v jeriko &>/dev/null; then
@@ -345,7 +272,7 @@ if [ "$DRY_RUN" = "0" ]; then
   fi
 fi
 
-# ── Step 5: Onboarding ─────────────────────────────────────────────
+# ── Step 4: Onboarding ─────────────────────────────────────────────
 
 if [ "$NO_ONBOARD" = "1" ]; then
   echo ""
