@@ -1,0 +1,44 @@
+# Version control
+.git/
+.github/
+
+# Claude Code
+.claude/
+
+# Runtime artifacts
+screenshots/
+data/
+auth_info_baileys/
+
+# Website (separate deploy)
+website/
+
+# Test & build scripts
+scripts/
+
+# Compiled Go binaries (users build from source)
+runtime/parallel-engine*
+
+# Logs & env
+*.log
+.env
+
+# Docker
+Dockerfile
+docker-compose*.yml
+
+# Development
+.eslintrc*
+.prettierrc*
+*.test.js
+*.spec.js
+__tests__/
+coverage/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Business docs
+BUSINESS_PLAN.md
+ADR-*.md

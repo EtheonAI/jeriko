@@ -28,14 +28,29 @@ run(async () => {
   }
 
   if (flags.find) {
-    const dir = typeof flags.find === 'string' ? flags.find : target || '.';
-    const pattern = positional[flags.find === true ? 0 : 1] || flags.pattern || '*';
+    let dir, pattern;
+    if (typeof flags.find === 'string') {
+      dir = flags.find;
+      pattern = positional[0] || flags.pattern || '*';
+    } else {
+      dir = target || '.';
+      pattern = positional[1] || flags.pattern || '*';
+    }
     return ok(findFiles(dir, pattern));
   }
 
   if (flags.grep) {
-    const dir = typeof flags.grep === 'string' ? flags.grep : target || '.';
-    const pattern = positional.slice(flags.grep === true ? 0 : 1).join(' ') || flags.pattern;
+    // --grep <dir> <pattern> OR --grep --pattern <p>
+    // When --grep has a string value, dir comes from it and pattern is positional[0]
+    // When --grep is boolean, dir is positional[0] and pattern is positional[1+]
+    let dir, pattern;
+    if (typeof flags.grep === 'string') {
+      dir = flags.grep;
+      pattern = positional.join(' ') || flags.pattern;
+    } else {
+      dir = target || '.';
+      pattern = positional.slice(1).join(' ') || flags.pattern;
+    }
     if (!pattern) fail('Usage: jeriko fs --grep <dir> <pattern>', EXIT.GENERAL);
     return ok(searchFiles(dir, pattern, { glob: flags.glob }));
   }

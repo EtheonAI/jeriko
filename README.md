@@ -829,6 +829,7 @@ All comparisons use `crypto.timingSafeEqual`.
 - [Plugin Specification](docs/PLUGIN-SPEC.md)
 - [Multi-Machine Setup](docs/MULTI-MACHINE.md)
 - [Server API Reference](docs/API.md)
+- [Security Model](docs/SECURITY.md)
 - [Triggers](docs/TRIGGERS.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Build a Plugin](docs/PLUGINS.md)

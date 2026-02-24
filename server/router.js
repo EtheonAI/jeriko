@@ -252,14 +252,21 @@ const BASH_TOOL = {
 
 function runBash(command) {
   try {
-    const stdout = execSync(command, {
+    const result = require('child_process').spawnSync('bash', ['-c', command], {
       encoding: 'utf-8',
       timeout: 60000,
       maxBuffer: 1024 * 1024,
       env: process.env,
       cwd: path.join(__dirname, '..'),
     });
-    return stdout.slice(0, 10000);
+    let output = (result.stdout || '').trim();
+    // Preserve SCREENSHOT: and FILE: markers from stderr so telegram.js can extract them
+    const stderr = result.stderr || '';
+    const markers = stderr.split('\n').filter(l => l.startsWith('SCREENSHOT:') || l.startsWith('FILE:'));
+    if (markers.length > 0) {
+      output = output + '\n' + markers.join('\n');
+    }
+    return output.slice(0, 10000);
   } catch (e) {
     const out = (e.stdout || '') + '\n' + (e.stderr || '');
     return (out.trim() || e.message).slice(0, 10000);

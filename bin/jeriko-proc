@@ -64,16 +64,27 @@ run(async () => {
     return ok({ pid: child.pid, command: cmd, background: true });
   }
 
-  // --find <name>: find processes by name
+  // --find <name>: find processes by name (matches executable basename, not full path)
   if (flags.find) {
     const name = typeof flags.find === 'string' ? flags.find : positional[0];
     if (!name) fail('Usage: jeriko proc --find <name>');
+    const escaped = name.replace(/"/g, '\\"');
     try {
-      const raw = execSync(`pgrep -fl "${name.replace(/"/g, '\\"')}"`, { encoding: 'utf-8', timeout: 5000 });
-      const procs = raw.trim().split('\n').filter(Boolean).map(line => {
-        const [pid, ...rest] = line.trim().split(/\s+/);
-        return { pid: parseInt(pid), command: rest.join(' ') };
-      });
+      const raw = execSync('ps axo pid,user,pcpu,comm', { encoding: 'utf-8', timeout: 5000 });
+      const lower = escaped.toLowerCase();
+      const procs = raw.trim().split('\n').slice(1).filter(Boolean)
+        .map(line => {
+          const parts = line.trim().split(/\s+/);
+          const fullPath = parts.slice(3).join(' ').replace(/^"/, '').replace(/"$/, '');
+          const basename = fullPath.split('/').pop().toLowerCase();
+          return { pid: parseInt(parts[0]), user: parts[1], cpu: parts[2] + '%', command: fullPath, basename };
+        })
+        .filter(p => {
+          // Exact basename match, OR basename starts with the query (e.g. "node" matches "node")
+          // This prevents "serve" from matching "WindowServer"
+          return p.basename === lower || p.basename.startsWith(lower + '.') || p.basename.startsWith(lower + ' ');
+        })
+        .map(({ basename, ...rest }) => rest);
       return ok(procs);
     } catch {
       return ok([]);

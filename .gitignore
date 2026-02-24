@@ -8,4 +8,5 @@ data/session.jsonl
 data/memory.json
 data/triggers.json
 data/trigger-log.json
+data/server.pid
 screenshots/

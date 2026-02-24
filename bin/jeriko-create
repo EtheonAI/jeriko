@@ -1,0 +1,82 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const { exec } = require('../tools/shell');
+const path = require('path');
+const fs = require('fs');
+
+const TEMPLATES_DIR = path.join(__dirname, '..', 'templates');
+
+function loadTemplates() {
+  const files = fs.readdirSync(TEMPLATES_DIR).filter(f => f.endsWith('.json'));
+  return files.map(f => {
+    const data = JSON.parse(fs.readFileSync(path.join(TEMPLATES_DIR, f), 'utf-8'));
+    return data;
+  });
+}
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // List templates
+  if (flags.list) {
+    const templates = loadTemplates();
+    ok(templates.map(t => ({ name: t.name, description: t.description })));
+    return;
+  }
+
+  // Create from template
+  const templateName = positional[0];
+  const projectName = positional[1] || flags.name;
+
+  if (!templateName) {
+    fail('Usage: jeriko create <template> <project-name>\n       jeriko create --list');
+  }
+
+  if (!projectName) {
+    fail('Project name required: jeriko create ' + templateName + ' my-app');
+  }
+
+  // Validate project name
+  if (!/^[a-zA-Z0-9_-]+$/.test(projectName)) {
+    fail('Project name must be alphanumeric (with hyphens/underscores)');
+  }
+
+  // Load template
+  const templatePath = path.join(TEMPLATES_DIR, `${templateName}.json`);
+  if (!fs.existsSync(templatePath)) {
+    const available = loadTemplates().map(t => t.name).join(', ');
+    fail(`Unknown template: ${templateName}. Available: ${available}`, EXIT.NOT_FOUND);
+  }
+
+  const template = JSON.parse(fs.readFileSync(templatePath, 'utf-8'));
+
+  // Replace {{name}} placeholder
+  const command = template.command.replace(/\{\{name\}\}/g, projectName);
+
+  // Check if directory already exists
+  const targetDir = path.resolve(projectName);
+  if (fs.existsSync(targetDir)) {
+    fail(`Directory already exists: ${targetDir}`);
+  }
+
+  // Run scaffold command
+  const timeout = flags.timeout ? parseInt(flags.timeout) : 120000;
+  const result = await exec(command, { timeout, cwd: process.cwd() });
+
+  if (result.code !== 0 && result.stderr && !result.stdout) {
+    fail(`Scaffold failed: ${result.stderr.trim()}`);
+  }
+
+  // Run post-install if defined
+  if (template.postInstall) {
+    const postCmd = template.postInstall.replace(/\{\{name\}\}/g, projectName);
+    await exec(postCmd, { timeout, cwd: process.cwd() });
+  }
+
+  ok({
+    template: template.name,
+    project: projectName,
+    path: targetDir,
+    description: template.description,
+  });
+});

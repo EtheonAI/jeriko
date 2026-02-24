@@ -3,14 +3,14 @@
 All `jeriko` commands support 3 output formats via the global `--format` flag:
 
 ```bash
-jeriko --format json sys --info    # JSON (default): {"ok":true,"data":{...}}
-jeriko --format text sys --info    # AI-optimized:   key=value key2=value2
+jeriko sys --info                  # Text (default): key=value key2=value2
+jeriko --format json sys --info    # JSON: {"ok":true,"data":{...}}
 jeriko --format logfmt sys --info  # Structured log: ok=true key=value
-jeriko sys --info --format text    # --format also works after the command
+jeriko sys --info --format json    # --format also works after the command
 ```
 
-**Default (JSON)**: Machine-parseable, used for piping between commands.
-**Text**: Minimal tokens, instant AI comprehension — use when reading results.
+**Default (Text)**: AI-optimized, minimal tokens, instant comprehension.
+**JSON**: Machine-parseable, for piping between commands (`--format json`).
 **Logfmt**: Key=value log format, greppable.
 
 Errors: JSON `{"ok":false,"error":"..."}` / Text `error <message>` / Logfmt `ok=false error="..."`
@@ -555,6 +555,315 @@ jeriko plugin validate ./my-plugin     # validate manifest, check files, verify 
 jeriko plugin test ./my-plugin         # run commands and verify output format
 ```
 
+### jeriko parallel
+Execute multiple independent tasks concurrently via sub-agent LLMs.
+Use when performing similar operations on 5+ independent items.
+Sub-tasks are text-only (no tool access). Pass content in the prompt.
+Works with any configured AI backend (Claude, OpenAI, Kimi, Qwen, DeepSeek, local models).
+
+```bash
+jeriko parallel --tasks '[{"task_id":"t1","prompt":"Summarize: ..."},{"task_id":"t2","prompt":"Summarize: ..."}]'
+echo '<json>' | jeriko parallel
+jeriko parallel --tasks '[...]' --backend claude         # use Anthropic API
+jeriko parallel --tasks '[...]' --backend openai         # use OpenAI API
+jeriko parallel --tasks '[...]' --backend local           # use local model (Ollama, etc.)
+jeriko parallel --tasks '[...]' --workers 8               # max concurrent workers
+jeriko parallel --tasks '[...]' --max-tokens 2048         # per-task token limit
+jeriko parallel --tasks '[...]' --model gpt-4o            # override model
+```
+
+The Go binary (`runtime/parallel-engine`) handles the actual parallel execution.
+Supports two API formats: `anthropic` (Anthropic /v1/messages) and `openai` (any OpenAI-compatible endpoint).
+
+### jeriko code
+Run Python/Node.js/Bash code snippets in a sandboxed environment.
+
+```bash
+jeriko code --python "print('hello')"
+jeriko code --node "console.log(42)"
+jeriko code --bash "echo $SHELL"
+echo "print(2+2)" | jeriko code --python
+jeriko code --python "import math; print(math.pi)" --timeout 5000
+```
+
+### jeriko ai
+AI image generation via OpenAI DALL-E API.
+
+```bash
+jeriko ai --image "A red fox in watercolor"
+jeriko ai --image "Mountain sunset" --output ~/images/sunset.png
+jeriko ai --image "Logo design" --size 1024x1024 --quality hd
+jeriko ai --image "Abstract art" --model dall-e-3
+```
+
+### jeriko create
+Scaffold a new app from templates.
+
+```bash
+jeriko create --list                    # list available templates
+jeriko create nextjs my-app             # Next.js with App Router
+jeriko create react my-app              # React with Vite
+jeriko create express my-api            # Express.js API
+jeriko create flask my-api              # Flask Python app
+jeriko create static my-site            # Static HTML/CSS/JS
+jeriko create expo my-mobile-app        # React Native with Expo
+```
+
+### jeriko doc
+Read, write, analyze, and search documents. Supports PDF, Excel, Word, CSV, images, and all text files.
+Uses Python (PyPDF2, openpyxl, python-docx, Pillow) — no npm dependencies.
+
+```bash
+# Read documents
+jeriko doc --read report.pdf                    # extract text from PDF
+jeriko doc --read report.pdf --pages 1-5        # specific page range
+jeriko doc --read data.xlsx                     # read Excel (default sheet)
+jeriko doc --read data.xlsx --sheet Sales       # specific sheet
+jeriko doc --read data.xlsx --limit 50          # limit rows
+jeriko doc --read proposal.docx                 # read Word document
+jeriko doc --read contacts.csv                  # read CSV with auto-detect
+jeriko doc --read notes.md                      # read any text file
+
+# File info & metadata
+jeriko doc --info report.pdf                    # pages, title, author, encrypted
+jeriko doc --info photo.jpg                     # dimensions, format, EXIF data
+jeriko doc --info data.xlsx                     # sheet names, row/col counts
+jeriko doc --sheets data.xlsx                   # list all Excel sheets
+
+# Search inside documents
+jeriko doc --search report.pdf --query "revenue"
+jeriko doc --search data.xlsx --query "Widget"
+jeriko doc --search proposal.docx --query "budget"
+
+# Write documents
+echo '{"headers":["Name","Score"],"rows":[["Alice",95]]}' | jeriko doc --write output.xlsx
+echo '{"title":"Report","content":["Paragraph 1",{"heading":"Section","level":1}]}' | jeriko doc --write output.docx
+echo '{"headers":["a","b"],"data":[{"a":1,"b":2}]}' | jeriko doc --write output.csv
+
+# Image operations
+jeriko doc --resize photo.png --width 800 --height 600 --output thumb.png
+jeriko doc --convert photo.png --output photo.jpg
+```
+
+Supported formats: PDF, XLSX/XLS, DOCX, CSV, TSV, PNG, JPG, GIF, BMP, WEBP, TIFF, SVG + all text/code files.
+
+Prerequisites: `pip3 install PyPDF2 openpyxl python-docx Pillow`
+
+### jeriko email --send
+Send emails via SMTP (auto-detected from IMAP config).
+
+```bash
+jeriko email --send "to@email.com" --subject "Hello" --body "Message body"
+jeriko email --send "to@email.com" --subject "Report" --attach report.pdf
+echo "email body" | jeriko email --send "to@email.com" --subject "Piped"
+```
+
+### jeriko github
+Full GitHub integration via REST API. Run `jeriko github init` to set up.
+
+```bash
+# Setup
+jeriko github init                              # interactive setup (Personal Access Token)
+jeriko github init --token ghp_xxx              # non-interactive
+
+# Repos
+jeriko github repos                             # list your repos
+jeriko github repos --org myorg                 # org repos
+jeriko github repos --limit 20 --sort stars     # sorted, limited
+
+# Issues
+jeriko github issues                            # list open issues (auto-detects repo from .git)
+jeriko github issues --repo owner/repo          # specify repo
+jeriko github issues --create "Bug title" --body "description" --labels "bug,urgent"
+jeriko github issues --view 42                  # view issue details
+jeriko github issues --close 42                 # close issue
+jeriko github issues --reopen 42                # reopen issue
+jeriko github issues --comment 42 --body "Fixed in v2"
+
+# Pull Requests
+jeriko github prs                               # list open PRs
+jeriko github prs --create "PR title" --head feature-branch --base main
+jeriko github prs --view 10                     # view PR details
+jeriko github prs --merge 10                    # merge PR
+jeriko github prs --merge 10 --merge-method squash
+jeriko github prs --close 10
+
+# Actions (CI/CD)
+jeriko github actions                           # list workflow runs
+jeriko github actions --branch main --status completed
+jeriko github actions --run 12345               # view run details
+jeriko github actions --jobs 12345              # list jobs for run
+jeriko github actions --rerun 12345             # re-run workflow
+jeriko github actions --cancel 12345            # cancel run
+
+# Releases
+jeriko github releases                          # list releases
+jeriko github releases --latest                 # latest release
+jeriko github releases --create "v1.0.0" --title "First Release" --notes "Changelog..."
+jeriko github releases --view v1.0.0            # view release
+jeriko github releases --delete 12345           # delete release
+
+# Gists
+jeriko github gists                             # list your gists
+jeriko github gists --create "file.js" --content "code here" --desc "My snippet"
+jeriko github gists --view abc123               # view gist
+jeriko github gists --delete abc123
+
+# Search
+jeriko github search "query"                    # search repos (default)
+jeriko github search "query" --code             # search code
+jeriko github search "query" --issues           # search issues/PRs
+jeriko github search "query" --users            # search users
+
+# Clone
+jeriko github clone owner/repo                  # clone repo
+jeriko github clone owner/repo --depth 1        # shallow clone
+```
+
+### jeriko vercel
+Full Vercel integration via REST API. Run `jeriko vercel init` to set up.
+
+```bash
+# Setup
+jeriko vercel init                              # interactive setup
+jeriko vercel init --token xxx                  # non-interactive
+
+# User
+jeriko vercel user                              # current user info
+
+# Projects
+jeriko vercel projects                          # list projects
+jeriko vercel projects --limit 50
+
+# Deployments
+jeriko vercel deployments                       # list deployments
+jeriko vercel deployments --project myapp       # filter by project
+jeriko vercel deployments --state READY
+
+# Deploy
+jeriko vercel deploy --project myapp            # preview deployment
+jeriko vercel deploy --project myapp --prod     # production deployment
+jeriko vercel deploy --hook https://api.vercel.com/v1/integrations/deploy/xxx  # trigger hook
+
+# Domains
+jeriko vercel domains                           # list domains
+jeriko vercel domains add --name example.com    # add domain
+jeriko vercel domains delete --name example.com # remove domain
+
+# Environment Variables
+jeriko vercel env --project myapp               # list env vars
+jeriko vercel env --project myapp --set KEY --value "val"
+jeriko vercel env --project myapp --delete KEY
+
+# Logs
+jeriko vercel logs --deployment dpl_xxx         # deployment logs
+
+# DNS
+jeriko vercel dns --domain example.com          # list records
+jeriko vercel dns --domain example.com --create --type A --name sub --value 1.2.3.4
+
+# Other
+jeriko vercel certs                             # SSL certificates
+jeriko vercel promote --deployment dpl_xxx --project myapp  # promote to production
+jeriko vercel delete --id dpl_xxx               # delete deployment
+jeriko vercel aliases                           # list aliases
+jeriko vercel teams                             # list teams
+```
+
+### jeriko gdrive
+Google Drive integration via REST API v3. Run `jeriko gdrive init` to set up (requires Google Cloud OAuth2 client).
+
+```bash
+# Setup (OAuth2 device code flow)
+jeriko gdrive init                              # interactive setup wizard
+jeriko gdrive init --client-id xxx --client-secret xxx --refresh-token xxx  # non-interactive
+
+# List files
+jeriko gdrive list                              # root files (default: 20)
+jeriko gdrive list --limit 50                   # limit results
+jeriko gdrive list --folder <folder_id>         # list folder contents
+jeriko gdrive list --type document              # filter: document, spreadsheet, presentation, pdf, image, folder
+
+# Search
+jeriko gdrive search "quarterly report"         # search by name
+jeriko gdrive search "budget" --type spreadsheet
+
+# File info
+jeriko gdrive info <file_id>                    # full metadata
+
+# Download
+jeriko gdrive download <file_id>                # download to current dir
+jeriko gdrive download <file_id> --to ./out.pdf # download to path
+jeriko gdrive download <file_id> --export pdf   # export Google Docs as PDF/docx/txt/csv/xlsx
+
+# Upload
+jeriko gdrive upload ./report.pdf               # upload to root
+jeriko gdrive upload ./report.pdf --folder <folder_id>  # upload to folder
+jeriko gdrive upload ./report.pdf --name "Q4 Report"    # custom name
+
+# Create folder
+jeriko gdrive mkdir "New Folder"                # in root
+jeriko gdrive mkdir "Sub" --parent <folder_id>  # subfolder
+
+# Share
+jeriko gdrive share <file_id> --email user@gmail.com           # share (reader)
+jeriko gdrive share <file_id> --email user@gmail.com --role writer  # share (writer)
+jeriko gdrive share <file_id> --anyone                          # link sharing
+
+# Delete
+jeriko gdrive delete <file_id>                  # move to trash
+jeriko gdrive delete <file_id> --permanent      # permanent delete
+
+# Storage info
+jeriko gdrive about                             # usage, quota, user info
+```
+
+### jeriko onedrive
+OneDrive integration via Microsoft Graph REST API. Run `jeriko onedrive init` to set up (requires Azure app registration).
+
+```bash
+# Setup (OAuth2 device code flow)
+jeriko onedrive init                            # interactive setup wizard
+jeriko onedrive init --client-id xxx --refresh-token xxx  # non-interactive
+
+# List files
+jeriko onedrive list                            # root files (default: 20)
+jeriko onedrive list --limit 50                 # limit results
+jeriko onedrive list --folder <folder_id>       # list folder contents
+jeriko onedrive list --path "/Documents/Work"   # list by path
+
+# Search
+jeriko onedrive search "quarterly report"       # search across drive
+
+# File info
+jeriko onedrive info <item_id>                  # full metadata
+
+# Download
+jeriko onedrive download <item_id>              # download to current dir
+jeriko onedrive download <item_id> --to ./out.pdf  # download to path
+
+# Upload
+jeriko onedrive upload ./report.pdf             # upload to root
+jeriko onedrive upload ./report.pdf --folder <folder_id>    # upload to folder
+jeriko onedrive upload ./report.pdf --path "/Documents"     # upload to path
+jeriko onedrive upload ./report.pdf --name "Q4 Report"      # custom name
+
+# Create folder
+jeriko onedrive mkdir "New Folder"              # in root
+jeriko onedrive mkdir "Sub" --parent <folder_id>  # subfolder
+
+# Share
+jeriko onedrive share <item_id>                 # create view link
+jeriko onedrive share <item_id> --role edit     # create edit link
+jeriko onedrive share <item_id> --email user@example.com  # share with user
+
+# Delete
+jeriko onedrive delete <item_id>                # move to recycle bin
+
+# Storage info
+jeriko onedrive about                           # usage, quota, owner info
+```
+
 ### jeriko init
 First-run onboarding. 6-step interactive wizard: AI backend, Telegram, security, tunnel, server, verify.
 
@@ -567,6 +876,10 @@ jeriko init --skip-ai --skip-telegram  # minimal setup
 jeriko stripe init                     # Stripe payments
 jeriko x init                          # X.com (Twitter)
 jeriko email init                      # Email (IMAP)
+jeriko github init                     # GitHub
+jeriko vercel init                     # Vercel
+jeriko gdrive init                     # Google Drive
+jeriko onedrive init                   # OneDrive
 ```
 
 ## Local Model Configuration
@@ -647,7 +960,7 @@ bin/
   jeriko-browse    # browser automation
   jeriko-notify    # telegram notifications
   jeriko-camera    # webcam photo/video
-  jeriko-email     # IMAP email reader
+  jeriko-email     # IMAP email reader + SMTP sender
   jeriko-notes     # Apple Notes
   jeriko-remind    # Apple Reminders
   jeriko-calendar  # Apple Calendar
@@ -672,6 +985,15 @@ bin/
   jeriko-trust     # plugin trust management
   jeriko-plugin    # plugin validate/test
   jeriko-init      # first-run onboarding
+  jeriko-doc       # document reader/writer (PDF, Excel, Word, CSV, images)
+  jeriko-parallel  # parallel LLM task execution (Go binary wrapper)
+  jeriko-code      # code execution (Python/Node.js/Bash)
+  jeriko-ai        # AI image generation (DALL-E)
+  jeriko-create    # app scaffolding from templates
+  jeriko-github    # GitHub REST API — repos, issues, PRs, actions, releases, gists
+  jeriko-vercel    # Vercel REST API — projects, deployments, domains, env vars
+  jeriko-gdrive    # Google Drive REST API — list, upload, download, share
+  jeriko-onedrive  # OneDrive/Microsoft Graph — list, upload, download, share
 lib/
   cli.js           # shared CLI infrastructure (parseArgs, ok, fail, escapeAppleScript)
   plugins.js       # plugin SDK (registry, trust, env isolation, audit)
@@ -682,7 +1004,19 @@ tools/
   shell.js         # shell exec (env-stripped)
   files.js         # file operations
   browser.js       # Playwright browser
-  index.js         # tool registry (all 20 commands, for Telegram slash commands)
+  index.js         # tool registry (all slash commands, for Telegram)
+runtime/
+  main.go          # Go parallel engine (model-agnostic, anthropic + openai formats)
+  go.mod           # Go module (stdlib only, no external deps)
+  build.sh         # cross-compile: darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64
+  parallel-engine  # compiled Go binary (built via: cd runtime && go build -ldflags="-s -w" -o parallel-engine)
+templates/
+  nextjs.json      # Next.js app template
+  react.json       # React + Vite template
+  express.json     # Express.js API template
+  flask.json       # Flask Python template
+  static.json      # Static HTML/CSS/JS template
+  expo.json        # React Native Expo template
 data/
   session.jsonl    # auto-logged session history
   memory.json      # persistent key-value store

@@ -16,6 +16,42 @@
     "agent": "node agent/agent.js",
     "dev": "node --watch server/index.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "os": [
+    "darwin",
+    "linux",
+    "win32"
+  ],
+  "files": [
+    "bin/",
+    "lib/",
+    "tools/",
+    "server/",
+    "templates/",
+    "runtime/main.go",
+    "runtime/go.mod",
+    "runtime/build.sh",
+    "CLAUDE.md",
+    ".env.example"
+  ],
+  "keywords": [
+    "cli",
+    "ai",
+    "automation",
+    "macos",
+    "tools",
+    "telegram",
+    "agent",
+    "unix"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/khaleel737/jerikobot.git"
+  },
+  "homepage": "https://jerikobot.vercel.app",
+  "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",
     "croner": "^10.0.1",
@@ -25,9 +61,10 @@
     "imap": "^0.8.19",
     "mailparser": "^3.9.3",
     "node-notifier": "^10.0.1",
+    "nodemailer": "^8.0.1",
     "playwright": "^1.58.2",
     "qrcode": "^1.5.4",
-"systeminformation": "^5.31.1",
+    "systeminformation": "^5.31.1",
     "telegraf": "^4.16.3",
     "uuid": "^11.1.0",
     "ws": "^8.18.0"

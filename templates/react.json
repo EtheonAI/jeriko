@@ -1,0 +1,6 @@
+{
+  "name": "react",
+  "description": "React app with Vite",
+  "command": "npm create vite@latest {{name}} -- --template react",
+  "postInstall": "cd {{name}} && npm install"
+}

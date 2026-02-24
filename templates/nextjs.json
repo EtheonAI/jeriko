@@ -1,0 +1,6 @@
+{
+  "name": "nextjs",
+  "description": "Next.js app with App Router",
+  "command": "npx create-next-app@latest {{name}} --app --eslint --src-dir --import-alias '@/*' --use-npm",
+  "postInstall": "cd {{name}} && npm install"
+}

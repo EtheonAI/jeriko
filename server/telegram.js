@@ -197,14 +197,21 @@ function setup() {
       const args = ctx.message.text.replace(`/${toolName}`, '').trim();
       try {
         const result = await executeTool(toolName, args);
-        if (result && typeof result === 'object' && result.type === 'photo') {
+        if (result && typeof result === 'object' && (result.type === 'photo' || result.type === 'document')) {
           if (fs.existsSync(result.path)) {
-            await ctx.replyWithPhoto(
-              { source: fs.createReadStream(result.path) },
-              { caption: result.caption || '' }
-            );
+            if (result.type === 'photo') {
+              await ctx.replyWithPhoto(
+                { source: fs.createReadStream(result.path) },
+                { caption: result.caption || '' }
+              );
+            } else {
+              await ctx.replyWithDocument(
+                { source: fs.createReadStream(result.path), filename: result.caption || require('path').basename(result.path) },
+                { caption: result.caption || '' }
+              );
+            }
           } else {
-            await ctx.reply(`Screenshot saved: ${result.path}`);
+            await ctx.reply(`File saved: ${result.path}`);
           }
           return;
         }
@@ -377,19 +384,43 @@ function parseWatchCommand(input) {
 
 function extractFiles(text) {
   const files = [];
+  const seen = new Set();
   const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.webp'];
+  const mediaExts = [...imageExts, '.mp4', '.mov', '.mp3', '.wav', '.pdf', '.zip'];
 
   // Match SCREENSHOT:/path/to/file.png
   const screenshotMatches = text.matchAll(/SCREENSHOT:(\S+)/g);
   for (const m of screenshotMatches) {
-    files.push({ path: m[1], type: 'photo' });
+    if (!seen.has(m[1])) { seen.add(m[1]); files.push({ path: m[1], type: 'photo' }); }
   }
 
   // Match FILE:/path/to/file
   const fileMatches = text.matchAll(/FILE:(\S+)/g);
   for (const m of fileMatches) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
     const ext = m[1].toLowerCase().slice(m[1].lastIndexOf('.'));
     files.push({ path: m[1], type: imageExts.includes(ext) ? 'photo' : 'document' });
+  }
+
+  // Match bare file paths to media files (e.g. /tmp/desktop-123.png mentioned by the AI)
+  const pathMatches = text.matchAll(/(?:^|\s)(\/\S+\.(?:png|jpg|jpeg|gif|webp|mp4|mov|mp3|wav|pdf))\b/gi);
+  for (const m of pathMatches) {
+    const p = m[1];
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const ext = p.toLowerCase().slice(p.lastIndexOf('.'));
+    files.push({ path: p, type: imageExts.includes(ext) ? 'photo' : 'document' });
+  }
+
+  // Match paths from JSON output (e.g. "path":"/tmp/screenshot-123.png")
+  const jsonPathMatches = text.matchAll(/"path"\s*:\s*"(\/[^"]+\.(?:png|jpg|jpeg|gif|webp|mp4|mov|mp3|wav|pdf))"/gi);
+  for (const m of jsonPathMatches) {
+    const p = m[1];
+    if (seen.has(p)) continue;
+    seen.add(p);
+    const ext = p.toLowerCase().slice(p.lastIndexOf('.'));
+    files.push({ path: p, type: imageExts.includes(ext) ? 'photo' : 'document' });
   }
 
   return files;

@@ -1,0 +1,96 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, readStdin, run, EXIT } = require('../lib/cli');
+const https = require('https');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  if (!flags.image && positional.length === 0) {
+    fail('Usage: jeriko ai --image "prompt" [--output path] [--size 1024x1024] [--quality standard|hd]');
+  }
+
+  let prompt = typeof flags.image === 'string' ? flags.image : positional.join(' ');
+  if (!prompt) {
+    const stdin = await readStdin();
+    if (stdin) prompt = stdin.trim();
+  }
+  if (!prompt) fail('Usage: jeriko ai --image "a red fox in watercolor"');
+
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) fail('OPENAI_API_KEY not set. Add it to .env', EXIT.AUTH);
+
+  const outputPath = flags.output || flags.o || path.join(os.tmpdir(), `jeriko-ai-${Date.now()}.png`);
+  const size = flags.size || '1024x1024';
+  const quality = flags.quality || 'standard';
+  const model = flags.model || 'dall-e-3';
+
+  // POST to OpenAI images API
+  const body = JSON.stringify({
+    model, prompt, n: 1, size, quality, response_format: 'url',
+  });
+
+  const apiResult = await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.openai.com',
+      path: '/v1/images/generations',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (c) => data += c);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          if (json.error) return reject(new Error(json.error.message));
+          if (!json.data?.[0]) return reject(new Error('No image generated'));
+          resolve(json.data[0]);
+        } catch (e) {
+          reject(new Error(`Parse error: ${e.message}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+
+  // Download image to output path
+  const dir = path.dirname(path.resolve(outputPath));
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
+  await new Promise((resolve, reject) => {
+    const get = (url) => {
+      const client = url.startsWith('https') ? https : http;
+      client.get(url, (res) => {
+        if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          return get(res.headers.location);
+        }
+        if (res.statusCode !== 200) return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        const file = fs.createWriteStream(path.resolve(outputPath));
+        res.pipe(file);
+        file.on('finish', () => { file.close(); resolve(); });
+        file.on('error', reject);
+      }).on('error', reject);
+    };
+    get(apiResult.url);
+  });
+
+  const resolved = path.resolve(outputPath);
+  process.stderr.write(`IMAGE:${resolved}\n`);
+
+  ok({
+    path: resolved,
+    filename: path.basename(resolved),
+    url: apiResult.url,
+    prompt: apiResult.revised_prompt || prompt,
+    model, size,
+  });
+});

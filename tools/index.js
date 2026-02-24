@@ -494,6 +494,175 @@ const tools = {
     },
   },
 
+  // Parallel LLM tasks
+  'parallel': {
+    description: 'Execute multiple independent tasks concurrently via sub-agent LLMs',
+    usage: '/parallel --tasks \'[{"task_id":"t1","prompt":"..."}]\'',
+    handler: async (args) => {
+      const data = jerikoExec(`parallel ${args.trim()}`, { timeout: 120000 });
+      if (typeof data === 'object' && data.results) {
+        return data.results.map(r => `[${r.task_id}] ${r.error ? 'ERROR: ' + r.error : r.output?.slice(0, 200)}`).join('\n');
+      }
+      return typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+    },
+  },
+
+  // Code execution
+  'code': {
+    description: 'Run Python/Node.js/Bash code snippets',
+    usage: '/code --python "print(42)" | --node "console.log(42)"',
+    handler: async (args) => {
+      const data = jerikoExec(`code ${args.trim()}`);
+      if (typeof data === 'object') {
+        let output = data.output || '';
+        if (data.stderr) output += `\n[stderr] ${data.stderr}`;
+        output += `\n[${data.language}, exit: ${data.exitCode}]`;
+        return output.trim();
+      }
+      return data;
+    },
+  },
+
+  // AI image generation
+  'ai': {
+    description: 'AI image generation (DALL-E)',
+    usage: '/ai --image "prompt"',
+    handler: async (args) => {
+      const data = jerikoExec(`ai ${args.trim()}`, { timeout: 60000 });
+      if (typeof data === 'object' && data.path) {
+        return { type: 'photo', path: data.path, caption: `AI: ${data.prompt?.slice(0, 100) || ''}` };
+      }
+      return typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+    },
+  },
+
+  // App scaffolding
+  'create': {
+    description: 'Scaffold a new app from template (nextjs, react, express, flask, static, expo)',
+    usage: '/create <template> <name> | --list',
+    handler: async (args) => {
+      const data = jerikoExec(`create ${args.trim()}`, { timeout: 120000 });
+      if (Array.isArray(data)) {
+        return data.map(t => `${t.name} — ${t.description}`).join('\n');
+      }
+      if (typeof data === 'object' && data.project) {
+        return `Created ${data.template} project: ${data.project}\nPath: ${data.path}`;
+      }
+      return typeof data === 'object' ? JSON.stringify(data, null, 2) : data;
+    },
+  },
+
+  // Document handling (PDF, Excel, DOCX, CSV, images)
+  'doc': {
+    description: 'Read/write/analyze PDF, Excel, Word, CSV, images',
+    usage: '/doc --read <file> | --info <file> | --write <file> | --search <file> --query "term" | --sheets <file.xlsx>',
+    handler: async (args) => {
+      const data = jerikoExec(`doc ${args.trim()}`, { timeout: 30000 });
+      if (typeof data === 'object') {
+        if (data.path && data.width) return `Image: ${data.width}x${data.height} ${data.format} (${data.size_bytes} bytes)`;
+        if (data.text) return data.text.slice(0, 3000);
+        if (data.data && Array.isArray(data.data)) return `${data.rows} rows\n${data.headers?.join(' | ')}\n${data.data.slice(0, 10).map(r => Object.values(r).join(' | ')).join('\n')}`;
+        if (data.results) return `${data.matches} matches for "${data.query}":\n${data.results.map(r => `L${r.line}: ${r.text}`).join('\n')}`;
+        if (data.written) return `Written: ${data.written}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
+  // GitHub (REST API)
+  'github': {
+    description: 'GitHub — repos, issues, PRs, actions, releases, gists, search',
+    usage: '/github <resource> [action] [flags] — e.g. /github repos | /github issues --create "title"',
+    handler: async (args) => {
+      const data = jerikoExec(`github ${args.trim()}`, { timeout: 15000 });
+      if (Array.isArray(data)) {
+        return data.map(item => {
+          if (item.number !== undefined && item.title) return `#${item.number} ${item.title} [${item.state}] — ${item.author || ''}`;
+          if (item.name && item.stars !== undefined) return `${item.name} | ${item.language || ''} | ${item.stars}★ | ${item.visibility || ''}`;
+          if (item.tag) return `${item.tag} ${item.name || ''} — ${item.author || ''}`;
+          if (item.id && item.files) return `${item.id} | ${item.description || ''} | ${item.files}`;
+          return JSON.stringify(item);
+        }).join('\n') || 'No results';
+      }
+      if (typeof data === 'object') {
+        if (data.items) return `${data.total} results:\n${data.items.map(i => `${i.name || i.title || i.login} — ${i.url || ''}`).join('\n')}`;
+        if (data.url) return `${data.title || data.tag || data.repo || ''} — ${data.url}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
+  // Vercel (REST API)
+  'vercel': {
+    description: 'Vercel — projects, deployments, domains, env vars, logs',
+    usage: '/vercel <resource> [action] [flags] — e.g. /vercel projects | /vercel deployments',
+    handler: async (args) => {
+      const data = jerikoExec(`vercel ${args.trim()}`, { timeout: 15000 });
+      if (Array.isArray(data)) {
+        return data.map(item => {
+          if (item.name && item.framework !== undefined) return `${item.name} | ${item.framework || 'unknown'} | ${item.nodeVersion || ''}`;
+          if (item.uid && item.url) return `${item.uid} | ${item.url} | ${item.state || ''} | ${item.target || ''}`;
+          if (item.name && item.type) return `${item.name} ${item.type} ${item.value} (ttl:${item.ttl || 'default'})`;
+          if (item.key) return `${item.key}=${item.value || '(encrypted)'} [${(item.target || []).join(',')}]`;
+          return JSON.stringify(item);
+        }).join('\n') || 'No results';
+      }
+      if (typeof data === 'object') {
+        if (data.username) return `${data.username} (${data.name || ''}) — ${data.email || ''}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
+  // Google Drive (REST API)
+  'gdrive': {
+    description: 'Google Drive — list, search, upload, download, share, mkdir, delete',
+    usage: '/gdrive <command> [flags] — e.g. /gdrive list | /gdrive search "report" | /gdrive upload ./file.pdf',
+    handler: async (args) => {
+      const data = jerikoExec(`gdrive ${args.trim()}`, { timeout: 30000 });
+      if (Array.isArray(data)) {
+        return data.map(item => {
+          if (item.name && item.id) return `${item.id} | ${item.name} | ${item.mimeType || item.type || ''} | ${item.size || ''}`;
+          return JSON.stringify(item);
+        }).join('\n') || 'No results';
+      }
+      if (typeof data === 'object') {
+        if (data.user) return `User: ${data.user}\nUsed: ${data.usage_human || data.usage || ''}\nLimit: ${data.limit_human || data.limit || ''}`;
+        if (data.uploaded) return `Uploaded: ${data.name} (${data.id})`;
+        if (data.downloaded) return `Downloaded: ${data.path}`;
+        if (data.shared) return `Shared: ${data.name || data.id} — ${data.link || ''}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
+  // OneDrive (REST API)
+  'onedrive': {
+    description: 'OneDrive — list, search, upload, download, share, mkdir, delete',
+    usage: '/onedrive <command> [flags] — e.g. /onedrive list | /onedrive search "report"',
+    handler: async (args) => {
+      const data = jerikoExec(`onedrive ${args.trim()}`, { timeout: 30000 });
+      if (Array.isArray(data)) {
+        return data.map(item => {
+          if (item.name && item.id) return `${item.id} | ${item.name} | ${item.type || (item.folder ? 'folder' : 'file')} | ${item.size || ''}`;
+          return JSON.stringify(item);
+        }).join('\n') || 'No results';
+      }
+      if (typeof data === 'object') {
+        if (data.owner) return `Owner: ${data.owner}\nUsed: ${data.used || data.used_human || ''}\nTotal: ${data.total || data.total_human || ''}`;
+        if (data.uploaded) return `Uploaded: ${data.name} (${data.id})`;
+        if (data.downloaded) return `Downloaded: ${data.path}`;
+        if (data.link) return `Share link: ${data.link}`;
+        return JSON.stringify(data, null, 2);
+      }
+      return data;
+    },
+  },
+
   // Plugin management
   'install_plugin': {
     description: 'Install a JerikoBot plugin from npm or local path',

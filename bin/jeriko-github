@@ -1,0 +1,903 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-github — Full GitHub CLI built on GitHub REST API
+// Standalone CLI: jeriko github <resource> <action> [flags]
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const https = require('https');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
+
+const BASE = 'https://api.github.com';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Colors
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+// ---- .env helpers ----
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  // Also set in current process
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
+// ---- Auto-detect repo from .git/config ----
+
+function detectRepo() {
+  try {
+    const config = fs.readFileSync(path.join(process.cwd(), '.git', 'config'), 'utf-8');
+    const match = config.match(/url = .*github\.com[:/]([^/]+\/[^/.]+)/);
+    return match ? match[1].replace(/\.git$/, '') : null;
+  } catch { return null; }
+}
+
+function requireRepo(flags) {
+  const repo = flags.repo || detectRepo();
+  if (!repo) fail('No --repo specified and could not auto-detect from .git/config. Usage: --repo owner/repo');
+  if (!repo.includes('/')) fail(`Invalid repo format: "${repo}". Expected owner/repo`);
+  return repo;
+}
+
+// ---- HTTP helper using Node.js built-in https ----
+
+async function github(method, urlPath, body, query) {
+  const token = process.env.GITHUB_TOKEN;
+  if (!token) fail('GITHUB_TOKEN not set. Run: jeriko github init', EXIT.AUTH);
+
+  // Build query string
+  const qs = query ? Object.entries(query)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&') : '';
+
+  const fullPath = qs ? `${urlPath}?${qs}` : urlPath;
+  const bodyStr = body ? JSON.stringify(body) : null;
+
+  const options = {
+    hostname: 'api.github.com',
+    path: fullPath,
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/vnd.github+json',
+      'User-Agent': 'JerikoBot',
+      'X-GitHub-Api-Version': '2022-11-28',
+    },
+  };
+
+  if (bodyStr) {
+    options.headers['Content-Type'] = 'application/json';
+    options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+  }
+
+  return new Promise((resolve) => {
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        // 204 No Content
+        if (res.statusCode === 204) return resolve(null);
+
+        let parsed;
+        try { parsed = JSON.parse(data); } catch {
+          if (res.statusCode >= 400) {
+            fail(`GitHub ${res.statusCode}: ${data.slice(0, 200)}`, EXIT.GENERAL);
+          }
+          return resolve(data);
+        }
+
+        if (res.statusCode >= 400) {
+          const msg = parsed.message || JSON.stringify(parsed);
+          const code = (res.statusCode === 401 || res.statusCode === 403) ? EXIT.AUTH
+            : res.statusCode === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+          fail(`GitHub ${res.statusCode}: ${msg}`, code);
+        }
+
+        resolve(parsed);
+      });
+    });
+
+    req.on('error', (err) => {
+      fail(`GitHub request failed: ${err.message}`, EXIT.NETWORK);
+    });
+
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+// Unauthenticated request for init verification
+async function githubVerify(token) {
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: 'api.github.com',
+      path: '/user',
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'JerikoBot',
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          resolve({ ok: res.statusCode < 400, status: res.statusCode, data: parsed });
+        } catch {
+          resolve({ ok: false, status: res.statusCode, data: null });
+        }
+      });
+    });
+    req.on('error', (err) => resolve({ ok: false, status: 0, data: null, error: err.message }));
+    req.end();
+  });
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const resource = args[0];
+  // Parse flags from everything after resource so init --token works
+  const { flags, positional: allPositional } = parseArgs(['', '', ...args.slice(1)]);
+  const action = allPositional[0];
+  const positional = allPositional.slice(1);
+
+  if (!resource) {
+    return ok({
+      usage: 'jeriko github <resource> <action> [flags]',
+      resources: {
+        init: 'interactive setup wizard',
+        repos: 'list user/org repositories',
+        issues: 'list, create, close, comment on issues',
+        prs: 'list, create, merge, view pull requests',
+        actions: 'list workflow runs',
+        releases: 'list, create releases',
+        gists: 'list, create gists',
+        search: 'search repositories or code',
+        clone: 'clone a repository',
+      },
+    });
+  }
+
+  // ===================== INIT =====================
+  if (resource === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}GitHub Setup${C.reset}\n`);
+    w(`  ${C.dim}Repos, issues, PRs, actions, releases${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko github init --token ghp_xxx
+    if (flags.token) {
+      writeEnvKey('GITHUB_TOKEN', flags.token);
+      const res = await githubVerify(flags.token);
+      if (res.ok) {
+        w(`  ${C.green}[ok]${C.reset} GITHUB_TOKEN verified and saved (${res.data.login})\n\n`);
+      } else {
+        w(`  ${C.red}[!!]${C.reset} Token saved but verification failed: ${res.data?.message || res.error || `HTTP ${res.status}`}\n\n`);
+      }
+      return ok({ status: 'configured', username: res.data?.login || null });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+    const existing = env.GITHUB_TOKEN;
+
+    let token;
+    if (existing) {
+      w(`  ${C.dim}Current token: ${maskKey(existing)}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing token? (Y/n)', 'Y');
+      if (keep.toLowerCase() === 'n') {
+        w('\n');
+        w(`  ${C.dim}Create a Personal Access Token at:${C.reset}\n`);
+        w(`  ${C.cyan}https://github.com/settings/tokens${C.reset}\n`);
+        w(`  ${C.dim}Recommended scopes: repo, read:org, read:user, gist, workflow${C.reset}\n\n`);
+        token = await ask(rl, 'GitHub Personal Access Token (ghp_... or github_pat_...):');
+      } else {
+        token = existing;
+      }
+    } else {
+      w(`  ${C.dim}Create a Personal Access Token at:${C.reset}\n`);
+      w(`  ${C.cyan}https://github.com/settings/tokens${C.reset}\n\n`);
+      w(`  ${C.dim}Classic token scopes needed: repo, read:org, read:user, gist, workflow${C.reset}\n`);
+      w(`  ${C.dim}Fine-grained tokens: select repositories + permissions as needed${C.reset}\n\n`);
+      token = await ask(rl, 'GitHub Personal Access Token:');
+    }
+
+    if (!token) {
+      w(`\n  ${C.dim}Skipped — no token provided${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    // Verify
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    const res = await githubVerify(token);
+    clearInterval(spin);
+
+    let verified = false;
+    let username = null;
+    if (res.ok) {
+      verified = true;
+      username = res.data.login;
+      process.stderr.write(`\r  ${C.green}[ok]${C.reset} Token verified${' '.repeat(20)}\n`);
+      w(`  ${C.green}[ok]${C.reset} Authenticated as: ${C.bold}${username}${C.reset}\n`);
+      if (res.data.name) {
+        w(`  ${C.green}[ok]${C.reset} Name: ${res.data.name}\n`);
+      }
+    } else {
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${res.data?.message || res.error || `HTTP ${res.status}`}${' '.repeat(20)}\n`);
+    }
+
+    writeEnvKey('GITHUB_TOKEN', token);
+    w(`  ${C.green}[ok]${C.reset} GITHUB_TOKEN saved to .env\n`);
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko github repos${C.reset}              ${C.dim}# list your repos${C.reset}\n`);
+    w(`    ${C.cyan}jeriko github issues${C.reset}             ${C.dim}# issues in current repo${C.reset}\n`);
+    w(`    ${C.cyan}jeriko github prs${C.reset}                ${C.dim}# pull requests${C.reset}\n`);
+    w(`    ${C.cyan}jeriko github actions${C.reset}            ${C.dim}# workflow runs${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured', verified, username });
+  }
+
+  // ===================== REPOS =====================
+  if (resource === 'repos') {
+    const limit = parseInt(flags.limit) || 10;
+    const sort = flags.sort || 'updated';
+    const direction = flags.direction || 'desc';
+
+    if (flags.org) {
+      // Org repos
+      const data = await github('GET', `/orgs/${flags.org}/repos`, null, {
+        per_page: limit, sort, direction, type: flags.type || 'all',
+      });
+      return ok(data.map(r => ({
+        name: r.full_name,
+        description: r.description,
+        visibility: r.visibility || (r.private ? 'private' : 'public'),
+        language: r.language,
+        stars: r.stargazers_count,
+        updated: r.updated_at,
+      })));
+    }
+
+    // User repos
+    const data = await github('GET', '/user/repos', null, {
+      per_page: limit, sort, direction, type: flags.type || 'all',
+    });
+    return ok(data.map(r => ({
+      name: r.full_name,
+      description: r.description,
+      visibility: r.visibility || (r.private ? 'private' : 'public'),
+      language: r.language,
+      stars: r.stargazers_count,
+      updated: r.updated_at,
+    })));
+  }
+
+  // ===================== ISSUES =====================
+  if (resource === 'issues') {
+    const repo = requireRepo(flags);
+    const [owner, repoName] = repo.split('/');
+
+    // Create issue
+    if (flags.create) {
+      const body = {};
+      body.title = flags.create;
+      if (flags.body) body.body = flags.body;
+      if (flags.labels) body.labels = flags.labels.split(',').map(l => l.trim());
+      if (flags.assignees) body.assignees = flags.assignees.split(',').map(a => a.trim());
+      if (flags.milestone) body.milestone = parseInt(flags.milestone);
+      const data = await github('POST', `/repos/${owner}/${repoName}/issues`, body);
+      return ok({
+        number: data.number,
+        title: data.title,
+        url: data.html_url,
+        state: data.state,
+        created: data.created_at,
+      });
+    }
+
+    // Close issue
+    if (flags.close) {
+      const num = parseInt(flags.close);
+      const data = await github('PATCH', `/repos/${owner}/${repoName}/issues/${num}`, { state: 'closed' });
+      return ok({
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        closed: true,
+      });
+    }
+
+    // Reopen issue
+    if (flags.reopen) {
+      const num = parseInt(flags.reopen);
+      const data = await github('PATCH', `/repos/${owner}/${repoName}/issues/${num}`, { state: 'open' });
+      return ok({
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        reopened: true,
+      });
+    }
+
+    // Comment on issue
+    if (flags.comment) {
+      const num = parseInt(flags.comment);
+      if (!flags.body) fail('Usage: jeriko github issues --comment N --body "text" [--repo owner/repo]');
+      const data = await github('POST', `/repos/${owner}/${repoName}/issues/${num}/comments`, {
+        body: flags.body,
+      });
+      return ok({
+        id: data.id,
+        issue_number: num,
+        url: data.html_url,
+        created: data.created_at,
+      });
+    }
+
+    // View single issue
+    if (flags.view) {
+      const num = parseInt(flags.view);
+      const data = await github('GET', `/repos/${owner}/${repoName}/issues/${num}`);
+      return ok({
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        author: data.user?.login,
+        body: data.body,
+        labels: data.labels?.map(l => l.name),
+        assignees: data.assignees?.map(a => a.login),
+        comments: data.comments,
+        created: data.created_at,
+        updated: data.updated_at,
+        url: data.html_url,
+      });
+    }
+
+    // List issues (default)
+    const limit = parseInt(flags.limit) || 10;
+    const query = {
+      per_page: limit,
+      state: flags.state || 'open',
+      sort: flags.sort || 'created',
+      direction: flags.direction || 'desc',
+    };
+    if (flags.labels) query.labels = flags.labels;
+    if (flags.assignee) query.assignee = flags.assignee;
+    if (flags.creator) query.creator = flags.creator;
+
+    const data = await github('GET', `/repos/${owner}/${repoName}/issues`, null, query);
+    // Filter out pull requests (GitHub API returns PRs in issues endpoint)
+    const issues = data.filter(i => !i.pull_request);
+    return ok(issues.map(i => ({
+      number: i.number,
+      title: i.title,
+      state: i.state,
+      author: i.user?.login,
+      labels: i.labels?.map(l => l.name),
+      comments: i.comments,
+      created: i.created_at,
+      updated: i.updated_at,
+    })));
+  }
+
+  // ===================== PULL REQUESTS =====================
+  if (resource === 'prs') {
+    const repo = requireRepo(flags);
+    const [owner, repoName] = repo.split('/');
+
+    // Create PR
+    if (flags.create) {
+      const body = { title: flags.create };
+      if (flags.body) body.body = flags.body;
+      body.base = flags.base || 'main';
+      if (!flags.head) fail('Usage: jeriko github prs --create "title" --head feature-branch [--base main] [--body "text"] [--repo owner/repo]');
+      body.head = flags.head;
+      if (flags.draft === true || flags.draft === 'true') body.draft = true;
+      const data = await github('POST', `/repos/${owner}/${repoName}/pulls`, body);
+      return ok({
+        number: data.number,
+        title: data.title,
+        url: data.html_url,
+        state: data.state,
+        draft: data.draft,
+        created: data.created_at,
+      });
+    }
+
+    // Merge PR
+    if (flags.merge) {
+      const num = parseInt(flags.merge);
+      const body = {};
+      if (flags['merge-method']) body.merge_method = flags['merge-method']; // merge, squash, rebase
+      if (flags['commit-title']) body.commit_title = flags['commit-title'];
+      if (flags['commit-message']) body.commit_message = flags['commit-message'];
+      const data = await github('PUT', `/repos/${owner}/${repoName}/pulls/${num}/merge`, body);
+      return ok({
+        merged: data.merged,
+        message: data.message,
+        sha: data.sha,
+      });
+    }
+
+    // View single PR
+    if (flags.view) {
+      const num = parseInt(flags.view);
+      const data = await github('GET', `/repos/${owner}/${repoName}/pulls/${num}`);
+      return ok({
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        draft: data.draft,
+        author: data.user?.login,
+        body: data.body,
+        base: data.base?.ref,
+        head: data.head?.ref,
+        mergeable: data.mergeable,
+        merged: data.merged,
+        additions: data.additions,
+        deletions: data.deletions,
+        changed_files: data.changed_files,
+        comments: data.comments,
+        review_comments: data.review_comments,
+        created: data.created_at,
+        updated: data.updated_at,
+        url: data.html_url,
+      });
+    }
+
+    // Close PR
+    if (flags.close) {
+      const num = parseInt(flags.close);
+      const data = await github('PATCH', `/repos/${owner}/${repoName}/pulls/${num}`, { state: 'closed' });
+      return ok({
+        number: data.number,
+        title: data.title,
+        state: data.state,
+        closed: true,
+      });
+    }
+
+    // List PRs (default)
+    const limit = parseInt(flags.limit) || 10;
+    const query = {
+      per_page: limit,
+      state: flags.state || 'open',
+      sort: flags.sort || 'created',
+      direction: flags.direction || 'desc',
+    };
+    if (flags.base) query.base = flags.base;
+    if (flags.head) query.head = flags.head;
+
+    const data = await github('GET', `/repos/${owner}/${repoName}/pulls`, null, query);
+    return ok(data.map(pr => ({
+      number: pr.number,
+      title: pr.title,
+      state: pr.state,
+      draft: pr.draft,
+      author: pr.user?.login,
+      base: pr.base?.ref,
+      head: pr.head?.ref,
+      created: pr.created_at,
+      updated: pr.updated_at,
+    })));
+  }
+
+  // ===================== ACTIONS =====================
+  if (resource === 'actions') {
+    const repo = requireRepo(flags);
+    const [owner, repoName] = repo.split('/');
+
+    // View specific run
+    if (flags.run) {
+      const runId = parseInt(flags.run);
+      const data = await github('GET', `/repos/${owner}/${repoName}/actions/runs/${runId}`);
+      return ok({
+        id: data.id,
+        name: data.name,
+        status: data.status,
+        conclusion: data.conclusion,
+        branch: data.head_branch,
+        event: data.event,
+        actor: data.actor?.login,
+        started: data.run_started_at,
+        updated: data.updated_at,
+        url: data.html_url,
+        workflow_id: data.workflow_id,
+        run_number: data.run_number,
+        run_attempt: data.run_attempt,
+      });
+    }
+
+    // List jobs for a run
+    if (flags.jobs) {
+      const runId = parseInt(flags.jobs);
+      const data = await github('GET', `/repos/${owner}/${repoName}/actions/runs/${runId}/jobs`, null, {
+        per_page: parseInt(flags.limit) || 20,
+      });
+      return ok(data.jobs.map(j => ({
+        id: j.id,
+        name: j.name,
+        status: j.status,
+        conclusion: j.conclusion,
+        started: j.started_at,
+        completed: j.completed_at,
+        steps: j.steps?.map(s => ({ name: s.name, status: s.status, conclusion: s.conclusion })),
+      })));
+    }
+
+    // Re-run a workflow
+    if (flags.rerun) {
+      const runId = parseInt(flags.rerun);
+      await github('POST', `/repos/${owner}/${repoName}/actions/runs/${runId}/rerun`);
+      return ok({ id: runId, rerun: true });
+    }
+
+    // Cancel a run
+    if (flags.cancel) {
+      const runId = parseInt(flags.cancel);
+      await github('POST', `/repos/${owner}/${repoName}/actions/runs/${runId}/cancel`);
+      return ok({ id: runId, cancelled: true });
+    }
+
+    // List workflow runs (default)
+    const limit = parseInt(flags.limit) || 10;
+    const query = { per_page: limit };
+    if (flags.branch) query.branch = flags.branch;
+    if (flags.status) query.status = flags.status;
+    if (flags.event) query.event = flags.event;
+    if (flags.workflow) query.workflow_id = flags.workflow;
+
+    const data = await github('GET', `/repos/${owner}/${repoName}/actions/runs`, null, query);
+    return ok(data.workflow_runs.map(r => ({
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      conclusion: r.conclusion,
+      branch: r.head_branch,
+      event: r.event,
+      actor: r.actor?.login,
+      started: r.run_started_at,
+      updated: r.updated_at,
+      url: r.html_url,
+    })));
+  }
+
+  // ===================== RELEASES =====================
+  if (resource === 'releases') {
+    const repo = requireRepo(flags);
+    const [owner, repoName] = repo.split('/');
+
+    // Create release
+    if (flags.create) {
+      const body = { tag_name: flags.create };
+      if (flags.title) body.name = flags.title;
+      if (flags.notes) body.body = flags.notes;
+      if (flags.target) body.target_commitish = flags.target;
+      if (flags.draft === true || flags.draft === 'true') body.draft = true;
+      if (flags.prerelease === true || flags.prerelease === 'true') body.prerelease = true;
+      const data = await github('POST', `/repos/${owner}/${repoName}/releases`, body);
+      return ok({
+        id: data.id,
+        tag: data.tag_name,
+        name: data.name,
+        draft: data.draft,
+        prerelease: data.prerelease,
+        url: data.html_url,
+        created: data.created_at,
+      });
+    }
+
+    // View specific release
+    if (flags.view) {
+      const tag = flags.view;
+      let data;
+      if (/^\d+$/.test(tag)) {
+        data = await github('GET', `/repos/${owner}/${repoName}/releases/${tag}`);
+      } else {
+        data = await github('GET', `/repos/${owner}/${repoName}/releases/tags/${tag}`);
+      }
+      return ok({
+        id: data.id,
+        tag: data.tag_name,
+        name: data.name,
+        body: data.body,
+        draft: data.draft,
+        prerelease: data.prerelease,
+        author: data.author?.login,
+        assets: data.assets?.map(a => ({
+          name: a.name,
+          size: a.size,
+          download_count: a.download_count,
+          url: a.browser_download_url,
+        })),
+        created: data.created_at,
+        published: data.published_at,
+        url: data.html_url,
+      });
+    }
+
+    // Delete release
+    if (flags.delete) {
+      const id = parseInt(flags.delete);
+      await github('DELETE', `/repos/${owner}/${repoName}/releases/${id}`);
+      return ok({ id, deleted: true });
+    }
+
+    // Latest release
+    if (flags.latest) {
+      const data = await github('GET', `/repos/${owner}/${repoName}/releases/latest`);
+      return ok({
+        id: data.id,
+        tag: data.tag_name,
+        name: data.name,
+        body: data.body,
+        draft: data.draft,
+        prerelease: data.prerelease,
+        author: data.author?.login,
+        assets: data.assets?.map(a => ({
+          name: a.name,
+          size: a.size,
+          download_count: a.download_count,
+          url: a.browser_download_url,
+        })),
+        created: data.created_at,
+        published: data.published_at,
+        url: data.html_url,
+      });
+    }
+
+    // List releases (default)
+    const limit = parseInt(flags.limit) || 10;
+    const data = await github('GET', `/repos/${owner}/${repoName}/releases`, null, {
+      per_page: limit,
+    });
+    return ok(data.map(r => ({
+      id: r.id,
+      tag: r.tag_name,
+      name: r.name,
+      draft: r.draft,
+      prerelease: r.prerelease,
+      author: r.author?.login,
+      created: r.created_at,
+      url: r.html_url,
+    })));
+  }
+
+  // ===================== GISTS =====================
+  if (resource === 'gists') {
+    // Create gist
+    if (flags.create) {
+      const filename = flags.create;
+      let content = flags.content || '';
+
+      // Read from stdin if no --content
+      if (!content) {
+        const { readStdin } = require('../lib/cli');
+        content = await readStdin();
+        if (!content) fail('Usage: jeriko github gists --create "file.js" --content "code" [--desc "description"] or pipe content via stdin');
+      }
+
+      const body = {
+        files: { [filename]: { content } },
+        public: flags.public === true || flags.public === 'true',
+      };
+      if (flags.desc || flags.description) body.description = flags.desc || flags.description;
+
+      const data = await github('POST', '/gists', body);
+      return ok({
+        id: data.id,
+        url: data.html_url,
+        files: Object.keys(data.files),
+        public: data.public,
+        created: data.created_at,
+      });
+    }
+
+    // View specific gist
+    if (flags.view) {
+      const data = await github('GET', `/gists/${flags.view}`);
+      return ok({
+        id: data.id,
+        description: data.description,
+        url: data.html_url,
+        public: data.public,
+        files: Object.entries(data.files).map(([name, f]) => ({
+          name,
+          language: f.language,
+          size: f.size,
+          content: f.content,
+        })),
+        created: data.created_at,
+        updated: data.updated_at,
+      });
+    }
+
+    // Delete gist
+    if (flags.delete) {
+      await github('DELETE', `/gists/${flags.delete}`);
+      return ok({ id: flags.delete, deleted: true });
+    }
+
+    // List gists (default)
+    const limit = parseInt(flags.limit) || 10;
+    const data = await github('GET', '/gists', null, {
+      per_page: limit,
+    });
+    return ok(data.map(g => ({
+      id: g.id,
+      description: g.description,
+      files: Object.keys(g.files),
+      public: g.public,
+      created: g.created_at,
+      updated: g.updated_at,
+      url: g.html_url,
+    })));
+  }
+
+  // ===================== SEARCH =====================
+  if (resource === 'search') {
+    const query = action || positional[0] || flags.query;
+    if (!query) fail('Usage: jeriko github search "query" [--code] [--issues] [--users] [--limit N]');
+
+    const limit = parseInt(flags.limit) || 10;
+
+    if (flags.code) {
+      // Search code
+      const data = await github('GET', '/search/code', null, {
+        q: query, per_page: limit,
+      });
+      return ok({
+        total: data.total_count,
+        items: data.items.map(i => ({
+          name: i.name,
+          path: i.path,
+          repo: i.repository?.full_name,
+          url: i.html_url,
+          score: i.score,
+        })),
+      });
+    }
+
+    if (flags.issues) {
+      // Search issues/PRs
+      const data = await github('GET', '/search/issues', null, {
+        q: query, per_page: limit, sort: flags.sort || 'best-match',
+      });
+      return ok({
+        total: data.total_count,
+        items: data.items.map(i => ({
+          number: i.number,
+          title: i.title,
+          state: i.state,
+          repo: i.repository_url?.replace('https://api.github.com/repos/', ''),
+          author: i.user?.login,
+          created: i.created_at,
+          url: i.html_url,
+        })),
+      });
+    }
+
+    if (flags.users) {
+      // Search users
+      const data = await github('GET', '/search/users', null, {
+        q: query, per_page: limit,
+      });
+      return ok({
+        total: data.total_count,
+        items: data.items.map(u => ({
+          login: u.login,
+          type: u.type,
+          url: u.html_url,
+          score: u.score,
+        })),
+      });
+    }
+
+    // Default: search repositories
+    const data = await github('GET', '/search/repositories', null, {
+      q: query, per_page: limit, sort: flags.sort || 'best-match',
+    });
+    return ok({
+      total: data.total_count,
+      items: data.items.map(r => ({
+        name: r.full_name,
+        description: r.description,
+        language: r.language,
+        stars: r.stargazers_count,
+        forks: r.forks_count,
+        updated: r.updated_at,
+        url: r.html_url,
+      })),
+    });
+  }
+
+  // ===================== CLONE =====================
+  if (resource === 'clone') {
+    const repoArg = action || positional[0] || flags.repo;
+    if (!repoArg) fail('Usage: jeriko github clone "owner/repo" [--dest path] [--depth N]');
+
+    if (!repoArg.includes('/')) fail('Invalid repo format. Expected owner/repo');
+    const cloneUrl = `https://github.com/${repoArg}.git`;
+    const dest = flags.dest || flags.to || repoArg.split('/')[1];
+
+    const { execSync } = require('child_process');
+    try {
+      const parts = ['git', 'clone'];
+      if (flags.depth) parts.push('--depth', String(parseInt(flags.depth)));
+      if (flags.branch) parts.push('--branch', flags.branch);
+      parts.push(cloneUrl, dest);
+      execSync(parts.join(' '), { stdio: 'pipe', cwd: flags.cwd || process.cwd() });
+      return ok({
+        repo: repoArg,
+        url: cloneUrl,
+        dest: path.resolve(flags.cwd || process.cwd(), dest),
+        cloned: true,
+      });
+    } catch (err) {
+      fail(`Clone failed: ${err.stderr?.toString().trim() || err.message}`);
+    }
+  }
+
+  fail(`Unknown command: github ${resource} ${action || ''}\nRun "jeriko github" for usage.`);
+});

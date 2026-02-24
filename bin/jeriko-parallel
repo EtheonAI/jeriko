@@ -1,0 +1,156 @@
+#!/usr/bin/env node
+const { parseArgs, ok, fail, readStdin, run, EXIT } = require('../lib/cli');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+
+run(async () => {
+  const { flags, positional } = parseArgs(process.argv);
+
+  // Read tasks from --tasks flag or stdin
+  let tasksJSON;
+  if (flags.tasks) {
+    tasksJSON = flags.tasks;
+  } else {
+    const stdin = await readStdin(5000);
+    if (stdin) tasksJSON = stdin.trim();
+  }
+
+  if (!tasksJSON) {
+    fail('Usage: jeriko parallel --tasks \'[{"task_id":"t1","prompt":"..."}]\'\n       echo \'<json>\' | jeriko parallel');
+  }
+
+  let tasks;
+  try {
+    const parsed = JSON.parse(tasksJSON);
+    // Accept either raw array or {tasks:[...]} wrapper
+    tasks = Array.isArray(parsed) ? parsed : parsed.tasks;
+    if (!Array.isArray(tasks)) throw new Error('tasks must be an array');
+  } catch (e) {
+    fail(`Invalid tasks JSON: ${e.message}`);
+  }
+
+  if (tasks.length === 0) fail('No tasks provided');
+
+  // Resolve config from .env + flags
+  const backend = flags.backend || process.env.AI_BACKEND || 'claude';
+  const maxWorkers = parseInt(flags.workers || flags['max-workers']) || 4;
+  const maxTokens = parseInt(flags['max-tokens']) || 4096;
+  const model = flags.model;
+
+  let apiURL, apiFormat, apiKey, modelName;
+
+  switch (backend) {
+    case 'claude':
+    case 'claude-code':
+      apiFormat = 'anthropic';
+      apiURL = 'https://api.anthropic.com/v1/messages';
+      apiKey = process.env.ANTHROPIC_API_KEY;
+      modelName = model || process.env.CLAUDE_MODEL || 'claude-sonnet-4-20250514';
+      if (!apiKey) fail('ANTHROPIC_API_KEY not set. Add it to .env', EXIT.AUTH);
+      break;
+
+    case 'openai':
+      apiFormat = 'openai';
+      apiURL = 'https://api.openai.com/v1/chat/completions';
+      apiKey = process.env.OPENAI_API_KEY;
+      modelName = model || process.env.OPENAI_MODEL || 'gpt-4o';
+      if (!apiKey) fail('OPENAI_API_KEY not set. Add it to .env', EXIT.AUTH);
+      break;
+
+    case 'local':
+      apiFormat = 'openai';
+      apiURL = (process.env.LOCAL_MODEL_URL || 'http://localhost:11434/v1').replace(/\/$/, '') + '/chat/completions';
+      apiKey = process.env.LOCAL_API_KEY || '';
+      modelName = model || process.env.LOCAL_MODEL || 'llama3.2';
+      break;
+
+    case 'custom':
+      apiFormat = flags['api-format'] || process.env.PARALLEL_API_FORMAT || 'openai';
+      apiURL = flags['api-url'] || process.env.PARALLEL_API_URL;
+      apiKey = flags['api-key'] || process.env.PARALLEL_API_KEY || '';
+      modelName = model || 'default';
+      if (!apiURL) fail('Custom backend requires --api-url or PARALLEL_API_URL', EXIT.AUTH);
+      break;
+
+    default:
+      // Try as openai-compatible with the backend name as a hint
+      apiFormat = 'openai';
+      apiURL = process.env.PARALLEL_API_URL || 'https://api.openai.com/v1/chat/completions';
+      apiKey = process.env.PARALLEL_API_KEY || process.env.OPENAI_API_KEY || '';
+      modelName = model || backend;
+  }
+
+  // Build input for Go binary
+  const input = {
+    tasks,
+    config: {
+      api_url: apiURL,
+      api_format: apiFormat,
+      api_key: apiKey,
+      model: modelName,
+      max_workers: maxWorkers,
+      max_tokens: maxTokens,
+      headers: {},
+    },
+  };
+
+  // Find Go binary
+  const platform = os.platform() === 'win32' ? 'windows' : os.platform();
+  const arch = os.arch() === 'arm64' ? 'arm64' : 'amd64';
+  const runtimeDir = path.join(__dirname, '..', 'runtime');
+
+  const candidates = [
+    path.join(runtimeDir, `parallel-engine-${platform}-${arch}${platform === 'windows' ? '.exe' : ''}`),
+    path.join(runtimeDir, 'parallel-engine'),
+  ];
+
+  let binaryPath;
+  for (const c of candidates) {
+    if (fs.existsSync(c)) { binaryPath = c; break; }
+  }
+
+  if (!binaryPath) {
+    fail('Parallel engine binary not found. Run: cd runtime && go build -ldflags="-s -w" -o parallel-engine main.go', EXIT.NOT_FOUND);
+  }
+
+  // Spawn Go binary with JSON on stdin
+  const result = await new Promise((resolve, reject) => {
+    const proc = spawn(binaryPath, [], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const chunks = [];
+    const errChunks = [];
+
+    proc.stdout.on('data', (d) => chunks.push(d.toString()));
+    proc.stderr.on('data', (d) => errChunks.push(d.toString()));
+
+    proc.on('close', (code) => {
+      const stdout = chunks.join('');
+      const stderr = errChunks.join('');
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve(parsed);
+      } catch {
+        reject(new Error(stderr || stdout || `parallel-engine exited with code ${code}`));
+      }
+    });
+
+    proc.on('error', (err) => reject(err));
+
+    proc.stdin.write(JSON.stringify(input));
+    proc.stdin.end();
+  });
+
+  if (!result.ok) {
+    fail(result.error || 'Parallel engine failed');
+  }
+
+  ok({
+    completed: result.results.length,
+    tasks: tasks.length,
+    results: result.results,
+  });
+});

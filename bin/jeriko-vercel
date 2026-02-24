@@ -1,0 +1,714 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-vercel — Full Vercel CLI built on Vercel REST API
+// Standalone CLI: jeriko vercel <resource> <action> [flags]
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const https = require('https');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
+
+const BASE = 'https://api.vercel.com';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Colors
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+function getToken() {
+  return process.env.VERCEL_TOKEN;
+}
+
+function requireToken() {
+  const token = getToken();
+  if (!token) {
+    fail('VERCEL_TOKEN not set. Run: jeriko vercel init', EXIT.AUTH);
+  }
+  return token;
+}
+
+// ---- .env helpers ----
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  // Also set in current process
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
+// ---- HTTP helper ----
+
+async function vercel(method, urlPath, body = null, query = {}) {
+  const token = requireToken();
+  const url = new URL(urlPath.startsWith('http') ? urlPath : `${BASE}${urlPath}`);
+
+  // Add query params
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+  }
+
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname + url.search,
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    };
+
+    const payload = body ? JSON.stringify(body) : null;
+    if (payload) {
+      opts.headers['Content-Length'] = Buffer.byteLength(payload);
+    }
+
+    const req = https.request(opts, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = { message: raw };
+        }
+
+        if (res.statusCode >= 400) {
+          const msg = data.error?.message || data.message || JSON.stringify(data);
+          const code = res.statusCode === 401 || res.statusCode === 403 ? EXIT.AUTH
+            : res.statusCode === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+          fail(`Vercel ${res.statusCode}: ${msg}`, code);
+        }
+        resolve(data);
+      });
+    });
+
+    req.on('error', (err) => {
+      if (err.code === 'ETIMEDOUT' || err.code === 'ESOCKETTIMEDOUT') {
+        fail(`Vercel request timed out: ${err.message}`, EXIT.TIMEOUT);
+      }
+      fail(`Vercel request failed: ${err.message}`, EXIT.NETWORK);
+    });
+
+    req.setTimeout(30000, () => {
+      req.destroy();
+      fail('Vercel request timed out', EXIT.TIMEOUT);
+    });
+
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+// Helper for verification during init (before token is in env)
+async function vercelRaw(method, urlPath, token) {
+  const url = new URL(`${BASE}${urlPath}`);
+  return new Promise((resolve, reject) => {
+    const opts = {
+      hostname: url.hostname,
+      port: 443,
+      path: url.pathname + url.search,
+      method,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    };
+
+    const req = https.request(opts, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const raw = Buffer.concat(chunks).toString();
+        let data;
+        try {
+          data = JSON.parse(raw);
+        } catch {
+          data = { message: raw };
+        }
+        resolve({ status: res.statusCode, data });
+      });
+    });
+
+    req.on('error', (err) => reject(err));
+    req.setTimeout(15000, () => {
+      req.destroy();
+      reject(new Error('Timed out'));
+    });
+    req.end();
+  });
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const resource = args[0];
+  // Parse flags from everything after resource so init --token works
+  const { flags, positional: allPositional } = parseArgs(['', '', ...args.slice(1)]);
+  const action = allPositional[0];
+  const positional = allPositional.slice(1);
+
+  if (!resource) {
+    return ok({
+      usage: 'jeriko vercel <resource> [action] [flags]',
+      resources: {
+        init: 'interactive setup wizard',
+        projects: 'list Vercel projects',
+        deployments: 'list deployments',
+        deploy: 'create deployment or trigger deploy hook',
+        domains: 'list domains',
+        env: 'manage project environment variables',
+        logs: 'view deployment logs',
+        dns: 'manage DNS records',
+        certs: 'list SSL certificates',
+        promote: 'promote deployment to production',
+        delete: 'delete a deployment',
+        user: 'current user info',
+      },
+    });
+  }
+
+  // ===================== INIT =====================
+  if (resource === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}Vercel Setup${C.reset}\n`);
+    w(`  ${C.dim}Deployments, domains, environment variables${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko vercel init --token xxx
+    if (flags.token) {
+      writeEnvKey('VERCEL_TOKEN', flags.token);
+      // Verify
+      try {
+        const res = await vercelRaw('GET', '/v2/user', flags.token);
+        if (res.status >= 400) throw new Error(`HTTP ${res.status}`);
+        const username = res.data.user?.username || res.data.user?.name || 'unknown';
+        w(`  ${C.green}[ok]${C.reset} VERCEL_TOKEN verified (user: ${username})\n`);
+        w(`  ${C.green}[ok]${C.reset} Saved to .env\n\n`);
+      } catch (e) {
+        w(`  ${C.red}[!!]${C.reset} Token saved but verification failed: ${e.message}\n\n`);
+      }
+      return ok({ status: 'configured' });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+    const existing = env.VERCEL_TOKEN;
+
+    let token;
+    if (existing) {
+      w(`  ${C.dim}Current token: ${maskKey(existing)}${C.reset}\n`);
+      const keep = await ask(rl, 'Keep existing token? (Y/n)', 'Y');
+      if (keep.toLowerCase() === 'n') {
+        w(`\n  ${C.dim}Create a token at: https://vercel.com/account/tokens${C.reset}\n`);
+        w(`  ${C.dim}Select scope "Full Account" for all features${C.reset}\n\n`);
+        token = await ask(rl, 'Vercel Token:');
+      } else {
+        token = existing;
+      }
+    } else {
+      w(`  ${C.dim}Create a token at: https://vercel.com/account/tokens${C.reset}\n`);
+      w(`  ${C.dim}Select scope "Full Account" for all features${C.reset}\n\n`);
+      token = await ask(rl, 'Vercel Token:');
+    }
+
+    if (!token) {
+      w(`\n  ${C.dim}Skipped — no token provided${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    // Verify
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    let verified = false;
+    let username = '';
+    try {
+      const res = await vercelRaw('GET', '/v2/user', token);
+      clearInterval(spin);
+      if (res.status < 400 && res.data.user) {
+        verified = true;
+        username = res.data.user.username || res.data.user.name || '';
+        process.stderr.write(`\r  ${C.green}[ok]${C.reset} Token verified (user: ${username})${' '.repeat(20)}\n`);
+        if (res.data.user.email) {
+          w(`  ${C.green}[ok]${C.reset} Email: ${res.data.user.email}\n`);
+        }
+      } else {
+        const msg = res.data.error?.message || `HTTP ${res.status}`;
+        process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${msg}${' '.repeat(20)}\n`);
+      }
+    } catch (e) {
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed: ${e.message}${' '.repeat(20)}\n`);
+    }
+
+    writeEnvKey('VERCEL_TOKEN', token);
+    w(`  ${C.green}[ok]${C.reset} VERCEL_TOKEN saved to .env\n`);
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko vercel projects${C.reset}         ${C.dim}# list projects${C.reset}\n`);
+    w(`    ${C.cyan}jeriko vercel deployments${C.reset}      ${C.dim}# list deployments${C.reset}\n`);
+    w(`    ${C.cyan}jeriko vercel domains${C.reset}           ${C.dim}# list domains${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured', verified, username });
+  }
+
+  // ===================== USER =====================
+  if (resource === 'user') {
+    const data = await vercel('GET', '/v2/user');
+    const u = data.user;
+    return ok({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      email: u.email,
+      avatar: u.avatar,
+      defaultTeamId: u.defaultTeamId,
+    });
+  }
+
+  // ===================== PROJECTS =====================
+  if (resource === 'projects') {
+    const query = { limit: flags.limit || 20 };
+    const data = await vercel('GET', '/v9/projects', null, query);
+    const projects = data.projects || [];
+    return ok(projects.map(p => ({
+      id: p.id,
+      name: p.name,
+      framework: p.framework || null,
+      updatedAt: p.updatedAt ? new Date(p.updatedAt).toISOString() : null,
+      targets: p.targets ? Object.keys(p.targets) : [],
+      nodeVersion: p.nodeVersion || null,
+      buildCommand: p.buildCommand || null,
+      outputDirectory: p.outputDirectory || null,
+    })));
+  }
+
+  // ===================== DEPLOYMENTS =====================
+  if (resource === 'deployments') {
+    const query = { limit: flags.limit || 20 };
+    if (flags.project) query.projectId = flags.project;
+    if (flags.state) query.state = flags.state;
+    const data = await vercel('GET', '/v6/deployments', null, query);
+    const deployments = data.deployments || [];
+    return ok(deployments.map(d => ({
+      uid: d.uid,
+      name: d.name,
+      url: d.url,
+      state: d.state || d.readyState,
+      created: d.created ? new Date(d.created).toISOString() : null,
+      source: d.source || null,
+      target: d.target || null,
+      inspectorUrl: d.inspectorUrl || null,
+    })));
+  }
+
+  // ===================== DEPLOY =====================
+  if (resource === 'deploy') {
+    // If --hook is provided, trigger a deploy hook
+    if (flags.hook) {
+      const hookUrl = flags.hook;
+      return new Promise((resolve, reject) => {
+        const url = new URL(hookUrl);
+        const opts = {
+          hostname: url.hostname,
+          port: 443,
+          path: url.pathname + url.search,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        };
+        const req = https.request(opts, (res) => {
+          const chunks = [];
+          res.on('data', (chunk) => chunks.push(chunk));
+          res.on('end', () => {
+            const raw = Buffer.concat(chunks).toString();
+            let data;
+            try { data = JSON.parse(raw); } catch { data = { message: raw }; }
+            if (res.statusCode >= 400) {
+              fail(`Deploy hook failed (${res.statusCode}): ${data.error?.message || raw}`, EXIT.GENERAL);
+            }
+            ok({
+              triggered: true,
+              job: data.job || null,
+              url: data.url || null,
+              id: data.id || null,
+            });
+          });
+        });
+        req.on('error', (err) => fail(`Deploy hook request failed: ${err.message}`, EXIT.NETWORK));
+        req.setTimeout(30000, () => { req.destroy(); fail('Deploy hook timed out', EXIT.TIMEOUT); });
+        req.end();
+      });
+    }
+
+    // POST /v13/deployments — create a deployment
+    if (!flags.project) {
+      fail('Usage: jeriko vercel deploy --project <name> [--prod] [--hook <url>]\n  --project  Project name (required unless --hook)\n  --prod     Deploy to production\n  --hook     Trigger a deploy hook URL instead');
+    }
+
+    const body = {
+      name: flags.project,
+      target: flags.prod ? 'production' : (flags.target || 'preview'),
+    };
+
+    // If --git-source is provided, deploy from git
+    if (flags.ref || flags.repo) {
+      body.gitSource = {};
+      if (flags.ref) body.gitSource.ref = flags.ref;
+      if (flags.repo) body.gitSource.repoId = flags.repo;
+      if (flags.type) body.gitSource.type = flags.type;
+    }
+
+    const data = await vercel('POST', '/v13/deployments', body);
+    return ok({
+      id: data.id,
+      url: data.url,
+      readyState: data.readyState,
+      target: data.target || null,
+      inspectorUrl: data.inspectorUrl || null,
+    });
+  }
+
+  // ===================== DOMAINS =====================
+  if (resource === 'domains') {
+    if (action === 'add') {
+      if (!flags.name) fail('Usage: jeriko vercel domains add --name example.com');
+      const data = await vercel('POST', '/v5/domains', { name: flags.name });
+      return ok({
+        name: data.domain?.name || data.name,
+        configured: data.domain?.configured,
+        verified: data.domain?.verified,
+      });
+    }
+
+    if (action === 'delete' || action === 'remove') {
+      const name = flags.name || positional[0];
+      if (!name) fail('Usage: jeriko vercel domains delete --name example.com');
+      const data = await vercel('DELETE', `/v6/domains/${name}`);
+      return ok({ name, deleted: true });
+    }
+
+    // Default: list
+    const query = { limit: flags.limit || 20 };
+    const data = await vercel('GET', '/v5/domains', null, query);
+    const domains = data.domains || [];
+    return ok(domains.map(d => ({
+      name: d.name,
+      configured: d.configured !== false,
+      verified: d.verified !== false,
+      cdnEnabled: d.cdnEnabled || false,
+      createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null,
+      expiresAt: d.expiresAt ? new Date(d.expiresAt).toISOString() : null,
+    })));
+  }
+
+  // ===================== ENV =====================
+  if (resource === 'env') {
+    if (!flags.project) {
+      fail('Usage: jeriko vercel env --project <name> [--set KEY --value VAL] [--delete KEY]');
+    }
+
+    const projectId = encodeURIComponent(flags.project);
+
+    // Set env var
+    if (flags.set) {
+      const key = flags.set;
+      const value = flags.value;
+      if (!value && value !== '') fail('Usage: jeriko vercel env --project <name> --set KEY --value VAL');
+      const targets = flags.target ? [flags.target] : ['production', 'preview', 'development'];
+      const envType = flags.type || 'encrypted';
+      const data = await vercel('POST', `/v10/projects/${projectId}/env`, {
+        key,
+        value,
+        target: targets,
+        type: envType,
+      });
+      return ok({
+        key: data.key,
+        target: data.target,
+        type: data.type,
+        created: true,
+      });
+    }
+
+    // Delete env var
+    if (flags.delete) {
+      const envKey = flags.delete;
+      // First find the env var ID
+      const list = await vercel('GET', `/v1/projects/${projectId}/env`, null, {});
+      const envVars = list.envs || [];
+      const found = envVars.find(e => e.key === envKey);
+      if (!found) fail(`Env var "${envKey}" not found in project "${flags.project}"`, EXIT.NOT_FOUND);
+      await vercel('DELETE', `/v1/projects/${projectId}/env/${found.id}`);
+      return ok({ key: envKey, id: found.id, deleted: true });
+    }
+
+    // List env vars
+    const data = await vercel('GET', `/v1/projects/${projectId}/env`, null, {});
+    const envVars = data.envs || [];
+    return ok(envVars.map(e => ({
+      id: e.id,
+      key: e.key,
+      value: e.value || '(encrypted)',
+      target: e.target,
+      type: e.type,
+      configurationId: e.configurationId || null,
+      updatedAt: e.updatedAt ? new Date(e.updatedAt).toISOString() : null,
+    })));
+  }
+
+  // ===================== LOGS =====================
+  if (resource === 'logs') {
+    if (!flags.deployment) {
+      fail('Usage: jeriko vercel logs --deployment <id>');
+    }
+
+    const deploymentId = encodeURIComponent(flags.deployment);
+    const query = {};
+    if (flags.limit) query.limit = flags.limit;
+    if (flags.since) query.since = flags.since;
+    if (flags.until) query.until = flags.until;
+    if (flags.direction) query.direction = flags.direction;
+
+    const data = await vercel('GET', `/v2/deployments/${deploymentId}/events`, null, query);
+    const events = Array.isArray(data) ? data : (data.events || data || []);
+    return ok(events.map(e => ({
+      id: e.id || null,
+      date: e.date || e.created,
+      text: e.text || e.payload?.text || e.message || '',
+      type: e.type || null,
+      source: e.source || null,
+    })));
+  }
+
+  // ===================== DNS =====================
+  if (resource === 'dns') {
+    if (!flags.domain) {
+      fail('Usage: jeriko vercel dns --domain <name> [--create --type A --name sub --value 1.2.3.4]');
+    }
+
+    const domain = encodeURIComponent(flags.domain);
+
+    // Create DNS record
+    if (flags.create) {
+      if (!flags.type || !flags.value) {
+        fail('Usage: jeriko vercel dns --domain <name> --create --type A --name sub --value 1.2.3.4');
+      }
+      const body = {
+        type: flags.type,
+        name: flags.name || '',
+        value: flags.value,
+      };
+      if (flags.ttl) body.ttl = parseInt(flags.ttl);
+      if (flags.priority) body.mxPriority = parseInt(flags.priority);
+      if (flags.srv) body.srv = JSON.parse(flags.srv);
+      const data = await vercel('POST', `/v4/domains/${domain}/records`, body);
+      return ok({
+        uid: data.uid,
+        created: true,
+      });
+    }
+
+    // Delete DNS record
+    if (flags['delete-record']) {
+      const recordId = flags['delete-record'];
+      await vercel('DELETE', `/v2/domains/${domain}/records/${recordId}`);
+      return ok({ recordId, deleted: true });
+    }
+
+    // List DNS records
+    const query = { limit: flags.limit || 50 };
+    const data = await vercel('GET', `/v4/domains/${domain}/records`, null, query);
+    const records = data.records || [];
+    return ok(records.map(r => ({
+      id: r.id,
+      name: r.name,
+      type: r.type,
+      value: r.value,
+      ttl: r.ttl || null,
+      priority: r.mxPriority || null,
+      createdAt: r.createdAt ? new Date(r.createdAt).toISOString() : null,
+    })));
+  }
+
+  // ===================== CERTS =====================
+  if (resource === 'certs') {
+    const query = { limit: flags.limit || 20 };
+    const data = await vercel('GET', '/v4/certs', null, query);
+    const certs = data.certs || [];
+    return ok(certs.map(c => ({
+      id: c.id,
+      cns: c.cns,
+      createdAt: c.createdAt ? new Date(c.createdAt).toISOString() : null,
+      expiresAt: c.expiresAt ? new Date(c.expiresAt).toISOString() : null,
+      autoRenew: c.autoRenew || false,
+    })));
+  }
+
+  // ===================== PROMOTE =====================
+  if (resource === 'promote') {
+    if (!flags.deployment) {
+      fail('Usage: jeriko vercel promote --deployment <id> [--project <name>]');
+    }
+
+    // Promote a deployment to production using the alias API
+    // The canonical way is to create an alias pointing the production domain to this deployment
+    if (flags.project) {
+      const projectId = encodeURIComponent(flags.project);
+      const data = await vercel('POST', `/v10/projects/${projectId}/promote/${encodeURIComponent(flags.deployment)}`);
+      return ok({
+        deploymentId: flags.deployment,
+        promoted: true,
+        jobId: data.jobId || null,
+      });
+    }
+
+    // Alternative: use the deployment ID directly with alias
+    // POST /v2/deployments/{id}/aliases
+    // We need the production domain, so require --project or --alias
+    if (flags.alias) {
+      const data = await vercel('POST', `/v2/deployments/${encodeURIComponent(flags.deployment)}/aliases`, {
+        alias: flags.alias,
+      });
+      return ok({
+        uid: data.uid,
+        alias: data.alias,
+        deploymentId: flags.deployment,
+        promoted: true,
+      });
+    }
+
+    // Try the promote endpoint directly
+    const data = await vercel('PATCH', `/v12/deployments/${encodeURIComponent(flags.deployment)}`, {
+      target: 'production',
+    });
+    return ok({
+      id: data.id || flags.deployment,
+      target: 'production',
+      readyState: data.readyState || null,
+      promoted: true,
+    });
+  }
+
+  // ===================== DELETE =====================
+  if (resource === 'delete') {
+    const id = flags.id || flags.deployment || positional[0];
+    if (!id) {
+      fail('Usage: jeriko vercel delete --id <deployment-id>');
+    }
+
+    const query = {};
+    if (flags.url) query.url = flags.url;
+
+    await vercel('DELETE', `/v13/deployments/${encodeURIComponent(id)}`, null, query);
+    return ok({
+      id,
+      deleted: true,
+    });
+  }
+
+  // ===================== ALIASES =====================
+  if (resource === 'aliases') {
+    if (action === 'set') {
+      const deploymentId = flags.deployment || positional[0];
+      const alias = flags.alias || positional[1];
+      if (!deploymentId || !alias) fail('Usage: jeriko vercel aliases set --deployment <id> --alias <domain>');
+      const data = await vercel('POST', `/v2/deployments/${encodeURIComponent(deploymentId)}/aliases`, {
+        alias,
+      });
+      return ok({
+        uid: data.uid,
+        alias: data.alias,
+        deploymentId,
+      });
+    }
+
+    if (action === 'delete' || action === 'remove') {
+      const aliasId = flags.id || positional[0];
+      if (!aliasId) fail('Usage: jeriko vercel aliases delete --id <alias-id>');
+      await vercel('DELETE', `/v2/aliases/${encodeURIComponent(aliasId)}`);
+      return ok({ id: aliasId, deleted: true });
+    }
+
+    // Default: list
+    const query = { limit: flags.limit || 20 };
+    if (flags.project) query.projectId = flags.project;
+    const data = await vercel('GET', '/v4/aliases', null, query);
+    const aliases = data.aliases || [];
+    return ok(aliases.map(a => ({
+      uid: a.uid,
+      alias: a.alias,
+      deploymentId: a.deploymentId,
+      createdAt: a.createdAt ? new Date(a.createdAt).toISOString() : null,
+    })));
+  }
+
+  // ===================== TEAMS =====================
+  if (resource === 'teams') {
+    const query = { limit: flags.limit || 20 };
+    const data = await vercel('GET', '/v2/teams', null, query);
+    const teams = data.teams || [];
+    return ok(teams.map(t => ({
+      id: t.id,
+      name: t.name,
+      slug: t.slug,
+      createdAt: t.createdAt ? new Date(t.createdAt).toISOString() : null,
+    })));
+  }
+
+  fail(`Unknown command: vercel ${resource}${action ? ' ' + action : ''}\nRun "jeriko vercel" for usage.`);
+});

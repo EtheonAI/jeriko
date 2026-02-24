@@ -196,7 +196,75 @@ run(async () => {
     return ok({ status: 'configured' });
   }
 
-  // ===================== NORMAL EMAIL COMMANDS =====================
+  // ===================== SEND EMAIL (SMTP) =====================
+  if (flags.send) {
+    const nodemailer = require('nodemailer');
+
+    const imapHost = process.env.IMAP_HOST || 'imap.gmail.com';
+    const imapUser = process.env.IMAP_USER;
+    const imapPassword = process.env.IMAP_PASSWORD;
+
+    if (!imapUser || !imapPassword) {
+      fail('Email not configured. Run: jeriko email init', EXIT.AUTH);
+    }
+
+    // Auto-detect SMTP from IMAP host
+    const smtpMap = {
+      'imap.gmail.com': { host: 'smtp.gmail.com', port: 587 },
+      'outlook.office365.com': { host: 'smtp.office365.com', port: 587 },
+      'imap.mail.yahoo.com': { host: 'smtp.mail.yahoo.com', port: 587 },
+    };
+
+    const smtpHost = process.env.SMTP_HOST || (smtpMap[imapHost] || {}).host || imapHost.replace('imap.', 'smtp.');
+    const smtpPort = parseInt(process.env.SMTP_PORT) || (smtpMap[imapHost] || {}).port || 587;
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: {
+        user: process.env.SMTP_USER || imapUser,
+        pass: process.env.SMTP_PASSWORD || imapPassword,
+      },
+    });
+
+    const to = typeof flags.send === 'string' ? flags.send : null;
+    if (!to) fail('Usage: jeriko email --send "to@email" --subject "..." --body "..."');
+
+    const subject = flags.subject || '(no subject)';
+
+    // Body from flag, stdin, or empty
+    let body = flags.body || '';
+    if (!body) {
+      const stdin = await readStdin();
+      if (stdin) body = stdin.trim();
+    }
+
+    const mailOpts = {
+      from: process.env.SMTP_FROM || imapUser,
+      to,
+      subject,
+      text: body,
+    };
+
+    // Attachments
+    if (flags.attach) {
+      const attachPath = path.resolve(flags.attach);
+      if (!fs.existsSync(attachPath)) fail(`Attachment not found: ${attachPath}`, EXIT.NOT_FOUND);
+      mailOpts.attachments = [{ path: attachPath }];
+    }
+
+    const info = await transporter.sendMail(mailOpts);
+
+    return ok({
+      messageId: info.messageId,
+      to,
+      subject,
+      accepted: info.accepted,
+    });
+  }
+
+  // ===================== NORMAL EMAIL COMMANDS (IMAP READ) =====================
   const config = {
     user: process.env.IMAP_USER,
     password: process.env.IMAP_PASSWORD,

@@ -1,0 +1,902 @@
+#!/usr/bin/env node
+// ============================================================
+// jeriko-onedrive — Full OneDrive CLI built on Microsoft Graph REST API
+// Standalone CLI: jeriko onedrive <command> [flags]
+// ============================================================
+const { parseArgs, ok, fail, run, EXIT } = require('../lib/cli');
+const https = require('https');
+const http = require('http');
+const readline = require('readline');
+const path = require('path');
+const fs = require('fs');
+
+const GRAPH_BASE = 'https://graph.microsoft.com/v1.0';
+const AUTH_BASE = 'https://login.microsoftonline.com/common/oauth2/v2.0';
+const SCOPES = 'Files.ReadWrite.All offline_access';
+const ENV_PATH = path.join(__dirname, '..', '.env');
+
+// Colors
+const C = {
+  cyan: '\x1b[36m', bold: '\x1b[1m', dim: '\x1b[2m',
+  green: '\x1b[32m', red: '\x1b[31m', yellow: '\x1b[33m',
+  reset: '\x1b[0m',
+};
+
+// ---- .env helpers ----
+
+function readEnv() {
+  if (!fs.existsSync(ENV_PATH)) return {};
+  const lines = fs.readFileSync(ENV_PATH, 'utf-8').split('\n');
+  const env = {};
+  for (const line of lines) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)/);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+  return env;
+}
+
+function writeEnvKey(key, value) {
+  let content = fs.existsSync(ENV_PATH) ? fs.readFileSync(ENV_PATH, 'utf-8') : '';
+  const regex = new RegExp(`^\\s*#?\\s*${key}\\s*=.*$`, 'm');
+  const line = `${key}=${value}`;
+  if (regex.test(content)) {
+    content = content.replace(regex, line);
+    fs.writeFileSync(ENV_PATH, content);
+  } else {
+    fs.appendFileSync(ENV_PATH, (content && !content.endsWith('\n') ? '\n' : '') + line + '\n');
+  }
+  // Also set in current process
+  process.env[key] = value;
+}
+
+function ask(rl, question, defaultValue) {
+  const defLabel = defaultValue !== undefined ? ` ${C.dim}(${defaultValue})${C.reset}` : '';
+  return new Promise((resolve) => {
+    rl.question(`  ${C.cyan}?${C.reset} ${question}${defLabel} `, (answer) => {
+      resolve(answer.trim() || (defaultValue !== undefined ? String(defaultValue) : ''));
+    });
+  });
+}
+
+function maskKey(key) {
+  if (!key || key.length < 10) return '***';
+  return key.slice(0, 8) + '...' + key.slice(-4);
+}
+
+// ---- HTTP helpers ----
+
+// Low-level HTTPS POST for form-encoded auth requests
+function authPost(urlPath, params) {
+  const body = Object.entries(params)
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join('&');
+
+  const url = new URL(`${AUTH_BASE}${urlPath}`);
+
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname + url.search,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, data: JSON.parse(data) });
+        } catch {
+          resolve({ status: res.statusCode, data: { error: 'parse_error', error_description: data.slice(0, 500) } });
+        }
+      });
+    });
+    req.on('error', (err) => reject(err));
+    req.write(body);
+    req.end();
+  });
+}
+
+// Get a fresh access token using refresh_token
+async function getAccessToken() {
+  const clientId = process.env.ONEDRIVE_CLIENT_ID;
+  const refreshToken = process.env.ONEDRIVE_REFRESH_TOKEN;
+  if (!clientId || !refreshToken) {
+    fail('OneDrive not configured. Run: jeriko onedrive init', EXIT.AUTH);
+  }
+
+  const res = await authPost('/token', {
+    client_id: clientId,
+    grant_type: 'refresh_token',
+    refresh_token: refreshToken,
+    scope: SCOPES,
+  });
+
+  if (res.data.error) {
+    if (res.data.error === 'invalid_grant') {
+      fail('OneDrive refresh token expired. Run: jeriko onedrive init', EXIT.AUTH);
+    }
+    fail(`OneDrive auth failed: ${res.data.error_description || res.data.error}`, EXIT.AUTH);
+  }
+
+  // If a new refresh_token was issued, save it
+  if (res.data.refresh_token && res.data.refresh_token !== refreshToken) {
+    writeEnvKey('ONEDRIVE_REFRESH_TOKEN', res.data.refresh_token);
+  }
+
+  return res.data.access_token;
+}
+
+// Microsoft Graph API request (JSON)
+async function graph(method, urlPath, body = null, query = {}) {
+  const token = await getAccessToken();
+  const url = new URL(urlPath.startsWith('http') ? urlPath : `${GRAPH_BASE}${urlPath}`);
+  for (const [k, v] of Object.entries(query)) {
+    if (v !== undefined && v !== null) url.searchParams.set(k, v);
+  }
+
+  const bodyStr = body ? JSON.stringify(body) : null;
+
+  const options = {
+    hostname: url.hostname,
+    path: url.pathname + url.search,
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Accept': 'application/json',
+    },
+  };
+
+  if (bodyStr) {
+    options.headers['Content-Type'] = 'application/json';
+    options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+  }
+
+  return new Promise((resolve) => {
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        // 204 No Content (delete)
+        if (res.statusCode === 204) return resolve(null);
+
+        // 302 redirect (download)
+        if (res.statusCode === 302 || res.statusCode === 301) {
+          return resolve({ _redirect: res.headers.location });
+        }
+
+        let parsed;
+        try { parsed = JSON.parse(data); } catch {
+          if (res.statusCode >= 400) {
+            fail(`Graph ${res.statusCode}: ${data.slice(0, 200)}`, EXIT.GENERAL);
+          }
+          return resolve(data);
+        }
+
+        if (res.statusCode >= 400) {
+          const msg = parsed.error?.message || JSON.stringify(parsed);
+          const code = (res.statusCode === 401 || res.statusCode === 403) ? EXIT.AUTH
+            : res.statusCode === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL;
+          fail(`Graph ${res.statusCode}: ${msg}`, code);
+        }
+
+        resolve(parsed);
+      });
+    });
+
+    req.on('error', (err) => {
+      fail(`Graph request failed: ${err.message}`, EXIT.NETWORK);
+    });
+
+    if (bodyStr) req.write(bodyStr);
+    req.end();
+  });
+}
+
+// Upload file bytes via PUT (for small files < 4MB)
+async function graphUpload(urlPath, fileBuf, contentType = 'application/octet-stream') {
+  const token = await getAccessToken();
+  const url = new URL(urlPath.startsWith('http') ? urlPath : `${GRAPH_BASE}${urlPath}`);
+
+  const options = {
+    hostname: url.hostname,
+    path: url.pathname + url.search,
+    method: 'PUT',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': contentType,
+      'Content-Length': fileBuf.length,
+    },
+  };
+
+  return new Promise((resolve) => {
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        let parsed;
+        try { parsed = JSON.parse(data); } catch {
+          if (res.statusCode >= 400) {
+            fail(`Graph upload ${res.statusCode}: ${data.slice(0, 200)}`, EXIT.GENERAL);
+          }
+          return resolve(data);
+        }
+
+        if (res.statusCode >= 400) {
+          const msg = parsed.error?.message || JSON.stringify(parsed);
+          fail(`Graph upload ${res.statusCode}: ${msg}`, EXIT.GENERAL);
+        }
+
+        resolve(parsed);
+      });
+    });
+
+    req.on('error', (err) => {
+      fail(`Graph upload failed: ${err.message}`, EXIT.NETWORK);
+    });
+
+    req.write(fileBuf);
+    req.end();
+  });
+}
+
+// Download a file from a URL to disk
+function downloadFile(downloadUrl, destPath) {
+  return new Promise((resolve, reject) => {
+    const proto = downloadUrl.startsWith('https') ? https : http;
+    const doRequest = (url) => {
+      proto.get(url, (res) => {
+        // Follow redirects
+        if ((res.statusCode === 301 || res.statusCode === 302) && res.headers.location) {
+          return doRequest(res.headers.location);
+        }
+        if (res.statusCode >= 400) {
+          return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        }
+        const ws = fs.createWriteStream(destPath);
+        res.pipe(ws);
+        ws.on('finish', () => {
+          ws.close();
+          resolve();
+        });
+        ws.on('error', reject);
+      }).on('error', reject);
+    };
+    doRequest(downloadUrl);
+  });
+}
+
+// Get download URL for an item (follows the /content redirect)
+async function getDownloadUrl(itemId) {
+  const token = await getAccessToken();
+  const urlPath = `/me/drive/items/${itemId}/content`;
+  const url = new URL(`${GRAPH_BASE}${urlPath}`);
+
+  return new Promise((resolve) => {
+    const req = https.request({
+      hostname: url.hostname,
+      path: url.pathname,
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    }, (res) => {
+      // Graph returns 302 with the actual download URL
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        // Consume body to free socket
+        res.resume();
+        return resolve(res.headers.location);
+      }
+      // If we get the file data directly (shouldn't happen, but handle it)
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 400) {
+          let parsed;
+          try { parsed = JSON.parse(data); } catch { /* ignore */ }
+          const msg = parsed?.error?.message || `HTTP ${res.statusCode}`;
+          fail(`Download failed: ${msg}`, res.statusCode === 404 ? EXIT.NOT_FOUND : EXIT.GENERAL);
+        }
+        // If the server returned the content directly, this is unusual
+        resolve(null);
+      });
+    });
+
+    req.on('error', (err) => {
+      fail(`Download request failed: ${err.message}`, EXIT.NETWORK);
+    });
+
+    req.end();
+  });
+}
+
+// Format a drive item for output
+function formatItem(item) {
+  const result = {
+    id: item.id,
+    name: item.name,
+    type: item.folder ? 'folder' : (item.file?.mimeType || 'file'),
+    size: item.size,
+    modified: item.lastModifiedDateTime,
+  };
+  if (item.folder) {
+    result.childCount = item.folder.childCount;
+  }
+  if (item.file) {
+    result.mimeType = item.file.mimeType;
+  }
+  if (item.shared) {
+    result.shared = true;
+  }
+  if (item.webUrl) {
+    result.webUrl = item.webUrl;
+  }
+  return result;
+}
+
+// ---- Device code auth flow ----
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function deviceCodeFlow(clientId, w) {
+  // Step 1: Request device code
+  const dcRes = await authPost('/devicecode', {
+    client_id: clientId,
+    scope: SCOPES,
+  });
+
+  if (dcRes.data.error) {
+    fail(`Device code request failed: ${dcRes.data.error_description || dcRes.data.error}`, EXIT.AUTH);
+  }
+
+  const { device_code, user_code, verification_uri, interval, expires_in } = dcRes.data;
+
+  w('\n');
+  w(`  ${C.bold}Step 3: Authorize${C.reset}\n\n`);
+  w(`  ${C.cyan}1.${C.reset} Open your browser to: ${C.bold}${verification_uri}${C.reset}\n`);
+  w(`  ${C.cyan}2.${C.reset} Enter this code:      ${C.bold}${C.yellow}${user_code}${C.reset}\n`);
+  w(`  ${C.cyan}3.${C.reset} Sign in and approve access\n\n`);
+  w(`  ${C.dim}Waiting for authorization (expires in ${Math.floor(expires_in / 60)} minutes)...${C.reset}\n`);
+
+  // Step 2: Poll for token
+  const pollInterval = (interval || 5) * 1000;
+  const deadline = Date.now() + (expires_in * 1000);
+
+  const frames = ['.  ', '.. ', '...', '   '];
+  let fi = 0;
+
+  while (Date.now() < deadline) {
+    await sleep(pollInterval);
+
+    process.stderr.write(`\r  ${C.dim}Polling${frames[fi++ % frames.length]}${C.reset}`);
+
+    const tokenRes = await authPost('/token', {
+      client_id: clientId,
+      grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+      device_code,
+    });
+
+    if (tokenRes.data.access_token) {
+      process.stderr.write(`\r  ${C.green}[ok]${C.reset} Authorization successful!${' '.repeat(20)}\n`);
+      return tokenRes.data;
+    }
+
+    if (tokenRes.data.error === 'authorization_pending') {
+      // Keep polling
+      continue;
+    }
+
+    if (tokenRes.data.error === 'slow_down') {
+      // Back off
+      await sleep(5000);
+      continue;
+    }
+
+    if (tokenRes.data.error === 'authorization_declined') {
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Authorization was declined${' '.repeat(20)}\n`);
+      fail('User declined authorization', EXIT.AUTH);
+    }
+
+    if (tokenRes.data.error === 'expired_token') {
+      process.stderr.write(`\r  ${C.red}[!!]${C.reset} Device code expired${' '.repeat(20)}\n`);
+      fail('Device code expired. Please try again.', EXIT.TIMEOUT);
+    }
+
+    // Unknown error
+    process.stderr.write(`\r  ${C.red}[!!]${C.reset} Auth error: ${tokenRes.data.error_description || tokenRes.data.error}${' '.repeat(20)}\n`);
+    fail(tokenRes.data.error_description || tokenRes.data.error, EXIT.AUTH);
+  }
+
+  process.stderr.write(`\r  ${C.red}[!!]${C.reset} Authorization timed out${' '.repeat(20)}\n`);
+  fail('Device code flow timed out', EXIT.TIMEOUT);
+}
+
+// ---- Command router ----
+
+run(async () => {
+  const args = process.argv.slice(2);
+  const command = args[0];
+  // Parse flags from everything after command so init --client-id works
+  const { flags, positional: allPositional } = parseArgs(['', '', ...args.slice(1)]);
+  const positional = allPositional;
+
+  if (!command) {
+    return ok({
+      usage: 'jeriko onedrive <command> [flags]',
+      commands: {
+        init: 'interactive OAuth2 setup wizard',
+        list: 'list files (root or folder)',
+        search: 'search files by name',
+        info: 'file/folder metadata',
+        download: 'download a file',
+        upload: 'upload a file',
+        mkdir: 'create a folder',
+        share: 'create sharing link',
+        delete: 'move item to recycle bin',
+        about: 'storage usage and user info',
+      },
+    });
+  }
+
+  // ===================== INIT =====================
+  if (command === 'init') {
+    const w = (s) => process.stderr.write(s);
+    w('\n');
+    w(`  ${C.bold}${C.cyan}OneDrive Setup${C.reset}\n`);
+    w(`  ${C.dim}Files, folders, sharing via Microsoft Graph API${C.reset}\n`);
+    w('\n');
+
+    // Non-interactive: jeriko onedrive init --client-id xxx --refresh-token xxx
+    if (flags['client-id'] && flags['refresh-token']) {
+      writeEnvKey('ONEDRIVE_CLIENT_ID', flags['client-id']);
+      writeEnvKey('ONEDRIVE_REFRESH_TOKEN', flags['refresh-token']);
+      w(`  ${C.green}[ok]${C.reset} ONEDRIVE_CLIENT_ID and ONEDRIVE_REFRESH_TOKEN saved\n\n`);
+      return ok({ status: 'configured' });
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stderr,
+      terminal: true,
+    });
+
+    const env = readEnv();
+    const existingClientId = env.ONEDRIVE_CLIENT_ID;
+    const existingRefreshToken = env.ONEDRIVE_REFRESH_TOKEN;
+
+    // Check if already configured
+    if (existingClientId && existingRefreshToken) {
+      w(`  ${C.dim}Current client ID: ${maskKey(existingClientId)}${C.reset}\n`);
+      w(`  ${C.dim}Current refresh token: ${maskKey(existingRefreshToken)}${C.reset}\n\n`);
+      const keep = await ask(rl, 'Keep existing configuration? (Y/n)', 'Y');
+      if (keep.toLowerCase() !== 'n') {
+        // Verify by calling /me/drive
+        w('\n');
+        const frames = ['.  ', '.. ', '...', '   '];
+        let fi = 0;
+        const spin = setInterval(() => {
+          process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+        }, 200);
+
+        try {
+          const data = await graph('GET', '/me/drive', null, { '$select': 'owner,quota' });
+          clearInterval(spin);
+          const owner = data.owner?.user?.displayName || 'unknown';
+          const used = data.quota?.used || 0;
+          const total = data.quota?.total || 0;
+          process.stderr.write(`\r  ${C.green}[ok]${C.reset} Connected as: ${C.bold}${owner}${C.reset}${' '.repeat(20)}\n`);
+          w(`  ${C.green}[ok]${C.reset} Storage: ${formatBytes(used)} / ${formatBytes(total)}\n\n`);
+          rl.close();
+          return ok({ status: 'configured', verified: true, owner });
+        } catch (e) {
+          clearInterval(spin);
+          process.stderr.write(`\r  ${C.red}[!!]${C.reset} Verification failed — re-authenticating${' '.repeat(20)}\n\n`);
+        }
+      }
+      w('\n');
+    }
+
+    // Step 1: Azure Portal instructions
+    w(`  ${C.bold}Step 1: Register an Azure App${C.reset}\n\n`);
+    w(`  ${C.dim}If you already have a client ID, skip to step 2.${C.reset}\n\n`);
+    w(`  ${C.cyan}1.${C.reset} Go to ${C.bold}https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade${C.reset}\n`);
+    w(`  ${C.cyan}2.${C.reset} Click ${C.bold}\"New registration\"${C.reset}\n`);
+    w(`  ${C.cyan}3.${C.reset} Name: ${C.dim}JerikoBot${C.reset} (or anything)\n`);
+    w(`  ${C.cyan}4.${C.reset} Supported account types: ${C.bold}\"Personal Microsoft accounts only\"${C.reset}\n`);
+    w(`     ${C.dim}(or \"Accounts in any org + personal\" for work/school accounts)${C.reset}\n`);
+    w(`  ${C.cyan}5.${C.reset} Redirect URI: leave blank (not needed for device code flow)\n`);
+    w(`  ${C.cyan}6.${C.reset} Click ${C.bold}\"Register\"${C.reset}\n`);
+    w(`  ${C.cyan}7.${C.reset} Copy the ${C.bold}\"Application (client) ID\"${C.reset}\n`);
+    w(`  ${C.cyan}8.${C.reset} Under ${C.bold}\"Authentication\"${C.reset} > Advanced settings:\n`);
+    w(`     Enable ${C.bold}\"Allow public client flows\"${C.reset} = ${C.green}Yes${C.reset}\n`);
+    w('\n');
+
+    // Step 2: Get client_id
+    w(`  ${C.bold}Step 2: Enter Client ID${C.reset}\n\n`);
+    let clientId;
+    if (existingClientId) {
+      w(`  ${C.dim}Current: ${maskKey(existingClientId)}${C.reset}\n`);
+      clientId = await ask(rl, 'Application (client) ID:', existingClientId);
+    } else {
+      clientId = await ask(rl, 'Application (client) ID:');
+    }
+
+    if (!clientId) {
+      w(`\n  ${C.dim}Skipped — no client ID provided${C.reset}\n\n`);
+      rl.close();
+      return ok({ status: 'skipped' });
+    }
+
+    writeEnvKey('ONEDRIVE_CLIENT_ID', clientId);
+    w(`  ${C.green}[ok]${C.reset} ONEDRIVE_CLIENT_ID saved to .env\n`);
+
+    // Step 3: Device code flow
+    const tokenData = await deviceCodeFlow(clientId, w);
+
+    if (!tokenData.refresh_token) {
+      w(`  ${C.red}[!!]${C.reset} No refresh token received. Make sure offline_access scope is included.\n\n`);
+      rl.close();
+      fail('No refresh token received', EXIT.AUTH);
+    }
+
+    writeEnvKey('ONEDRIVE_REFRESH_TOKEN', tokenData.refresh_token);
+    w(`  ${C.green}[ok]${C.reset} ONEDRIVE_REFRESH_TOKEN saved to .env\n`);
+
+    // Step 4: Verify
+    w('\n');
+    const frames = ['.  ', '.. ', '...', '   '];
+    let fi = 0;
+    const spin = setInterval(() => {
+      process.stderr.write(`\r  ${C.dim}Verifying${frames[fi++ % frames.length]}${C.reset}`);
+    }, 200);
+
+    let verified = false;
+    let owner = null;
+    try {
+      // Use the access token directly since we just got it
+      const verifyUrl = new URL(`${GRAPH_BASE}/me/drive`);
+      verifyUrl.searchParams.set('$select', 'owner,quota');
+
+      const verifyRes = await new Promise((resolve) => {
+        const req = https.request({
+          hostname: verifyUrl.hostname,
+          path: verifyUrl.pathname + verifyUrl.search,
+          method: 'GET',
+          headers: {
+            'Authorization': `Bearer ${tokenData.access_token}`,
+            'Accept': 'application/json',
+          },
+        }, (res) => {
+          let data = '';
+          res.on('data', (chunk) => { data += chunk; });
+          res.on('end', () => {
+            try { resolve({ ok: res.statusCode < 400, data: JSON.parse(data) }); }
+            catch { resolve({ ok: false, data: null }); }
+          });
+        });
+        req.on('error', () => resolve({ ok: false, data: null }));
+        req.end();
+      });
+
+      clearInterval(spin);
+
+      if (verifyRes.ok) {
+        verified = true;
+        owner = verifyRes.data.owner?.user?.displayName || null;
+        const used = verifyRes.data.quota?.used || 0;
+        const total = verifyRes.data.quota?.total || 0;
+        process.stderr.write(`\r  ${C.green}[ok]${C.reset} Connected to OneDrive${' '.repeat(20)}\n`);
+        if (owner) w(`  ${C.green}[ok]${C.reset} Owner: ${C.bold}${owner}${C.reset}\n`);
+        w(`  ${C.green}[ok]${C.reset} Storage: ${formatBytes(used)} / ${formatBytes(total)}\n`);
+      } else {
+        process.stderr.write(`\r  ${C.yellow}[!!]${C.reset} Saved but verification failed${' '.repeat(20)}\n`);
+      }
+    } catch (e) {
+      clearInterval(spin);
+      process.stderr.write(`\r  ${C.yellow}[!!]${C.reset} Saved but verification failed: ${e.message}${' '.repeat(20)}\n`);
+    }
+
+    w('\n');
+    w(`  ${C.bold}Next steps:${C.reset}\n`);
+    w(`    ${C.cyan}jeriko onedrive about${C.reset}             ${C.dim}# storage info${C.reset}\n`);
+    w(`    ${C.cyan}jeriko onedrive list${C.reset}              ${C.dim}# list root files${C.reset}\n`);
+    w(`    ${C.cyan}jeriko onedrive search "report"${C.reset}   ${C.dim}# search files${C.reset}\n`);
+    w('\n');
+
+    rl.close();
+    return ok({ status: 'configured', verified, owner });
+  }
+
+  // ===================== LIST =====================
+  if (command === 'list') {
+    const limit = parseInt(flags.limit) || 20;
+    const select = 'id,name,size,lastModifiedDateTime,folder,file,shared,webUrl';
+    let urlPath;
+
+    if (flags.path) {
+      // List by path: /me/drive/root:/path:/children
+      const cleanPath = flags.path.replace(/^\/+|\/+$/g, '');
+      urlPath = `/me/drive/root:/${encodeURIComponent(cleanPath).replace(/%2F/g, '/')}:/children`;
+    } else if (flags.folder) {
+      // List by folder ID
+      urlPath = `/me/drive/items/${flags.folder}/children`;
+    } else {
+      // List root
+      urlPath = '/me/drive/root/children';
+    }
+
+    const data = await graph('GET', urlPath, null, {
+      '$top': limit,
+      '$select': select,
+      '$orderby': flags.sort || 'lastModifiedDateTime desc',
+    });
+
+    const items = (data.value || []).map(formatItem);
+    return ok(items);
+  }
+
+  // ===================== SEARCH =====================
+  if (command === 'search') {
+    const query = positional[0] || flags.query;
+    if (!query) fail('Usage: jeriko onedrive search "query" [--limit N]');
+
+    const limit = parseInt(flags.limit) || 20;
+    const urlPath = `/me/drive/root/search(q='${encodeURIComponent(query)}')`;
+
+    const data = await graph('GET', urlPath, null, {
+      '$top': limit,
+      '$select': 'id,name,size,lastModifiedDateTime,folder,file,webUrl,parentReference',
+    });
+
+    const items = (data.value || []).map((item) => {
+      const result = formatItem(item);
+      if (item.parentReference?.path) {
+        result.path = item.parentReference.path.replace('/drive/root:', '') || '/';
+      }
+      return result;
+    });
+    return ok(items);
+  }
+
+  // ===================== INFO =====================
+  if (command === 'info') {
+    const itemId = positional[0] || flags.id;
+    if (!itemId) fail('Usage: jeriko onedrive info <item_id>');
+
+    const data = await graph('GET', `/me/drive/items/${itemId}`, null, {
+      '$select': 'id,name,size,createdDateTime,lastModifiedDateTime,folder,file,shared,webUrl,parentReference,createdBy,lastModifiedBy',
+    });
+
+    const result = {
+      id: data.id,
+      name: data.name,
+      type: data.folder ? 'folder' : 'file',
+      size: data.size,
+      created: data.createdDateTime,
+      modified: data.lastModifiedDateTime,
+      webUrl: data.webUrl,
+    };
+
+    if (data.file) {
+      result.mimeType = data.file.mimeType;
+      if (data.file.hashes) {
+        result.sha1 = data.file.hashes.sha1Hash;
+      }
+    }
+    if (data.folder) {
+      result.childCount = data.folder.childCount;
+    }
+    if (data.parentReference) {
+      result.parentId = data.parentReference.id;
+      result.parentPath = data.parentReference.path ? data.parentReference.path.replace('/drive/root:', '') || '/' : null;
+    }
+    if (data.createdBy?.user) {
+      result.createdBy = data.createdBy.user.displayName;
+    }
+    if (data.lastModifiedBy?.user) {
+      result.modifiedBy = data.lastModifiedBy.user.displayName;
+    }
+    if (data.shared) {
+      result.shared = true;
+      result.sharedScope = data.shared.scope;
+    }
+
+    return ok(result);
+  }
+
+  // ===================== DOWNLOAD =====================
+  if (command === 'download') {
+    const itemId = positional[0] || flags.id;
+    if (!itemId) fail('Usage: jeriko onedrive download <item_id> [--to ./output.pdf]');
+
+    // Get item info first for the filename
+    const itemInfo = await graph('GET', `/me/drive/items/${itemId}`, null, {
+      '$select': 'name,size',
+    });
+
+    const destPath = flags.to || path.join(process.cwd(), itemInfo.name);
+
+    // Get download URL
+    const downloadUrl = await getDownloadUrl(itemId);
+    if (!downloadUrl) {
+      fail('Could not get download URL', EXIT.GENERAL);
+    }
+
+    // Download the file
+    await downloadFile(downloadUrl, destPath);
+
+    return ok({
+      id: itemId,
+      name: itemInfo.name,
+      size: itemInfo.size,
+      downloaded: true,
+      path: path.resolve(destPath),
+    });
+  }
+
+  // ===================== UPLOAD =====================
+  if (command === 'upload') {
+    const filePath = positional[0] || flags.file;
+    if (!filePath) fail('Usage: jeriko onedrive upload ./file.pdf [--folder <folder_id>] [--path "/Documents"] [--name "Custom Name"]');
+
+    const absPath = path.resolve(filePath);
+    if (!fs.existsSync(absPath)) {
+      fail(`File not found: ${absPath}`, EXIT.NOT_FOUND);
+    }
+
+    const stat = fs.statSync(absPath);
+    if (stat.size > 4 * 1024 * 1024) {
+      fail('File too large for simple upload (> 4MB). Large file upload sessions not yet supported.', EXIT.GENERAL);
+    }
+
+    const fileName = flags.name || path.basename(absPath);
+    const fileBuf = fs.readFileSync(absPath);
+
+    let urlPath;
+    if (flags.path) {
+      // Upload to specific path
+      const cleanPath = flags.path.replace(/^\/+|\/+$/g, '');
+      urlPath = `/me/drive/root:/${cleanPath}/${encodeURIComponent(fileName)}:/content`;
+    } else if (flags.folder) {
+      // Upload to folder by ID
+      urlPath = `/me/drive/items/${flags.folder}:/${encodeURIComponent(fileName)}:/content`;
+    } else {
+      // Upload to root
+      urlPath = `/me/drive/root:/${encodeURIComponent(fileName)}:/content`;
+    }
+
+    const data = await graphUpload(urlPath, fileBuf);
+
+    return ok({
+      id: data.id,
+      name: data.name,
+      size: data.size,
+      uploaded: true,
+      webUrl: data.webUrl,
+    });
+  }
+
+  // ===================== MKDIR =====================
+  if (command === 'mkdir') {
+    const folderName = positional[0] || flags.name;
+    if (!folderName) fail('Usage: jeriko onedrive mkdir "Folder Name" [--parent <folder_id>]');
+
+    let urlPath;
+    if (flags.parent) {
+      urlPath = `/me/drive/items/${flags.parent}/children`;
+    } else {
+      urlPath = '/me/drive/root/children';
+    }
+
+    const data = await graph('POST', urlPath, {
+      name: folderName,
+      folder: {},
+      '@microsoft.graph.conflictBehavior': 'rename',
+    });
+
+    return ok({
+      id: data.id,
+      name: data.name,
+      created: true,
+      webUrl: data.webUrl,
+    });
+  }
+
+  // ===================== SHARE =====================
+  if (command === 'share') {
+    const itemId = positional[0] || flags.id;
+    if (!itemId) fail('Usage: jeriko onedrive share <item_id> [--role edit] [--email user@example.com]');
+
+    // Share with specific user via email
+    if (flags.email) {
+      const data = await graph('POST', `/me/drive/items/${itemId}/invite`, {
+        recipients: [{ email: flags.email }],
+        roles: [flags.role || 'read'],
+        requireSignIn: true,
+        sendInvitation: true,
+        message: flags.message || 'Shared via JerikoBot',
+      });
+
+      const invites = (data.value || []).map(inv => ({
+        email: inv.grantedTo?.user?.email || flags.email,
+        roles: inv.roles,
+        link: inv.link?.webUrl,
+      }));
+      return ok({ shared: true, invitations: invites });
+    }
+
+    // Create anonymous sharing link
+    const linkType = flags.role === 'edit' ? 'edit' : 'view';
+    const data = await graph('POST', `/me/drive/items/${itemId}/createLink`, {
+      type: linkType,
+      scope: 'anonymous',
+    });
+
+    return ok({
+      id: itemId,
+      type: linkType,
+      link: data.link?.webUrl,
+      shared: true,
+    });
+  }
+
+  // ===================== DELETE =====================
+  if (command === 'delete') {
+    const itemId = positional[0] || flags.id;
+    if (!itemId) fail('Usage: jeriko onedrive delete <item_id>');
+
+    await graph('DELETE', `/me/drive/items/${itemId}`);
+
+    return ok({
+      id: itemId,
+      deleted: true,
+    });
+  }
+
+  // ===================== ABOUT =====================
+  if (command === 'about') {
+    const data = await graph('GET', '/me/drive', null, {
+      '$select': 'owner,quota,driveType',
+    });
+
+    const result = {
+      driveType: data.driveType,
+    };
+
+    if (data.owner?.user) {
+      result.owner = data.owner.user.displayName;
+      result.email = data.owner.user.email || null;
+    }
+
+    if (data.quota) {
+      result.total = data.quota.total;
+      result.used = data.quota.used;
+      result.remaining = data.quota.remaining;
+      result.totalFormatted = formatBytes(data.quota.total);
+      result.usedFormatted = formatBytes(data.quota.used);
+      result.remainingFormatted = formatBytes(data.quota.remaining);
+      if (data.quota.total > 0) {
+        result.percentUsed = ((data.quota.used / data.quota.total) * 100).toFixed(1) + '%';
+      }
+      result.deleted = data.quota.deleted;
+      result.state = data.quota.state;
+    }
+
+    return ok(result);
+  }
+
+  fail(`Unknown command: onedrive ${command}\nRun "jeriko onedrive" for usage.`);
+});
+
+// ---- Utilities ----
+
+function formatBytes(bytes) {
+  if (bytes === 0 || bytes === undefined || bytes === null) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + ' ' + units[i];
+}
