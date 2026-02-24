@@ -13,13 +13,12 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "JerikoBot — Give any AI full control of your machine",
+  title: "Jeriko — The missing fabric of intelligent OS",
   description:
-    "27+ CLI commands that turn any AI into a full-stack agent. Model-agnostic. Composable via Unix pipes. Zero vendor lock-in.",
+    "Something is coming. Join the waitlist.",
   openGraph: {
-    title: "JerikoBot — Give any AI full control of your machine",
-    description:
-      "27+ CLI commands. Model-agnostic. Composable via Unix pipes. Zero vendor lock-in.",
+    title: "Jeriko — The missing fabric of intelligent OS",
+    description: "Something is coming. Join the waitlist.",
     type: "website",
   },
 };
