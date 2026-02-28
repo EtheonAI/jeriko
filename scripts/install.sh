@@ -7,6 +7,9 @@
 #   curl -fsSL https://jeriko.ai/install.sh | bash -s -- latest
 #   curl -fsSL https://jeriko.ai/install.sh | bash -s -- 2.0.0
 #
+# For private repos, requires `gh` CLI (authenticated):
+#   bash scripts/install.sh
+#
 set -e
 
 # ── Parse arguments ──────────────────────────────────────────────
@@ -39,13 +42,18 @@ die()   { err "$1"; exit 1; }
 
 # ── Dependencies ─────────────────────────────────────────────────
 
+HAS_GH=false
+if command -v gh >/dev/null 2>&1; then
+    HAS_GH=true
+fi
+
 DOWNLOADER=""
 if command -v curl >/dev/null 2>&1; then
     DOWNLOADER="curl"
 elif command -v wget >/dev/null 2>&1; then
     DOWNLOADER="wget"
-else
-    die "Either curl or wget is required but neither is installed."
+elif [ "$HAS_GH" = false ]; then
+    die "curl, wget, or gh CLI is required but none are installed."
 fi
 
 HAS_JQ=false
@@ -53,15 +61,65 @@ if command -v jq >/dev/null 2>&1; then
     HAS_JQ=true
 fi
 
+# Download function — uses gh for GitHub API/assets (handles private repos),
+# falls back to curl/wget for public URLs.
 download() {
     local url="$1" output="$2"
+
+    # For GitHub URLs, prefer gh CLI (handles auth for private repos)
+    if [ "$HAS_GH" = true ] && [[ "$url" == *"github.com"* || "$url" == *"api.github.com"* ]]; then
+        if [[ "$url" == *"api.github.com"* ]]; then
+            # API call — use gh api
+            local api_path="${url#https://api.github.com}"
+            if [ -n "$output" ]; then
+                gh api "$api_path" > "$output" 2>/dev/null
+            else
+                gh api "$api_path" 2>/dev/null
+            fi
+            return $?
+        fi
+        # Release asset download — use gh release download
+        # (handled separately in download_asset)
+    fi
+
+    # Fallback to curl/wget
     if [ "$DOWNLOADER" = "curl" ]; then
         if [ -n "$output" ]; then curl -fsSL -o "$output" "$url"
         else curl -fsSL "$url"; fi
-    else
+    elif [ "$DOWNLOADER" = "wget" ]; then
         if [ -n "$output" ]; then wget -q -O "$output" "$url"
         else wget -q -O - "$url"; fi
+    else
+        return 1
     fi
+}
+
+# Download a release asset by name
+download_asset() {
+    local version="$1" asset_name="$2" output="$3"
+
+    if [ "$HAS_GH" = true ]; then
+        gh release download "v${version}" \
+            --repo "$GITHUB_REPO" \
+            --pattern "$asset_name" \
+            --output "$output" 2>/dev/null && return 0
+
+        # Fallback: try without v prefix
+        gh release download "${version}" \
+            --repo "$GITHUB_REPO" \
+            --pattern "$asset_name" \
+            --output "$output" 2>/dev/null && return 0
+    fi
+
+    # Fallback to direct URL download
+    local url="$RELEASES_URL/download/v${version}/${asset_name}"
+    download "$url" "$output" 2>/dev/null && return 0
+
+    # Try without v prefix
+    url="$RELEASES_URL/download/${version}/${asset_name}"
+    download "$url" "$output" 2>/dev/null && return 0
+
+    return 1
 }
 
 # ── JSON checksum extraction (no jq fallback) ───────────────────
@@ -130,12 +188,20 @@ info "Platform: ${platform}"
 if [ "$TARGET" = "latest" ] || [ "$TARGET" = "stable" ]; then
     info "Fetching latest release..."
 
-    RELEASE_JSON=$(download "https://api.github.com/repos/$GITHUB_REPO/releases/latest" "" 2>/dev/null || echo "")
+    if [ "$HAS_GH" = true ]; then
+        # Use gh CLI — handles private repos and prereleases
+        VERSION=$(gh release list --repo "$GITHUB_REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//')
+    fi
 
-    if [ -n "$RELEASE_JSON" ] && [ "$HAS_JQ" = true ]; then
-        VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty' | sed 's/^v//')
-    elif [ -n "$RELEASE_JSON" ]; then
-        VERSION=$(echo "$RELEASE_JSON" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"v\?\([^"]*\)".*/\1/')
+    if [ -z "$VERSION" ]; then
+        # Fallback to GitHub API (public repos only)
+        RELEASE_JSON=$(download "https://api.github.com/repos/$GITHUB_REPO/releases/latest" "" 2>/dev/null || echo "")
+
+        if [ -n "$RELEASE_JSON" ] && [ "$HAS_JQ" = true ]; then
+            VERSION=$(echo "$RELEASE_JSON" | jq -r '.tag_name // empty' | sed 's/^v//')
+        elif [ -n "$RELEASE_JSON" ]; then
+            VERSION=$(echo "$RELEASE_JSON" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"v\?\([^"]*\)".*/\1/')
+        fi
     fi
 
     if [ -z "$VERSION" ]; then
@@ -150,26 +216,26 @@ info "Version: ${VERSION}"
 # ── Download ─────────────────────────────────────────────────────
 
 mkdir -p "$DOWNLOAD_DIR"
-DOWNLOAD_URL="$RELEASES_URL/download/v${VERSION}/${BINARY_NAME}"
 BINARY_PATH="$DOWNLOAD_DIR/jeriko-$VERSION-$platform"
 
-info "Downloading binary..."
-if ! download "$DOWNLOAD_URL" "$BINARY_PATH" 2>/dev/null; then
-    # Fallback: try without v prefix
-    DOWNLOAD_URL="$RELEASES_URL/download/${VERSION}/${BINARY_NAME}"
-    if ! download "$DOWNLOAD_URL" "$BINARY_PATH" 2>/dev/null; then
-        die "Download failed. Check: $RELEASES_URL"
-    fi
+info "Downloading ${BINARY_NAME}..."
+if ! download_asset "$VERSION" "$BINARY_NAME" "$BINARY_PATH"; then
+    die "Download failed. Check: $RELEASES_URL"
 fi
 
 # ── Checksum verification ────────────────────────────────────────
 
-MANIFEST_URL="$RELEASES_URL/download/v${VERSION}/manifest.json"
-MANIFEST_JSON=$(download "$MANIFEST_URL" "" 2>/dev/null || echo "")
+MANIFEST_PATH="$DOWNLOAD_DIR/manifest-$VERSION.json"
+info "Verifying checksum..."
+
+if download_asset "$VERSION" "manifest.json" "$MANIFEST_PATH" 2>/dev/null; then
+    MANIFEST_JSON=$(cat "$MANIFEST_PATH" 2>/dev/null)
+    rm -f "$MANIFEST_PATH"
+else
+    MANIFEST_JSON=""
+fi
 
 if [ -n "$MANIFEST_JSON" ]; then
-    info "Verifying checksum..."
-
     if [ "$HAS_JQ" = true ]; then
         expected=$(echo "$MANIFEST_JSON" | jq -r ".platforms[\"$platform\"].checksum // empty")
     else
