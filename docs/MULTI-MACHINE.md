@@ -1,6 +1,6 @@
 # Multi-Machine Setup
 
-JerikoBot can orchestrate multiple machines from a single control plane. A central **hub** runs the server (Express + WebSocket), and remote **nodes** run the lightweight agent that connects back over WebSocket. Commands are routed to specific machines using `@name` prefix syntax from Telegram, WhatsApp, or the API.
+Jeriko can orchestrate multiple machines from a single control plane. A central **hub** runs the server (Express + WebSocket), and remote **nodes** run the lightweight agent that connects back over WebSocket. Commands are routed to specific machines using `@name` prefix syntax from Telegram, WhatsApp, or the API.
 
 ---
 
@@ -229,8 +229,8 @@ Replace:
 
 1. Checks for Node.js. If missing, installs it via [nvm](https://github.com/nvm-sh/nvm).
 2. Warns if `claude` CLI is not found (needed for `claude-code` backend).
-3. Clones the repo to `~/.jerikobot/repo` (or `git pull` if already cloned).
-4. Creates `~/.jerikobot/.env` with `PROXY_URL`, `NODE_NAME`, `NODE_TOKEN`.
+3. Clones the repo to `~/.Jeriko/repo` (or `git pull` if already cloned).
+4. Creates `~/.Jeriko/.env` with `PROXY_URL`, `NODE_NAME`, `NODE_TOKEN`.
 5. Runs `npm install --production` for dependencies.
 6. If systemd is available: creates, enables, and starts a systemd service.
 7. Otherwise: prints manual start instructions (direct or pm2).
@@ -239,8 +239,8 @@ Replace:
 
 ```bash
 # Clone the repo
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko
 npm install
 ```
 
@@ -492,17 +492,17 @@ For Linux nodes that should run persistently, the installer creates a systemd un
 
 ```ini
 [Unit]
-Description=JerikoBot Agent (macbook)
+Description=Jeriko Agent (macbook)
 After=network.target
 
 [Service]
 Type=simple
 User=youruser
-WorkingDirectory=/home/youruser/.jerikobot/repo
+WorkingDirectory=/home/youruser/.Jeriko/repo
 ExecStart=/usr/bin/node agent/agent.js
 Restart=always
 RestartSec=10
-EnvironmentFile=/home/youruser/.jerikobot/.env
+EnvironmentFile=/home/youruser/.Jeriko/.env
 
 [Install]
 WantedBy=multi-user.target
@@ -511,24 +511,24 @@ WantedBy=multi-user.target
 **Key properties:**
 
 - `Restart=always` with `RestartSec=10`: Systemd restarts the agent 10 seconds after any crash, providing an additional layer of resilience beyond the agent's own reconnection logic.
-- `EnvironmentFile`: Loads `PROXY_URL`, `NODE_NAME`, `NODE_TOKEN` from `~/.jerikobot/.env`.
+- `EnvironmentFile`: Loads `PROXY_URL`, `NODE_NAME`, `NODE_TOKEN` from `~/.Jeriko/.env`.
 - `After=network.target`: Waits for network before starting.
 
 ### Manage the Service
 
 ```bash
 # Enable auto-start on boot
-sudo systemctl enable jerikobot-agent
+sudo systemctl enable Jeriko-agent
 
 # Start / stop / restart
-sudo systemctl start jerikobot-agent
-sudo systemctl stop jerikobot-agent
-sudo systemctl restart jerikobot-agent
+sudo systemctl start Jeriko-agent
+sudo systemctl stop Jeriko-agent
+sudo systemctl restart Jeriko-agent
 
 # Check status and logs
-systemctl status jerikobot-agent
-journalctl -u jerikobot-agent -f          # follow logs
-journalctl -u jerikobot-agent --since today
+systemctl status Jeriko-agent
+journalctl -u Jeriko-agent -f          # follow logs
+journalctl -u Jeriko-agent --since today
 ```
 
 ### Alternative: pm2 (macOS / no systemd)
@@ -537,7 +537,7 @@ On macOS or systems without systemd, use [pm2](https://pm2.keymetrics.io/):
 
 ```bash
 npm install -g pm2
-pm2 start agent/agent.js --name jerikobot-macbook
+pm2 start agent/agent.js --name Jeriko-macbook
 pm2 save
 pm2 startup    # generates the OS-specific auto-start command
 ```
@@ -585,7 +585,7 @@ Connected nodes:
 **Example `/status` output:**
 
 ```
-JerikoBot Status
+Jeriko Status
 Uptime: 14d 6h 32m
 Connected nodes: 2
 Active triggers: 5
@@ -596,7 +596,7 @@ Memory: 87MB
 
 | Endpoint | Auth | Response |
 |----------|------|----------|
-| `GET /` | None | `{"name":"jerikobot","status":"running","uptime":1234,"nodes":2,"activeTriggers":5}` |
+| `GET /` | None | `{"name":"Jeriko","status":"running","uptime":1234,"nodes":2,"activeTriggers":5}` |
 | `GET /api/nodes` | Bearer | `[{"name":"macbook","connectedAt":"...","lastPing":"...","alive":true}]` |
 | `GET /api/token/:name` | Bearer | `{"name":"macbook","token":"a1b2c3..."}` |
 
@@ -618,8 +618,8 @@ A realistic setup with a VPS hub, a MacBook at home, and a Raspberry Pi in the o
 
 ```bash
 # On the VPS
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot && npm install
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko && npm install
 
 # Generate a strong secret
 openssl rand -hex 32
@@ -637,10 +637,10 @@ EOF
 
 # Start the hub
 npm start
-# [server] JerikoBot proxy running on port 3000
+# [server] Jeriko proxy running on port 3000
 ```
 
-Set up a reverse proxy (nginx/caddy) with TLS for `jerikobot.yourdomain.com`.
+Set up a reverse proxy (nginx/caddy) with TLS for `Jeriko.yourdomain.com`.
 
 ### 2. Generate Tokens
 
@@ -658,19 +658,19 @@ From Telegram (or any method):
 
 ```bash
 # Clone and install
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot && npm install
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko && npm install
 
 # Create .env
 cat > .env <<'EOF'
-PROXY_URL=wss://jerikobot.yourdomain.com/ws
+PROXY_URL=wss://Jeriko.yourdomain.com/ws
 NODE_NAME=macbook
 NODE_TOKEN=8b2f4a1d9c3e...
 AI_BACKEND=claude-code
 EOF
 
 # Start (using pm2 for persistence)
-pm2 start agent/agent.js --name jerikobot-macbook
+pm2 start agent/agent.js --name Jeriko-macbook
 pm2 save && pm2 startup
 ```
 
@@ -680,18 +680,18 @@ The MacBook uses `claude-code` backend, so the Claude Code CLI handles all comma
 
 ```bash
 # One-line install
-curl -sL https://jerikobot.yourdomain.com/install | \
-  bash -s -- wss://jerikobot.yourdomain.com/ws rpi 5d7e1f3a6b8c...
+curl -sL https://Jeriko.yourdomain.com/install | \
+  bash -s -- wss://Jeriko.yourdomain.com/ws rpi 5d7e1f3a6b8c...
 ```
 
 Or manually:
 
 ```bash
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot && npm install
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko && npm install
 
 cat > .env <<'EOF'
-PROXY_URL=wss://jerikobot.yourdomain.com/ws
+PROXY_URL=wss://Jeriko.yourdomain.com/ws
 NODE_NAME=rpi
 NODE_TOKEN=5d7e1f3a6b8c...
 AI_BACKEND=local
@@ -700,8 +700,8 @@ LOCAL_MODEL=llama3.2
 EOF
 
 # Systemd (auto-created by installer, or manually)
-sudo systemctl enable jerikobot-agent
-sudo systemctl start jerikobot-agent
+sudo systemctl enable Jeriko-agent
+sudo systemctl start Jeriko-agent
 ```
 
 The Pi runs a local Ollama model for fully offline, private operation.
@@ -753,13 +753,13 @@ search for the latest Node.js release
 
 ```bash
 # Hub logs
-journalctl -u jerikobot -f
+journalctl -u Jeriko -f
 
 # Node logs (systemd)
-journalctl -u jerikobot-agent -f
+journalctl -u Jeriko-agent -f
 
 # Node logs (pm2)
-pm2 logs jerikobot-macbook
+pm2 logs Jeriko-macbook
 
 # Node logs (manual)
 node agent/agent.js    # stdout shows all activity

@@ -1,4 +1,4 @@
-# JerikoBot Command Reference
+# Jeriko Command Reference
 
 Complete reference for all 37 `jeriko` CLI commands (1 dispatcher + 36 commands).
 
@@ -583,7 +583,7 @@ Send messages, photos, and documents to Telegram via Bot API. Reads `TELEGRAM_BO
 Accepts message text via stdin if no flags are provided.
 
 ```bash
-jeriko notify --message "Hello from JerikoBot"
+jeriko notify --message "Hello from Jeriko"
 jeriko notify --photo /path/to/image.png
 jeriko notify --photo /path/to/image.png --caption "Look at this"
 jeriko notify --document /path/to/file.pdf
@@ -1542,7 +1542,7 @@ jeriko twilio delete CA_SID                        # delete call record
 | `--media` | string | - | Media URL for MMS (image) |
 
 ```bash
-jeriko twilio sms +1234567890 "Hello from JerikoBot"   # send SMS
+jeriko twilio sms +1234567890 "Hello from Jeriko"   # send SMS
 jeriko twilio sms +1234567890 --media https://example.com/image.png  # send MMS (image only)
 jeriko twilio sms +1234567890 "Check this out" --media https://example.com/img.jpg  # SMS + MMS
 ```
@@ -1830,7 +1830,7 @@ Auto-discover installed commands and generate system prompts for any AI. Reads `
 | `--list` | boolean | `false` | List available commands with source (core vs. plugin) |
 | `--json` | boolean | `false` | Structured command metadata (bin paths, sources) |
 | `--raw` | boolean | `false` | Raw text prompt (for piping to AI) |
-| `--name` | string | `"JerikoBot"` | Custom bot name in generated prompt |
+| `--name` | string | `"Jeriko"` | Custom bot name in generated prompt |
 
 ```bash
 jeriko discover                   # generate system prompt (JSON)
@@ -1942,7 +1942,7 @@ jeriko memory --clear             # clear session log
 
 ## Piping Patterns
 
-JerikoBot commands are designed for Unix-style composition. JSON flows naturally between commands.
+Jeriko commands are designed for Unix-style composition. JSON flows naturally between commands.
 
 ```bash
 # Pipe system info to Telegram
@@ -1971,7 +1971,7 @@ jeriko audio --record 10 && jeriko notify --message "Recording saved"
 
 ## Local Model Configuration
 
-JerikoBot can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
+Jeriko can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
 
 ```bash
 # .env configuration

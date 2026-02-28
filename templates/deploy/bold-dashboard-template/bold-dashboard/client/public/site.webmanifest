@@ -1,0 +1,18 @@
+{
+  "name": "Manus Analytics Dashboard",
+  "short_name": "Manus Dashboard",
+  "description": "A free, open source, Next 14, React 18 admin dashboard template created using Mantine 7",
+  "icons": [
+    {
+      "src": "/favicon.ico",
+      "sizes": "any",
+      "type": "image/x-icon"
+    }
+  ],
+  "theme_color": "#339af0",
+  "background_color": "#ffffff",
+  "display": "standalone",
+  "orientation": "portrait",
+  "scope": "/",
+  "start_url": "/"
+}

@@ -1,4 +1,4 @@
-# JerikoBot — CLI Reference
+# Jeriko — CLI Reference
 
 All `jeriko` commands support 3 output formats via the global `--format` flag:
 
@@ -105,7 +105,7 @@ Screenshots emit `SCREENSHOT:<path>` to stderr.
 Send messages to Telegram via Bot API. Reads `TELEGRAM_BOT_TOKEN` and `ADMIN_TELEGRAM_IDS` from `.env`.
 
 ```bash
-jeriko notify --message "Hello from JerikoBot"
+jeriko notify --message "Hello from Jeriko"
 jeriko notify --photo /path/to/image.png
 jeriko notify --photo /path/to/image.png --caption "Look at this"
 jeriko notify --document /path/to/file.pdf
@@ -507,7 +507,7 @@ jeriko twilio hangup CA_SID                        # end an active call
 jeriko twilio delete CA_SID                        # delete call record
 
 # SMS / MMS
-jeriko twilio sms +1234567890 "Hello from JerikoBot"   # send SMS
+jeriko twilio sms +1234567890 "Hello from Jeriko"   # send SMS
 jeriko twilio sms +1234567890 --media https://example.com/image.png  # send MMS (image only)
 jeriko twilio sms +1234567890 "Check this out" --media https://example.com/img.jpg  # SMS + MMS
 
@@ -955,7 +955,7 @@ After scaffolding, the response includes the detected editor and open command.
 
 ## Local Model Configuration
 
-JerikoBot can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
+Jeriko can run entirely offline using local LLMs. Set `AI_BACKEND=local` in `.env`.
 
 ```bash
 # .env configuration

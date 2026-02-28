@@ -1,8 +1,8 @@
-# JerikoBot Security Model
+# Jeriko Security Model
 
 ## Current State
 
-JerikoBot's security is **application-level**. There is no kernel-level sandboxing.
+Jeriko's security is **application-level**. There is no kernel-level sandboxing.
 
 ### What Exists
 
@@ -52,7 +52,7 @@ function runBash(command) {
 }
 ```
 
-This function serves the bash tool for all 4 AI backends (Claude Code, Anthropic API, OpenAI, local). Any command the AI generates runs with the same permissions as the JerikoBot server process.
+This function serves the bash tool for all 4 AI backends (Claude Code, Anthropic API, OpenAI, local). Any command the AI generates runs with the same permissions as the Jeriko server process.
 
 **If the AI is tricked, it can do anything the user can do.**
 
@@ -200,7 +200,7 @@ Strongest isolation. Each execution runs in its own kernel boundary.
 | gVisor | User-space kernel, intercepts syscalls, used by Google Cloud Run |
 | KVM | Full VM, heaviest but most isolated |
 
-**Difficulty:** Very high. Overkill for personal use. Required if JerikoBot becomes multi-tenant or runs untrusted user-submitted code.
+**Difficulty:** Very high. Overkill for personal use. Required if Jeriko becomes multi-tenant or runs untrusted user-submitted code.
 
 ---
 
@@ -274,7 +274,7 @@ If the command tries to access a path outside `scope`, the kernel returns `EPERM
 | Firecracker | Full | None | None |
 | gVisor | Full | None | None |
 
-**macOS strategy:** Application-level controls (Phase 1) work everywhere. For kernel-level isolation on macOS, the practical option is running JerikoBot inside a Linux VM (e.g., OrbStack, Lima, or Docker Desktop's Linux VM). Native macOS sandboxing via `sandbox-exec` is deprecated and limited but functional for basic filesystem scoping.
+**macOS strategy:** Application-level controls (Phase 1) work everywhere. For kernel-level isolation on macOS, the practical option is running Jeriko inside a Linux VM (e.g., OrbStack, Lima, or Docker Desktop's Linux VM). Native macOS sandboxing via `sandbox-exec` is deprecated and limited but functional for basic filesystem scoping.
 
 **Production deployment:** Linux is the target for hardened execution. macOS is for development.
 

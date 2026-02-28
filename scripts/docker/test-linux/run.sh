@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ── JerikoBot Linux Install Test ────────────────────────────────────
+# ── Jeriko Linux Install Test ────────────────────────────────────
 # Runs inside Docker container with repo mounted at /repo
 
 PASS=0
@@ -12,7 +12,7 @@ pass() { PASS=$((PASS + 1)); TESTS=$((TESTS + 1)); echo "  [PASS] $1"; }
 fail() { FAIL=$((FAIL + 1)); TESTS=$((TESTS + 1)); echo "  [FAIL] $1"; }
 
 echo ""
-echo "  JerikoBot Linux Install Test"
+echo "  Jeriko Linux Install Test"
 echo "  $(date)"
 echo ""
 
@@ -20,14 +20,14 @@ echo ""
 
 echo "── Test: install.sh --install-method git ──"
 
-bash /repo/install.sh --no-onboard --install-method git --git-dir /tmp/jerikobot-test
+bash /repo/install.sh --no-onboard --install-method git --git-dir /tmp/Jeriko-test
 
 if command -v jeriko &>/dev/null; then
   pass "jeriko command available after git install"
 else
   # Try direct path
-  if [ -x /tmp/jerikobot-test/bin/jeriko ]; then
-    export PATH="/tmp/jerikobot-test/bin:$HOME/.local/bin:$PATH"
+  if [ -x /tmp/Jeriko-test/bin/jeriko ]; then
+    export PATH="/tmp/Jeriko-test/bin:$HOME/.local/bin:$PATH"
     pass "jeriko binary exists (PATH needed refresh)"
   else
     fail "jeriko not found after git install"

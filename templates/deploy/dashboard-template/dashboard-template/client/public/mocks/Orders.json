@@ -1,0 +1,50 @@
+[
+  {
+    "id": "ORD-001",
+    "product": "Wireless Headphones",
+    "date": "2024-01-15",
+    "total": 89.99,
+    "status": "shipped",
+    "payment_method": "Credit Card"
+  },
+  {
+    "id": "ORD-002",
+    "product": "Smartphone Case",
+    "date": "2024-01-20",
+    "total": 24.99,
+    "status": "processing",
+    "payment_method": "PayPal"
+  },
+  {
+    "id": "ORD-003",
+    "product": "Laptop Stand",
+    "date": "2024-01-22",
+    "total": 45.50,
+    "status": "shipped",
+    "payment_method": "Credit Card"
+  },
+  {
+    "id": "ORD-004",
+    "product": "USB-C Hub",
+    "date": "2024-01-25",
+    "total": 67.99,
+    "status": "cancelled",
+    "payment_method": "Debit Card"
+  },
+  {
+    "id": "ORD-005",
+    "product": "Mechanical Keyboard",
+    "date": "2024-01-28",
+    "total": 129.99,
+    "status": "processing",
+    "payment_method": "Credit Card"
+  },
+  {
+    "id": "ORD-006",
+    "product": "Mouse Pad",
+    "date": "2024-02-01",
+    "total": 19.99,
+    "status": "shipped",
+    "payment_method": "PayPal"
+  }
+]

@@ -1,19 +1,19 @@
 #!/bin/bash
 set -e
 
-# ── Bundle JerikoBot for website distribution ───────────────────────
-# Creates jerikobot.tar.gz and jerikobot.zip in website/public/
+# ── Bundle Jeriko for website distribution ───────────────────────
+# Creates Jeriko.tar.gz and Jeriko.zip in website/public/
 # Run before deploying the website.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUT_DIR="$PROJECT_DIR/website/public"
 
-echo "Bundling JerikoBot for distribution..."
+echo "Bundling Jeriko for distribution..."
 
 # Create temp staging directory
 STAGE=$(mktemp -d)
-STAGE_DIR="$STAGE/jerikobot"
+STAGE_DIR="$STAGE/Jeriko"
 mkdir -p "$STAGE_DIR"
 
 # Copy distribution files
@@ -41,12 +41,12 @@ chmod +x "$STAGE_DIR/bin/"* 2>/dev/null || true
 
 # Create tarball
 mkdir -p "$OUT_DIR"
-tar -czf "$OUT_DIR/jerikobot.tar.gz" -C "$STAGE" jerikobot
-echo "[ok] Created $OUT_DIR/jerikobot.tar.gz ($(du -h "$OUT_DIR/jerikobot.tar.gz" | cut -f1))"
+tar -czf "$OUT_DIR/Jeriko.tar.gz" -C "$STAGE" Jeriko
+echo "[ok] Created $OUT_DIR/Jeriko.tar.gz ($(du -h "$OUT_DIR/Jeriko.tar.gz" | cut -f1))"
 
 # Create zip
-(cd "$STAGE" && zip -qr "$OUT_DIR/jerikobot.zip" jerikobot)
-echo "[ok] Created $OUT_DIR/jerikobot.zip ($(du -h "$OUT_DIR/jerikobot.zip" | cut -f1))"
+(cd "$STAGE" && zip -qr "$OUT_DIR/Jeriko.zip" Jeriko)
+echo "[ok] Created $OUT_DIR/Jeriko.zip ($(du -h "$OUT_DIR/Jeriko.zip" | cut -f1))"
 
 # Cleanup
 rm -rf "$STAGE"

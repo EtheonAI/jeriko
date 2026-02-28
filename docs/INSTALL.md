@@ -1,6 +1,6 @@
-# JerikoBot Installation Guide
+# Jeriko Installation Guide
 
-Complete installation and configuration reference for JerikoBot, a Unix-first CLI toolkit for AI agents.
+Complete installation and configuration reference for Jeriko, a Unix-first CLI toolkit for AI agents.
 
 ---
 
@@ -11,7 +11,7 @@ Complete installation and configuration reference for JerikoBot, a Unix-first CL
 | **Node.js** | 18+ | `node --version` |
 | **npm** | 8+ | `npm --version` |
 
-JerikoBot uses Node.js built-in `fetch` (available since Node 18) and ES module features. Older versions will not work.
+Jeriko uses Node.js built-in `fetch` (available since Node 18) and ES module features. Older versions will not work.
 
 ---
 
@@ -20,7 +20,7 @@ JerikoBot uses Node.js built-in `fetch` (available since Node 18) and ES module 
 ### npm (Recommended)
 
 ```bash
-npm install -g jerikobot
+npm install -g Jeriko
 ```
 
 This installs the `jeriko` command globally. Verify with:
@@ -32,21 +32,21 @@ jeriko sys
 ### From Source
 
 ```bash
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko
 npm install
 npm link
 ```
 
-`npm link` creates a global symlink so the `jeriko` command is available system-wide. To remove the link later, run `npm unlink -g jerikobot` from the project directory.
+`npm link` creates a global symlink so the `jeriko` command is available system-wide. To remove the link later, run `npm unlink -g Jeriko` from the project directory.
 
 ### Development Mode
 
 For active development with auto-reload:
 
 ```bash
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko
 npm install
 npm run dev
 ```
@@ -57,7 +57,7 @@ This starts the server with `node --watch` for automatic restarts on file change
 
 ## First-Run Setup: `jeriko init`
 
-The interactive setup wizard walks through 6 steps to configure JerikoBot. Run it after installation:
+The interactive setup wizard walks through 6 steps to configure Jeriko. Run it after installation:
 
 ```bash
 jeriko init
@@ -65,7 +65,7 @@ jeriko init
 
 ### Step 1/6: AI Backend
 
-Choose which AI model powers JerikoBot's reasoning:
+Choose which AI model powers Jeriko's reasoning:
 
 | Option | Name | Description |
 |--------|------|-------------|
@@ -81,7 +81,7 @@ Choose which AI model powers JerikoBot's reasoning:
 
 ### Step 2/6: Telegram Bot
 
-Connects JerikoBot to Telegram for remote control via chat.
+Connects Jeriko to Telegram for remote control via chat.
 
 1. **Bot Token**: Create a bot with [@BotFather](https://t.me/BotFather) on Telegram. Copy the token it gives you.
 2. **Admin IDs**: Send `/start` to [@userinfobot](https://t.me/userinfobot) to get your numeric Telegram user ID. Multiple admins can be specified as a comma-separated list.
@@ -111,7 +111,7 @@ The tunnel URL is saved to `TUNNEL_URL` in `.env` once the tunnel starts.
 
 ### Step 5/6: Start Server
 
-Optionally starts the JerikoBot server in the background using `jeriko server --start`. If a tunnel was configured in Step 4, the tunnel is also started and the wizard waits up to 30 seconds for the tunnel URL to become available.
+Optionally starts the Jeriko server in the background using `jeriko server --start`. If a tunnel was configured in Step 4, the tunnel is also started and the wizard waits up to 30 seconds for the tunnel URL to become available.
 
 The server runs on the port specified by `PROXY_PORT` (default: 3000).
 
@@ -155,7 +155,7 @@ Non-interactive mode skips the tunnel and server start steps.
 
 ## Configuration (.env)
 
-JerikoBot reads all configuration from a `.env` file in the project root. The `jeriko init` wizard creates this file automatically, or you can copy from `.env.example` and edit manually:
+Jeriko reads all configuration from a `.env` file in the project root. The `jeriko init` wizard creates this file automatically, or you can copy from `.env.example` and edit manually:
 
 ```bash
 cp .env.example .env
@@ -206,7 +206,7 @@ chmod 600 .env
 
 ## Local Model Setup
 
-JerikoBot runs entirely offline using any OpenAI-compatible local model server. Set `AI_BACKEND=local` in `.env`.
+Jeriko runs entirely offline using any OpenAI-compatible local model server. Set `AI_BACKEND=local` in `.env`.
 
 ### Supported Runtimes
 
@@ -231,7 +231,7 @@ ollama serve
 # Pull a model
 ollama pull llama3.2
 
-# Configure JerikoBot
+# Configure Jeriko
 jeriko init --ai local --local-url http://localhost:11434/v1 --local-model llama3.2 --yes
 ```
 
@@ -240,7 +240,7 @@ jeriko init --ai local --local-url http://localhost:11434/v1 --local-model llama
 1. Download and install [LM Studio](https://lmstudio.ai).
 2. Download a model from the built-in model browser.
 3. Start the local server from LM Studio's "Local Server" tab.
-4. Configure JerikoBot:
+4. Configure Jeriko:
 
 ```bash
 jeriko init --ai local --local-url http://localhost:1234/v1 --local-model <model-name> --yes
@@ -357,7 +357,7 @@ npx playwright install --with-deps
 
 ## Server Setup
 
-The JerikoBot server provides the Telegram bot, WhatsApp integration, WebSocket orchestration, AI routing, and trigger engine.
+The Jeriko server provides the Telegram bot, WhatsApp integration, WebSocket orchestration, AI routing, and trigger engine.
 
 ### Foreground (Development)
 
@@ -390,17 +390,17 @@ jeriko server --stop
 
 ### Systemd Service (Linux Production)
 
-Create `/etc/systemd/system/jerikobot.service`:
+Create `/etc/systemd/system/Jeriko.service`:
 
 ```ini
 [Unit]
-Description=JerikoBot Server
+Description=Jeriko Server
 After=network.target
 
 [Service]
 Type=simple
-User=jerikobot
-WorkingDirectory=/opt/jerikobot
+User=Jeriko
+WorkingDirectory=/opt/Jeriko
 ExecStart=/usr/bin/node server/index.js
 Restart=on-failure
 RestartSec=5
@@ -414,9 +414,9 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable jerikobot
-sudo systemctl start jerikobot
-sudo systemctl status jerikobot
+sudo systemctl enable Jeriko
+sudo systemctl start Jeriko
+sudo systemctl status Jeriko
 ```
 
 ### Server Architecture
@@ -446,7 +446,7 @@ jeriko sys --format text
 jeriko discover --list --format text
 
 # Test a specific integration
-jeriko notify --message "JerikoBot is alive"   # requires Telegram setup
+jeriko notify --message "Jeriko is alive"   # requires Telegram setup
 ```
 
 Expected output for `jeriko sys --format text`:
@@ -469,14 +469,14 @@ If any command fails, check:
 ### npm Global Install
 
 ```bash
-npm uninstall -g jerikobot
+npm uninstall -g Jeriko
 ```
 
 ### From Source
 
 ```bash
-cd /path/to/jerikobot
-npm unlink -g jerikobot
+cd /path/to/Jeriko
+npm unlink -g Jeriko
 ```
 
 ### Clean Up All Data
@@ -486,7 +486,7 @@ npm unlink -g jerikobot
 rm -rf ~/.jeriko
 
 # Remove project data files (if from source)
-rm -rf /path/to/jerikobot/data/
+rm -rf /path/to/Jeriko/data/
 ```
 
 ### Stop Running Services

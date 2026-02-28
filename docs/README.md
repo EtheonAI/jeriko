@@ -1,4 +1,4 @@
-# JerikoBot
+# Jeriko
 
 Unix-first CLI toolkit that gives any AI model full machine control. 28+ commands. Model-agnostic. Composable via pipes. Zero runtime overhead.
 
@@ -12,7 +12,7 @@ Any AI with shell access can control the entire machine through `jeriko` command
 
 ```bash
 # Install globally
-npm install -g jerikobot
+npm install -g Jeriko
 
 # Initialize (generates .env, verifies commands)
 jeriko init
@@ -89,7 +89,7 @@ jeriko stripe customers list
 jeriko stripe payments create --amount 5000 --currency usd
 
 # Social
-jeriko x post "Hello from JerikoBot"
+jeriko x post "Hello from Jeriko"
 jeriko x search "topic" --limit 10
 ```
 
@@ -104,7 +104,7 @@ Architecture details and future design notes:
 
 ### Claude Code (recommended)
 
-Claude Code auto-discovers JerikoBot commands via `CLAUDE.md`. No extra setup needed -- just run `claude` in the project directory.
+Claude Code auto-discovers Jeriko commands via `CLAUDE.md`. No extra setup needed -- just run `claude` in the project directory.
 
 ### OpenAI / Any Model
 
@@ -190,7 +190,7 @@ jeriko clipboard | jeriko search | jeriko notify
 
 ## Plugins
 
-Third-party plugins extend JerikoBot with new commands:
+Third-party plugins extend Jeriko with new commands:
 
 ```bash
 # Install a plugin from npm
@@ -286,13 +286,13 @@ Commands that require macOS: `notes`, `remind`, `calendar`, `contacts`, `msg`, `
 
 ### Windows
 
-Run JerikoBot inside WSL (Windows Subsystem for Linux). Core commands work as they do on Linux.
+Run Jeriko inside WSL (Windows Subsystem for Linux). Core commands work as they do on Linux.
 
 ## Uninstall
 
 ```bash
 # Remove global install
-npm uninstall -g jerikobot
+npm uninstall -g Jeriko
 
 # Remove plugin data
 rm -rf ~/.jeriko

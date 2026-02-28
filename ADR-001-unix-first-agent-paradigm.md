@@ -3,7 +3,7 @@
 **Status:** Proposed
 **Date:** 2026-02-23
 **Author:** Khaleel Musleh (Etheon)
-**Subject:** JerikoBot's Unix-command-only architecture vs OpenClaw's tool-abstraction architecture for autonomous AI agents
+**Subject:** Jeriko's Unix-command-only architecture vs OpenClaw's tool-abstraction architecture for autonomous AI agents
 
 ---
 
@@ -13,9 +13,9 @@ Two competing paradigms are emerging for how AI agents interact with machines:
 
 1. **Tool Abstraction Model** (OpenClaw): Define typed tool functions (`AgentTool<Input, Output>`) with JSON Schema, policy gates, and an orchestration runtime. The LLM calls tools through a structured API layer.
 
-2. **Unix Command Model** (JerikoBot): Expose all capabilities as CLI commands with JSON stdout, semantic exit codes, and stdin piping. The LLM executes shell commands through a system prompt listing available commands.
+2. **Unix Command Model** (Jeriko): Expose all capabilities as CLI commands with JSON stdout, semantic exit codes, and stdin piping. The LLM executes shell commands through a system prompt listing available commands.
 
-This ADR analyzes both approaches and argues for JerikoBot's Unix-first paradigm as a superior foundation for autonomous machine agents.
+This ADR analyzes both approaches and argues for Jeriko's Unix-first paradigm as a superior foundation for autonomous machine agents.
 
 ---
 
@@ -63,9 +63,9 @@ User (Telegram/Discord/Slack/WhatsApp/...)
 - Interactive wizard for setup
 - Per-tool policy configuration
 
-### JerikoBot: What It Is
+### Jeriko: What It Is
 
-JerikoBot is a **Unix-native agent toolkit** built in plain JavaScript (~2K lines of core). Its architecture:
+Jeriko is a **Unix-native agent toolkit** built in plain JavaScript (~2K lines of core). Its architecture:
 
 ```
 User (Telegram/WhatsApp/CLI)
@@ -85,7 +85,7 @@ User (Telegram/WhatsApp/CLI)
 | Stdin pipes | Composability between commands |
 | System prompt | Lists available commands — that's the entire "tool registry" |
 
-**What JerikoBot does well:**
+**What Jeriko does well:**
 - Zero abstraction between agent and machine — commands are the interface
 - Every capability is independently testable from any shell
 - Piping composes behaviors without code: `jeriko sys | jeriko notify`
@@ -123,7 +123,7 @@ The model calls `read({ path: "/etc/hosts" })` through a typed function interfac
 
 **This is RPC.** The agent speaks a proprietary protocol to a proprietary runtime.
 
-### JerikoBot: Commands as the Universal Interface
+### Jeriko: Commands as the Universal Interface
 
 ```bash
 jeriko fs --cat /etc/hosts
@@ -141,7 +141,7 @@ The model runs `jeriko fs --cat /etc/hosts` in a shell. It reads JSON from stdou
 
 ### 1. No Runtime Lock-In
 
-| | OpenClaw | JerikoBot |
+| | OpenClaw | Jeriko |
 |--|----------|-----------|
 | **Agent must run inside** | Pi Agent RPC runtime | Any shell |
 | **Tool definitions live in** | TypeScript source code | The filesystem (binaries) |
@@ -150,17 +150,17 @@ The model runs `jeriko fs --cat /etc/hosts` in a shell. It reads JSON from stdou
 
 OpenClaw's tools are **bound to its runtime**. If you want to use OpenClaw's browser tool from a different agent framework, you can't — it's a TypeScript function inside `pi-agent-core`'s execution loop.
 
-JerikoBot's commands work with **anything that can spawn a process**. Claude Code, a Python script, a Go binary, a cron job, another LLM runtime — they all speak shell.
+Jeriko's commands work with **anything that can spawn a process**. Claude Code, a Python script, a Go binary, a cron job, another LLM runtime — they all speak shell.
 
 ### 2. Composability Is Free
 
 OpenClaw composes tools through **agent reasoning**: the LLM decides to call tool A, reads the result, then calls tool B. Every composition step costs tokens and latency.
 
-JerikoBot composes through **pipes**:
+Jeriko composes through **pipes**:
 
 ```bash
 # OpenClaw: Agent calls search tool, reads result, calls message tool (2 LLM turns)
-# JerikoBot: One shell command, zero LLM turns
+# Jeriko: One shell command, zero LLM turns
 jeriko search "weather in NYC" | jeriko notify
 ```
 
@@ -168,7 +168,7 @@ Pipes are **zero-cost composition**. The agent can choose to pipe (no reasoning 
 
 ### 3. Testability and Debuggability
 
-Every JerikoBot capability is testable from a terminal:
+Every Jeriko capability is testable from a terminal:
 
 ```bash
 # Test the tool directly
@@ -189,13 +189,13 @@ OpenClaw tools require the agent runtime to test. You can't run `openclaw-read /
 
 ### 4. The Machine Already Has Tools
 
-A Linux/macOS machine already ships with hundreds of capable programs: `curl`, `git`, `docker`, `ffmpeg`, `python`, `jq`, `ssh`, `rsync`. OpenClaw wraps some of these in TypeScript tool definitions. JerikoBot's `jeriko exec` makes them **all** available immediately.
+A Linux/macOS machine already ships with hundreds of capable programs: `curl`, `git`, `docker`, `ffmpeg`, `python`, `jq`, `ssh`, `rsync`. OpenClaw wraps some of these in TypeScript tool definitions. Jeriko's `jeriko exec` makes them **all** available immediately.
 
-More importantly: any new capability added to the system (a new CLI tool installed via `apt`, `brew`, `npm -g`) is **instantly available** to a JerikoBot agent. OpenClaw would need a new tool definition, rebuild, and restart.
+More importantly: any new capability added to the system (a new CLI tool installed via `apt`, `brew`, `npm -g`) is **instantly available** to a Jeriko agent. OpenClaw would need a new tool definition, rebuild, and restart.
 
 ### 5. Multi-Machine Is Natural
 
-JerikoBot's remote agent protocol is elegant because commands are self-contained:
+Jeriko's remote agent protocol is elegant because commands are self-contained:
 
 ```
 Telegram → Proxy → WebSocket → Remote Agent → claude → jeriko <cmd> → JSON → WebSocket → Proxy → Telegram
@@ -207,7 +207,7 @@ OpenClaw's remote execution requires its full Gateway + Agent runtime on every n
 
 ### 6. Size and Complexity
 
-| Metric | OpenClaw | JerikoBot |
+| Metric | OpenClaw | Jeriko |
 |--------|----------|-----------|
 | Core tool code | ~15,000 lines (TypeScript) | ~800 lines (JavaScript) |
 | Dependencies | 50+ npm packages | 12 npm packages |
@@ -215,15 +215,15 @@ OpenClaw's remote execution requires its full Gateway + Agent runtime on every n
 | Configuration | 200+ config keys in JSON5 | 8 env vars in `.env` |
 | Runtime requirements | Node 22+, pnpm, TypeScript build, Gateway daemon | Node 18+, `npm start` |
 
-JerikoBot is **20x smaller** for comparable core functionality. This isn't a weakness — it's the point. Unix tools are small because the OS provides the runtime.
+Jeriko is **20x smaller** for comparable core functionality. This isn't a weakness — it's the point. Unix tools are small because the OS provides the runtime.
 
 ---
 
-## What OpenClaw Has That JerikoBot Should Study (Not Copy)
+## What OpenClaw Has That Jeriko Should Study (Not Copy)
 
 ### Worth Adopting (as Unix commands, not abstractions)
 
-| OpenClaw Feature | JerikoBot Equivalent |
+| OpenClaw Feature | Jeriko Equivalent |
 |------------------|---------------------|
 | Memory search (vector + BM25) | `jeriko memory --search "query"` — a new command wrapping sqlite-vec |
 | Subagent spawning | `jeriko agent --spawn "task"` — fork a new claude process with isolated context |
@@ -234,10 +234,10 @@ JerikoBot is **20x smaller** for comparable core functionality. This isn't a wea
 
 ### Worth Studying (architectural patterns)
 
-| Pattern | Value for JerikoBot |
+| Pattern | Value for Jeriko |
 |---------|-------------------|
 | **Tool policy profiles** | Could become `jeriko --profile minimal exec ...` — restrict what commands are available per agent context |
-| **Session compaction** | Not applicable (JerikoBot is stateless by design — state lives in the shell session) |
+| **Session compaction** | Not applicable (Jeriko is stateless by design — state lives in the shell session) |
 | **Plugin system** | `jeriko plugin install @user/tool` → drops a new `jeriko-<name>` binary in PATH |
 | **Heartbeat protocol** | Useful for long-running remote tasks: `jeriko agent --heartbeat 30s` |
 | **Approval gates** | `jeriko exec --approve "rm -rf /"` → prompts user before execution |
@@ -247,7 +247,7 @@ JerikoBot is **20x smaller** for comparable core functionality. This isn't a wea
 | OpenClaw Feature | Why Skip It |
 |------------------|-------------|
 | TypeScript tool definitions | The whole point is to avoid this |
-| Gateway daemon | JerikoBot's proxy server already handles routing |
+| Gateway daemon | Jeriko's proxy server already handles routing |
 | JSON Schema for tool inputs | CLI flags are the schema — `--help` is the documentation |
 | Plugin manifest format | Unix already has a plugin system: PATH |
 | Multi-provider model routing | That's the LLM runtime's job, not the tool layer's |
@@ -263,7 +263,7 @@ JerikoBot is **20x smaller** for comparable core functionality. This isn't a wea
 
 This is the **application server** model. It mirrors how web backends evolved: define endpoints, validate input, authorize, execute, respond. It works. It's proven. But it creates a **walled garden** — every capability must be purpose-built for the runtime.
 
-### JerikoBot's Worldview
+### Jeriko's Worldview
 
 > "AI agents need a machine with a shell. Everything else is a command."
 
@@ -277,7 +277,7 @@ This is the same debate as **monolithic application vs Unix pipeline**:
 # Monolithic (OpenClaw)
 PhotoEditor.open("image.png").resize(800,600).convert("jpg").save("out.jpg")
 
-# Unix (JerikoBot)
+# Unix (Jeriko)
 convert image.png -resize 800x600 out.jpg
 ```
 
@@ -285,11 +285,11 @@ The monolithic approach has better type safety, integrated UX, and richer featur
 
 **Every successful computing platform converged on the Unix model eventually.** Docker containers run shell commands. Kubernetes pods execute binaries. CI/CD pipelines are shell scripts. GitHub Actions are shell steps. Even OpenClaw's `exec` tool — its most powerful tool — is just a shell command runner.
 
-The question isn't whether agents will use shell commands. They already do. The question is whether the shell command **is the primary interface** (JerikoBot) or a **fallback escape hatch** (OpenClaw).
+The question isn't whether agents will use shell commands. They already do. The question is whether the shell command **is the primary interface** (Jeriko) or a **fallback escape hatch** (OpenClaw).
 
 ---
 
-## JerikoBot's Architecture: What Makes It Good
+## Jeriko's Architecture: What Makes It Good
 
 ### 1. The Dispatcher Pattern
 
@@ -297,7 +297,7 @@ The question isn't whether agents will use shell commands. They already do. The 
 jeriko <cmd> → spawns bin/jeriko-<cmd> → calls tools/<cmd>.js → JSON stdout
 ```
 
-This is the `git` model. `git` is a dispatcher for `git-commit`, `git-push`, `git-log`. Each subcommand is independently executable. JerikoBot does the same thing, and it means:
+This is the `git` model. `git` is a dispatcher for `git-commit`, `git-push`, `git-log`. Each subcommand is independently executable. Jeriko does the same thing, and it means:
 
 - New commands = new files in `bin/` (no registration, no rebuilding)
 - Each command is a separate process (isolation, no shared state corruption)
@@ -317,7 +317,7 @@ The tools layer is **independent of the CLI**. Telegram bot handlers call the sa
 
 ```javascript
 // server/router.js
-const SYSTEM_PROMPT = `You are JerikoBot...
+const SYSTEM_PROMPT = `You are Jeriko...
 jeriko sys --info
 jeriko screenshot
 jeriko browse --navigate <url>
@@ -337,13 +337,13 @@ No JSON Schema. No tool registration API. The LLM reads a text description of av
 # Remote machine needs:
 # 1. Node.js
 # 2. Claude Code CLI
-# 3. JerikoBot repo
+# 3. Jeriko repo
 # 4. A WebSocket URL + token
 
 # That's it. Same commands, same capabilities, same interface.
 ```
 
-OpenClaw's remote nodes need the full Gateway runtime or purpose-built native apps (SwiftUI for macOS, Kotlin for Android). JerikoBot's remote agent is **55 lines of JavaScript**.
+OpenClaw's remote nodes need the full Gateway runtime or purpose-built native apps (SwiftUI for macOS, Kotlin for Android). Jeriko's remote agent is **55 lines of JavaScript**.
 
 ### 5. Triggers as Event → Command Mapping
 
@@ -358,9 +358,9 @@ This is **event-driven Unix**: events trigger command pipelines. No custom autom
 
 ---
 
-## What JerikoBot Should Build Next (Roadmap Implications)
+## What Jeriko Should Build Next (Roadmap Implications)
 
-Based on this analysis, JerikoBot's growth should stay on the Unix path:
+Based on this analysis, Jeriko's growth should stay on the Unix path:
 
 ### Phase 1: Strengthen the Core
 
@@ -406,7 +406,7 @@ Based on this analysis, JerikoBot's growth should stay on the Unix path:
 
 ## Decision
 
-**JerikoBot's Unix-first, command-only architecture is the correct paradigm for autonomous AI agents.**
+**Jeriko's Unix-first, command-only architecture is the correct paradigm for autonomous AI agents.**
 
 ### Reasons:
 
@@ -428,7 +428,7 @@ Based on this analysis, JerikoBot's growth should stay on the Unix path:
 
 ### Trade-offs Accepted:
 
-| OpenClaw Advantage | JerikoBot's Answer |
+| OpenClaw Advantage | Jeriko's Answer |
 |-------------------|-------------------|
 | Type safety on tool inputs | CLI flags + JSON output provide a contract; the LLM handles the rest |
 | Granular security policies | Permission profiles on commands (Phase 4) |
@@ -443,11 +443,11 @@ Based on this analysis, JerikoBot's growth should stay on the Unix path:
 
 OpenClaw asks: *"How do we build a runtime that gives AI agents structured access to capabilities?"*
 
-JerikoBot asks: *"How do we give AI agents a machine?"*
+Jeriko asks: *"How do we give AI agents a machine?"*
 
 The second question is better. An agent that can run commands on a machine can do anything that machine can do. An agent locked into a tool runtime can only do what someone built a tool for.
 
-JerikoBot isn't a simpler OpenClaw. It's a **different category**: an agent OS, not an agent application. The Unix philosophy — small tools, text streams, composition — is the right foundation for machines that think.
+Jeriko isn't a simpler OpenClaw. It's a **different category**: an agent OS, not an agent application. The Unix philosophy — small tools, text streams, composition — is the right foundation for machines that think.
 
 **Build the OS. Not the app.**
 
@@ -456,6 +456,6 @@ JerikoBot isn't a simpler OpenClaw. It's a **different category**: an agent OS, 
 ## References
 
 - OpenClaw source: `~/Downloads/openclaw-main/`
-- JerikoBot source: `~/Desktop/Projects/Etheon/jerikobot/`
+- Jeriko source: `~/Desktop/Projects/Etheon/Jeriko/`
 - Unix Philosophy: McIlroy, "A Quarter Century of Unix" (1994)
 - The Art of Unix Programming: Raymond, E.S. (2003)

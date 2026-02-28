@@ -204,7 +204,7 @@ Core commands get the full process environment. Plugin commands get a restricted
 
 ```
 Safe system vars:    PATH, HOME, USER, SHELL, TERM, NODE_ENV, LANG, LC_ALL, TZ
-JerikoBot infra:     JERIKO_ROOT, JERIKO_DATA_DIR, JERIKO_FORMAT, JERIKO_QUIET,
+Jeriko infra:     JERIKO_ROOT, JERIKO_DATA_DIR, JERIKO_FORMAT, JERIKO_QUIET,
                      JERIKO_PLUGIN, JERIKO_NAMESPACE
 Declared vars only:  whatever manifest.env[] lists
 ```
@@ -329,7 +329,7 @@ The server exposes these endpoints:
 
 ```json
 {
-  "name": "jerikobot",
+  "name": "Jeriko",
   "status": "running",
   "uptime": 3600.5,
   "nodes": 2,
@@ -455,7 +455,7 @@ npm start
 
 ```bash
 # On each remote machine
-npm install -g jerikobot
+npm install -g Jeriko
 
 # Generate token (on hub via Telegram):
 #   /token macbook

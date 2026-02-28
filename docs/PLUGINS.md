@@ -1,6 +1,6 @@
 # Plugin Author Guide
 
-Plugins add AI intelligence to JerikoBot, not just functions. A plugin is a set of CLI commands plus an AI prompt that teaches models *when and how* to use them. The prompt is the product; the commands are the API.
+Plugins add AI intelligence to Jeriko, not just functions. A plugin is a set of CLI commands plus an AI prompt that teaches models *when and how* to use them. The prompt is the product; the commands are the API.
 
 ## The Big Picture
 
@@ -31,7 +31,7 @@ npm init -y
   "name": "jeriko-plugin-hello",
   "namespace": "hello",
   "version": "1.0.0",
-  "description": "Example JerikoBot plugin",
+  "description": "Example Jeriko plugin",
   "jerikoVersion": ">=1.0.0",
   "platform": ["darwin", "linux", "win32"],
   "commands": [
@@ -50,7 +50,7 @@ npm init -y
 
 ```javascript
 #!/usr/bin/env node
-const { parseArgs, ok, fail, run } = require('jerikobot/lib/cli');
+const { parseArgs, ok, fail, run } = require('Jeriko/lib/cli');
 
 run(async () => {
   const { positional } = parseArgs(process.argv);
@@ -132,7 +132,7 @@ Every plugin command follows the same contract as core commands:
 
 ```javascript
 #!/usr/bin/env node
-const { parseArgs, ok, fail, run, EXIT } = require('jerikobot/lib/cli');
+const { parseArgs, ok, fail, run, EXIT } = require('Jeriko/lib/cli');
 
 run(async () => {
   const { flags, positional } = parseArgs(process.argv);
@@ -153,7 +153,7 @@ run(async () => {
 
 Key rules:
 - `#!/usr/bin/env node` shebang (or compiled binary)
-- `require('jerikobot/lib/cli')` for shared infrastructure
+- `require('Jeriko/lib/cli')` for shared infrastructure
 - `parseArgs()` for flag/positional parsing
 - `ok(data)` writes to stdout in the active format (json/text/logfmt) and exits 0
 - `fail(message, code)` writes to stderr in the active format and exits with semantic code
@@ -205,7 +205,7 @@ jeriko greet Alice --format logfmt  # ok=true greeting="Hello, Alice!"
 For pipe support:
 
 ```javascript
-const { readStdin } = require('jerikobot/lib/cli');
+const { readStdin } = require('Jeriko/lib/cli');
 
 run(async () => {
   const { flags, positional } = parseArgs(process.argv);
@@ -274,7 +274,7 @@ Full field reference:
 | `description` | string | No | Human-readable description. |
 | `author` | string | No | Author name or email. |
 | `license` | string | No | SPDX license identifier. |
-| `jerikoVersion` | semver range | Yes | Required JerikoBot version (e.g., `>=1.0.0`). |
+| `jerikoVersion` | semver range | Yes | Required Jeriko version (e.g., `>=1.0.0`). |
 | `platform` | string[] | Yes | Supported platforms: `darwin`, `linux`, `win32`. |
 | `commands` | object[] | Yes | At least one command. |
 | `commands[].name` | string | Yes | Command name (what users type after `jeriko`). |
@@ -379,7 +379,7 @@ echo "input" | jeriko mycmd            # pipe input
 \`\`\`
 ```
 
-If `COMMANDS.md` is missing, JerikoBot auto-generates docs from the manifest's command descriptions. But writing `COMMANDS.md` is strongly recommended -- the auto-generated version lacks usage examples.
+If `COMMANDS.md` is missing, Jeriko auto-generates docs from the manifest's command descriptions. But writing `COMMANDS.md` is strongly recommended -- the auto-generated version lacks usage examples.
 
 ---
 
@@ -403,7 +403,7 @@ Declare supported platforms in `manifest.platform`:
 
 Valid values: `darwin` (macOS), `linux`, `win32` (Windows).
 
-At install time, JerikoBot checks the current `process.platform` against the manifest. If the current platform is not in the list, the install fails.
+At install time, Jeriko checks the current `process.platform` against the manifest. If the current platform is not in the list, the install fails.
 
 For commands that work differently per-platform, check at runtime:
 
@@ -510,7 +510,7 @@ jeriko trust --list
 
 Plugins only see:
 - **Safe system vars**: `PATH`, `HOME`, `USER`, `SHELL`, `TERM`, `NODE_ENV`, `LANG`, `LC_ALL`, `TZ`
-- **JerikoBot infra vars**: `JERIKO_ROOT`, `JERIKO_DATA_DIR`, `JERIKO_FORMAT`, `JERIKO_QUIET`, `JERIKO_PLUGIN`, `JERIKO_NAMESPACE`
+- **Jeriko infra vars**: `JERIKO_ROOT`, `JERIKO_DATA_DIR`, `JERIKO_FORMAT`, `JERIKO_QUIET`, `JERIKO_PLUGIN`, `JERIKO_NAMESPACE`
 - **Declared vars**: only env vars listed in `manifest.env`
 
 A plugin that declares `env: [{key: "MY_API_KEY", required: true}]` will see `MY_API_KEY` from the host `.env`. It will **never** see `TELEGRAM_BOT_TOKEN`, `STRIPE_SECRET_KEY`, `NODE_AUTH_SECRET`, or any other env var it did not declare.
@@ -549,7 +549,7 @@ The audit log auto-rotates at 2MB (keeps last 10,000 entries).
 
 ### Integrity Hashes
 
-On install/upgrade, JerikoBot computes a SHA-512 hash of `jeriko-plugin.json` and stores it in the registry. This allows detecting if a plugin's manifest was modified after install.
+On install/upgrade, Jeriko computes a SHA-512 hash of `jeriko-plugin.json` and stores it in the registry. This allows detecting if a plugin's manifest was modified after install.
 
 ```bash
 # View plugin integrity hash
@@ -566,7 +566,7 @@ Plugin prompts (`PROMPT.md`) are handled carefully:
 2. **Non-authoritative wrapping**: when injected into AI context, plugin prompts are clearly labeled as third-party
 3. **Core precedence**: the core system prompt (`CLAUDE.md`) is always presented first; plugin prompts come after
 
-A malicious prompt cannot override core JerikoBot behavior because the AI sees the core instructions first.
+A malicious prompt cannot override core Jeriko behavior because the AI sees the core instructions first.
 
 ---
 

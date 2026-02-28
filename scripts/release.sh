@@ -76,6 +76,17 @@ if [ -z "$BUILT" ]; then
     exit 1
 fi
 
+# Package templates archive
+info "Packaging project templates..."
+TEMPLATES_ARCHIVE="$DIST_DIR/templates.tar.gz"
+if [ -d "templates" ]; then
+    tar -czf "$TEMPLATES_ARCHIVE" -C templates . 2>/dev/null
+    tmpl_size=$(ls -lh "$TEMPLATES_ARCHIVE" | awk '{print $5}')
+    ok "Templates archive created (${tmpl_size})"
+else
+    err "templates/ directory not found — templates will not be included in release"
+fi
+
 # Generate manifest.json with checksums
 info "Generating manifest.json..."
 
@@ -112,6 +123,9 @@ for platform in $BUILT; do
     echo "  $binary  ($size)"
 done
 echo "  $MANIFEST"
+if [ -f "$TEMPLATES_ARCHIVE" ]; then
+    echo "  $TEMPLATES_ARCHIVE  ($tmpl_size)"
+fi
 echo ""
 echo -e "To publish: ${BOLD}gh release create v${VERSION} dist/*${NC}"
 echo ""

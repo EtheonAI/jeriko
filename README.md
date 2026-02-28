@@ -1,4 +1,4 @@
-# JerikoBot
+# Jeriko
 
 Unix-first CLI toolkit that gives any AI model full machine control. 46 commands. Model-agnostic. Composable via pipes. Zero vendor lock-in.
 
@@ -67,11 +67,11 @@ One binary. Every command returns structured output. Any AI with `exec()` become
 
 ```bash
 # npm (recommended)
-npm install -g jerikobot
+npm install -g Jeriko
 
 # From source
-git clone https://github.com/khaleel737/jerikobot.git
-cd jerikobot && npm install
+git clone https://github.com/khaleel737/Jeriko.git
+cd Jeriko && npm install
 npm link   # makes `jeriko` available globally
 
 # First-run setup (6-step interactive wizard)
@@ -84,7 +84,7 @@ jeriko init
 2. **Telegram Bot** — connect via BotFather token + admin ID allowlist
 3. **Security** — auto-generates `NODE_AUTH_SECRET`, sets `.env` to 600 permissions
 4. **Tunnel** — optional localtunnel or Cloudflare tunnel for webhooks
-5. **Server** — start the JerikoBot server (HTTP + WebSocket + Telegram + WhatsApp)
+5. **Server** — start the Jeriko server (HTTP + WebSocket + Telegram + WhatsApp)
 6. **Verify** — runs `jeriko sys`, `jeriko discover`, `jeriko exec` to confirm everything works
 
 Non-interactive mode:
@@ -138,7 +138,7 @@ jeriko                                        # interactive AI chat (REPL)
 
 ## Connect Any AI
 
-JerikoBot is model-agnostic. Any AI that can execute shell commands can use it.
+Jeriko is model-agnostic. Any AI that can execute shell commands can use it.
 
 ### Claude Code
 
@@ -578,7 +578,7 @@ See [docs/COMMANDS.md](docs/COMMANDS.md) for the full reference with flag tables
 
 ## Piping & Composition
 
-JerikoBot commands are Unix-native. They read stdin, write to stdout, and compose via pipes.
+Jeriko commands are Unix-native. They read stdin, write to stdout, and compose via pipes.
 
 ```bash
 # Pipe system info to Telegram
@@ -618,7 +618,7 @@ When stdin is JSON from another jeriko command (e.g. `jeriko sys | jeriko notify
 
 ## Project Scaffolding & Templates
 
-When you ask JerikoBot to build an app (via Telegram, chat, or any AI backend), it uses `jeriko create` with built-in templates.
+When you ask Jeriko to build an app (via Telegram, chat, or any AI backend), it uses `jeriko create` with built-in templates.
 
 ### 6 Built-in Templates
 
@@ -649,7 +649,7 @@ Editor auto-detection checks for: VS Code, Cursor, Sublime Text, WebStorm, Zed, 
 
 Third-party commands installed to `~/.jeriko/plugins/`. Each plugin provides:
 
-- **Commands** — executables in `bin/` that follow the JerikoBot output contract
+- **Commands** — executables in `bin/` that follow the Jeriko output contract
 - **Manifest** — `jeriko-plugin.json` declaring name, namespace, commands, env vars, webhooks, platform support
 - **AI Prompt** — optional `PROMPT.md` loaded on-demand into the AI system prompt (trusted plugins only)
 - **Command Docs** — `COMMANDS.md` always included in `jeriko prompt` output for trusted plugins
@@ -745,7 +745,7 @@ Trigger data is persisted in `data/triggers.json`. Execution history in `data/tr
 
 ## Multi-Machine Orchestration
 
-JerikoBot runs as a hub that controls remote nodes via WebSocket.
+Jeriko runs as a hub that controls remote nodes via WebSocket.
 
 ```
 ┌──────────────┐       WebSocket       ┌──────────────┐
@@ -1081,7 +1081,7 @@ See [docs/INSTALL.md](docs/INSTALL.md) for the full configuration reference.
 
 ### Current Security Model
 
-JerikoBot's security is **application-level** — defense in depth at the Node.js layer with a clear roadmap to kernel-level isolation.
+Jeriko's security is **application-level** — defense in depth at the Node.js layer with a clear roadmap to kernel-level isolation.
 
 #### What Exists Today
 
@@ -1106,7 +1106,7 @@ JerikoBot's security is **application-level** — defense in depth at the Node.j
 
 ### Attack Surface & Prompt Injection
 
-The AI bash tool in `router.js` is the primary attack surface. Any command the AI generates runs with the same permissions as the JerikoBot server process.
+The AI bash tool in `router.js` is the primary attack surface. Any command the AI generates runs with the same permissions as the Jeriko server process.
 
 **If the AI is tricked via prompt injection, it can do anything the user can do.**
 
@@ -1233,13 +1233,13 @@ Strongest isolation. Each execution runs in its own kernel boundary.
 | **gVisor** | User-space kernel, intercepts syscalls, used by Google Cloud Run |
 | **KVM** | Full VM, heaviest but most isolated |
 
-Required if JerikoBot becomes multi-tenant or runs untrusted user-submitted code.
+Required if Jeriko becomes multi-tenant or runs untrusted user-submitted code.
 
 ### eBPF Observability
 
 eBPF (extended Berkeley Packet Filter) provides real-time kernel-level observability without modifying the kernel or application code.
 
-#### What eBPF Enables for JerikoBot
+#### What eBPF Enables for Jeriko
 
 | Capability | How It Works |
 |-----------|-------------|
@@ -1258,9 +1258,9 @@ eBPF (extended Berkeley Packet Filter) provides real-time kernel-level observabi
 | Overhead | Near-zero (kernel inline) | Very low (JIT-compiled in kernel) |
 | Flexibility | Static filter per process | Dynamic programs, maps, per-cgroup policies |
 | Response | Kill process or return EPERM | Log, alert, rate-limit, or kill — programmable |
-| Use in JerikoBot | Level 3 (hard syscall deny) | Level 3+ (monitoring, anomaly detection, dynamic policy) |
+| Use in Jeriko | Level 3 (hard syscall deny) | Level 3+ (monitoring, anomaly detection, dynamic policy) |
 
-eBPF programs run in kernel space with safety guarantees (verified by the eBPF verifier before loading). They can observe every syscall, network packet, and file operation from AI-spawned processes without any modifications to the JerikoBot codebase.
+eBPF programs run in kernel space with safety guarantees (verified by the eBPF verifier before loading). They can observe every syscall, network packet, and file operation from AI-spawned processes without any modifications to the Jeriko codebase.
 
 ### Execution Manifests
 
@@ -1338,7 +1338,7 @@ If the command tries to access a path outside `scope`, the kernel returns `EPERM
 | Firecracker | Full | None | None |
 | gVisor | Full | None | None |
 
-**macOS strategy:** Application-level controls (Phase 1) work everywhere. For kernel-level isolation on macOS, the practical option is running JerikoBot inside a Linux VM (e.g., OrbStack, Lima, or Docker Desktop's Linux VM). Native macOS sandboxing via `sandbox-exec` is deprecated and limited but functional for basic filesystem scoping.
+**macOS strategy:** Application-level controls (Phase 1) work everywhere. For kernel-level isolation on macOS, the practical option is running Jeriko inside a Linux VM (e.g., OrbStack, Lima, or Docker Desktop's Linux VM). Native macOS sandboxing via `sandbox-exec` is deprecated and limited but functional for basic filesystem scoping.
 
 **Production deployment:** Linux is the target for hardened execution. macOS is for development.
 
@@ -1471,7 +1471,7 @@ server/
 agent/
   agent.js             # remote node agent (WebSocket client, multi-backend, reconnection)
   install.sh           # one-line installer for remote nodes
-  jerikobot-agent.service  # systemd service file (auto-start on Linux)
+  Jeriko-agent.service  # systemd service file (auto-start on Linux)
 ~/.jeriko/
   projects/            # AI-built projects (jeriko create)
   plugins/             # installed third-party plugins

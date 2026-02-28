@@ -1,0 +1,15 @@
+.logo {
+  padding: rem(4px) rem(8px);
+  font-size: var(--mantine-font-size-md);
+  border-radius: var(--mantine-radius-sm);
+  font-weight: 600;
+
+  &:hover {
+    transition: all ease 150ms;
+    font-weight: 800;
+  }
+}
+
+.logoImage {
+  border-radius: var(--mantine-radius-md);
+}

@@ -1,4 +1,4 @@
-# JerikoBot — Technical Business Plan
+# Jeriko — Technical Business Plan
 
 **Version:** 1.0
 **Date:** February 23, 2026
@@ -9,7 +9,7 @@
 
 ## 1. Executive Summary
 
-JerikoBot is a **unified CLI toolkit that gives any AI model full control over any machine** through structured Unix commands. Instead of building proprietary tool abstractions (like MCP servers, OpenAI plugins, or runtime functions), JerikoBot exposes machine capabilities as composable CLI commands with standardized JSON output — consumable by Claude, GPT, Gemini, Llama, or any future AI model.
+Jeriko is a **unified CLI toolkit that gives any AI model full control over any machine** through structured Unix commands. Instead of building proprietary tool abstractions (like MCP servers, OpenAI plugins, or runtime functions), Jeriko exposes machine capabilities as composable CLI commands with standardized JSON output — consumable by Claude, GPT, Gemini, Llama, or any future AI model.
 
 **The thesis:** The operating system is the only runtime AI agents need. Every capability — files, browser, camera, email, calendar, contacts, audio, messaging, notifications, shell access — is a command. Any AI that can execute a command can control the machine. No runtime. No framework. No lock-in.
 
@@ -44,7 +44,7 @@ Three schemas. Three runtimes. Three tool registries. Every capability reimpleme
 5. **Complexity** — Tool runtimes add 50+ dependencies, TypeScript builds, persistent daemons
 6. **Limited reach** — Only capabilities someone built a tool for are available
 
-### What JerikoBot Solves
+### What Jeriko Solves
 
 ```
 Any AI model → jeriko <command> → JSON output → done
@@ -56,7 +56,7 @@ One interface. Every model. Every capability. Zero runtime overhead. The OS prov
 
 ## 3. Product Definition
 
-### What JerikoBot Is
+### What Jeriko Is
 
 A CLI toolkit of 20+ commands (and growing) that exposes machine capabilities through a standardized JSON interface:
 
@@ -166,7 +166,7 @@ Layer 3: Orchestration (server/*)
 
 #### Category 1: AI Agents (brain + tools bundled)
 
-| Product | What it is | Why it's not JerikoBot |
+| Product | What it is | Why it's not Jeriko |
 |---------|-----------|----------------------|
 | OpenClaw | Personal AI assistant, 217K GitHub stars | Tools locked inside runtime. CLI is for humans, not AI consumption. Monolithic. |
 | Open Interpreter | LLM that generates/executes code | IS the agent, not a toolkit. No structured output. No triggers. No mobile. |
@@ -187,7 +187,7 @@ Layer 3: Orchestration (server/*)
 | Codehooks | Serverless backend only | No local operations |
 | Frankenterm | Terminal pane management only | No machine control commands |
 
-#### Category 3: JerikoBot (the gap)
+#### Category 3: Jeriko (the gap)
 
 ```
 Unified CLI toolkit:
@@ -234,8 +234,8 @@ Unified CLI toolkit:
 - Freelancers who want AI assistants accessible from mobile
 
 **Phase 3 — Enterprise & Platform:**
-- Companies building AI agents on top of JerikoBot
-- SaaS providers shipping CLIs following the JerikoBot standard
+- Companies building AI agents on top of Jeriko
+- SaaS providers shipping CLIs following the Jeriko standard
 - Platform integrators connecting multiple AI models to machine infrastructure
 
 ---
@@ -317,7 +317,7 @@ run(async () => {
 │ Telegram  │──┐               │
 │ WhatsApp  │──┤               │
 │ Future    │──┤     ┌─────────▼──────────┐
-└──────────┘  ├────▶│   JERIKOBOT ROUTER   │
+└──────────┘  ├────▶│   Jeriko ROUTER   │
                │     │                      │
                │     │  @local → connector  │
                │     │  @node1 → WebSocket  │
@@ -397,7 +397,7 @@ STORAGE:
 
 ---
 
-## 6. The JerikoBot Standard (v1.0)
+## 6. The Jeriko Standard (v1.0)
 
 The core intellectual property — the specification that companies and developers follow to make their CLIs AI-consumable:
 
@@ -556,7 +556,7 @@ Tasks:
   [ ] Ollama connector (connectors/ollama.js)
   [ ] jeriko discover — auto-generate system prompt from installed commands
   [ ] jeriko <cmd> --help — machine-readable JSON usage
-  [ ] Publish JerikoBot Output Standard v1.0
+  [ ] Publish Jeriko Output Standard v1.0
   [ ] Demo: same task executed by Claude, GPT, Gemini, local Llama
   [ ] jeriko memory — persistent key-value + text search
 ```
@@ -567,7 +567,7 @@ Tasks:
 
 ```
 Tasks:
-  [ ] @jerikobot/cli-sdk — npm package for building commands
+  [ ] @Jeriko/cli-sdk — npm package for building commands
   [ ] Plugin system: npm install -g jeriko-<name> → auto-discovered
   [ ] More trigger types: RSS, Slack events, Discord events, database changes
   [ ] More notification channels: Discord, Slack, email SMTP, push notifications
@@ -601,9 +601,9 @@ Tasks:
 
 ```
 Tasks:
-  [ ] Partner with SaaS companies to ship JerikoBot-compatible CLIs
+  [ ] Partner with SaaS companies to ship Jeriko-compatible CLIs
   [ ] AI model fine-tuning dataset: jeriko command patterns
-  [ ] Certification program: "JerikoBot Compatible" CLI badge
+  [ ] Certification program: "Jeriko Compatible" CLI badge
   [ ] Enterprise platform with managed infrastructure
   [ ] Mobile app (iOS/Android) as remote node
   [ ] Voice interface: speak commands, hear results
@@ -622,10 +622,10 @@ FREE (Open Source — MIT):
   Trigger engine
   Multi-machine agents
   AI connectors (Claude, GPT, Gemini, Ollama)
-  The JerikoBot Standard specification
-  @jerikobot/cli-sdk
+  The Jeriko Standard specification
+  @Jeriko/cli-sdk
 
-PAID (JerikoBot Pro):
+PAID (Jeriko Pro):
   Hosted trigger management dashboard
   Cloud-hosted remote nodes (no self-hosting needed)
   Enterprise security (SSO, RBAC, audit logging, compliance)
@@ -638,12 +638,12 @@ PAID (JerikoBot Pro):
 
 | Stream | Model | Target |
 |--------|-------|--------|
-| **JerikoBot Pro** | $29/mo individual, $99/mo team | Developers, small teams |
+| **Jeriko Pro** | $29/mo individual, $99/mo team | Developers, small teams |
 | **Enterprise** | Custom pricing | Companies with compliance requirements |
 | **CLI SDK License** | Free (MIT) + paid support | Companies building compatible CLIs |
 | **Marketplace** | Revenue share on premium commands | Third-party developers |
 | **Consulting** | Hourly/project | Companies building AI agent infrastructure |
-| **Certification** | One-time fee per CLI | SaaS companies wanting "JerikoBot Compatible" badge |
+| **Certification** | One-time fee per CLI | SaaS companies wanting "Jeriko Compatible" badge |
 
 ---
 
@@ -653,7 +653,7 @@ PAID (JerikoBot Pro):
 
 ```
 1. Open source on GitHub (MIT license)
-2. npm install -g jerikobot
+2. npm install -g Jeriko
 3. README with "5-minute quickstart"
 4. Demo video: "Control your Mac from Telegram with AI"
 5. Hacker News launch post
@@ -664,7 +664,7 @@ PAID (JerikoBot Pro):
 ### Phase 2: Content & Positioning
 
 ```
-1. "The JerikoBot Standard" — publish as specification
+1. "The Jeriko Standard" — publish as specification
 2. "CLI vs MCP" comparison articles (ride the trend)
 3. "Why Unix is the AI Agent Runtime" — technical deep dive
 4. Conference talks: "Building the Command Layer for AI Agents"
@@ -676,9 +676,9 @@ PAID (JerikoBot Pro):
 
 ```
 1. Partner with CLI-heavy companies (Stripe, GitHub, Vercel)
-2. Publish @jerikobot/cli-sdk on npm
+2. Publish @Jeriko/cli-sdk on npm
 3. Community command marketplace
-4. "JerikoBot Compatible" certification for third-party CLIs
+4. "Jeriko Compatible" certification for third-party CLIs
 5. Integration guides for popular AI frameworks
 ```
 
@@ -700,7 +700,7 @@ PAID (JerikoBot Pro):
 
 ```
 OpenClaw/MCP: ~145,000 tokens per task (tool schemas)
-JerikoBot:    ~4,150 tokens per task (command descriptions)
+Jeriko:    ~4,150 tokens per task (command descriptions)
 
 35x more efficient. This directly translates to:
   - Faster responses
@@ -741,7 +741,7 @@ No plugins. No tool definitions. No rebuilds. Just install and use.
 
 ```
 OpenClaw remote node:  Full Gateway daemon + 50 dependencies + TypeScript build
-JerikoBot remote node: 55 lines of JavaScript + npm install
+Jeriko remote node: 55 lines of JavaScript + npm install
 
 Deployed in seconds. Runs on anything with Node.js.
 ```
@@ -841,7 +841,7 @@ Must be re-learned every conversation. 30K+ tokens of context wasted.
 
 ## 15. Conclusion
 
-JerikoBot is the right product at the right time:
+Jeriko is the right product at the right time:
 
 1. **The industry needs it** — every major AI company converged on shell execution, but nobody built the unified command layer
 2. **The market validates it** — Feb 2026 articles overwhelmingly favor CLI over MCP/tool schemas
@@ -850,10 +850,10 @@ JerikoBot is the right product at the right time:
 5. **The ecosystem is free** — thousands of existing CLIs work immediately
 6. **The moat is deep** — published standard + community + first-mover advantage
 
-**The operating system is the only runtime AI agents need. JerikoBot proves it.**
+**The operating system is the only runtime AI agents need. Jeriko proves it.**
 
 ---
 
-*JerikoBot — Build the OS. Not the app.*
+*Jeriko — Build the OS. Not the app.*
 
 *Etheon — 2026*

@@ -1,72 +1,93 @@
 {
-  "name": "jerikobot",
-  "version": "1.0.0",
-  "description": "Multi-machine control via Telegram/WhatsApp with Claude Code execution",
-  "main": "server/index.js",
-  "exports": {
-    ".": "./server/index.js",
-    "./lib/cli": "./lib/cli.js",
-    "./lib/plugins": "./lib/plugins.js"
-  },
+  "name": "jeriko",
+  "version": "2.0.0-alpha.0",
+  "description": "Unix-first CLI toolkit for AI agents — commands replace proprietary tool abstractions",
+  "type": "module",
+  "main": "src/index.ts",
   "bin": {
-    "jeriko": "./bin/jeriko"
+    "jeriko": "./src/index.ts"
   },
+  "files": [
+    "src/",
+    "scripts/install.sh",
+    "templates/",
+    "AGENT.md",
+    ".env.example",
+    "tsconfig.json",
+    "drizzle.config.ts",
+    "bunfig.toml"
+  ],
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
   "scripts": {
-    "start": "node server/index.js",
-    "agent": "node agent/agent.js",
-    "dev": "node --watch server/index.js"
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts server start --foreground",
+    "build": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --outfile=jeriko",
+    "build:darwin-arm64": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --target=bun-darwin-arm64 --outfile=dist/jeriko-darwin-arm64",
+    "build:darwin-x64": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --target=bun-darwin-x64 --outfile=dist/jeriko-darwin-x64",
+    "build:linux-arm64": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --target=bun-linux-arm64 --outfile=dist/jeriko-linux-arm64",
+    "build:linux-x64": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --target=bun-linux-x64 --outfile=dist/jeriko-linux-x64",
+    "build:windows-x64": "bun build src/index.ts --compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp --external playwright-core --external electron --target=bun-windows-x64 --outfile=dist/jeriko-windows-x64.exe",
+    "build:all": "bun run build:darwin-arm64 && bun run build:darwin-x64 && bun run build:linux-arm64 && bun run build:linux-x64 && bun run build:windows-x64",
+    "test": "bun test",
+    "test:unit": "bun test test/unit/",
+    "test:integration": "bun test test/integration/",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit && echo 'Type check passed'",
+    "check": "tsc --noEmit",
+    "website:dev": "bun run --cwd apps/website dev -- --port 3002",
+    "website:build": "bun run --cwd apps/website build",
+    "website:start": "bun run --cwd apps/website start -- --port 3002"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "bun": ">=1.1.0"
   },
   "os": [
     "darwin",
     "linux",
     "win32"
   ],
-  "files": [
-    "bin/",
-    "lib/",
-    "tools/",
-    "server/",
-    "templates/",
-    "runtime/main.go",
-    "runtime/go.mod",
-    "runtime/build.sh",
-    "CLAUDE.md",
-    ".env.example"
+  "cpu": [
+    "x64",
+    "arm64"
   ],
   "keywords": [
     "cli",
     "ai",
+    "agent",
     "automation",
+    "unix",
     "macos",
+    "linux",
+    "windows",
+    "daemon",
     "tools",
     "telegram",
-    "agent",
-    "unix"
+    "whatsapp"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/khaleel737/jerikobot.git"
+    "url": "https://github.com/khaleel737/jeriko.git"
   },
-  "homepage": "https://jerikobot.vercel.app",
+  "homepage": "https://jeriko.ai",
   "license": "MIT",
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.16",
     "croner": "^10.0.1",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "express-rate-limit": "^7.5.0",
-    "imap": "^0.8.19",
-    "mailparser": "^3.9.3",
-    "node-notifier": "^10.0.1",
-    "nodemailer": "^8.0.1",
-    "playwright": "^1.58.2",
-    "qrcode": "^1.5.4",
-    "systeminformation": "^5.31.1",
-    "telegraf": "^4.16.3",
-    "uuid": "^11.1.0",
-    "ws": "^8.18.0"
+    "drizzle-orm": "^0.39.0",
+    "grammy": "^1.35.0",
+    "hono": "^4.7.0",
+    "playwright-core": "^1.58.2",
+    "ws": "^8.18.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "^25.3.2",
+    "@types/ws": "^8.5.0",
+    "drizzle-kit": "^0.30.0",
+    "typescript": "^5.7.0"
   }
 }

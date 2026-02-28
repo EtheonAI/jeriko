@@ -128,7 +128,7 @@ sections.push(
   para('3. The Solution: JerikoOS'),
   para('4. Market Analysis'),
   para('5. Competitive Landscape'),
-  para('6. What Exists Today (JerikoBot v1.0)'),
+  para('6. What Exists Today (Jeriko v1.0)'),
   para('7. Technical Architecture: From CLI to OS'),
   para('8. The Daemon: Core of JerikoOS'),
   para('9. Kernel Integration & eBPF'),
@@ -156,7 +156,7 @@ sections.push(
     { text: 'through which users interact with their computer. There is no desktop. No icons. No menus. You speak to Jeriko, and Jeriko controls the machine at the kernel level.' },
   ]),
   spacer(),
-  para('The foundation already exists. JerikoBot v1.0 is a working Unix-first CLI toolkit with 46 commands that give any AI model full machine control \u2014 system management, file operations, browser automation, communication (Telegram, WhatsApp, iMessage, email, SMS, phone calls), payments (Stripe), social media (X/Twitter), cloud deployment (Vercel, GitHub), media capture (camera, audio, screenshots), and macOS-native app control (Notes, Calendar, Reminders, Contacts, Music). It supports 4 AI backends (Claude, OpenAI, local models via Ollama, Claude Code CLI), has a plugin system with trust-based security, a trigger engine for autonomous operation, and multi-machine orchestration via WebSocket.'),
+  para('The foundation already exists. Jeriko v1.0 is a working Unix-first CLI toolkit with 46 commands that give any AI model full machine control \u2014 system management, file operations, browser automation, communication (Telegram, WhatsApp, iMessage, email, SMS, phone calls), payments (Stripe), social media (X/Twitter), cloud deployment (Vercel, GitHub), media capture (camera, audio, screenshots), and macOS-native app control (Notes, Calendar, Reminders, Contacts, Music). It supports 4 AI backends (Claude, OpenAI, local models via Ollama, Claude Code CLI), has a plugin system with trust-based security, a trigger engine for autonomous operation, and multi-machine orchestration via WebSocket.'),
   spacer(),
   para([
     { text: 'The next step is the OS layer: ', bold: true },
@@ -172,7 +172,7 @@ sections.push(
   spacer(),
 
   h2('Key Facts'),
-  bullet([{ text: 'Current state: ', bold: true }, { text: 'JerikoBot v1.0 \u2014 46 commands, 4 AI backends, 15 dependencies, MIT licensed' }]),
+  bullet([{ text: 'Current state: ', bold: true }, { text: 'Jeriko v1.0 \u2014 46 commands, 4 AI backends, 15 dependencies, MIT licensed' }]),
   bullet([{ text: 'Architecture: ', bold: true }, { text: 'Unix CLI toolkit \u2192 Rust daemon \u2192 AI-native OS' }]),
   bullet([{ text: 'Competitive gap: ', bold: true }, { text: 'Nobody has shipped a real AI-native OS. OpenAI\'s hardware delayed to 2027. Google\'s Aluminium OS delayed to 2028. Humane is dead. Microsoft admits Copilot "doesn\'t really work."' }]),
   bullet([{ text: 'Market validation: ', bold: true }, { text: 'CLI tools empirically beating MCP (35x token reduction). Industry consensus shifting toward Unix-philosophy AI interfaces.' }]),
@@ -229,7 +229,7 @@ sections.push(
 sections.push(
   h1('3. The Solution: JerikoOS'),
   spacer(),
-  para('JerikoOS is an operating system where the AI is not a feature \u2014 it IS the interface. Built on the Linux kernel, with a Rust system daemon providing kernel-level access, and the JerikoBot CLI toolkit providing 46+ commands for machine control.'),
+  para('JerikoOS is an operating system where the AI is not a feature \u2014 it IS the interface. Built on the Linux kernel, with a Rust system daemon providing kernel-level access, and the Jeriko CLI toolkit providing 46+ commands for machine control.'),
   spacer(),
 
   h2('3.1 How It Works'),
@@ -268,7 +268,7 @@ sections.push(
   bullet('Responsive \u2014 works on desktop, tablet, phone'),
   spacer(),
   para('Layer 4: CLI Commands (46+)', { bold: true }),
-  bullet('Unchanged JerikoBot commands, callable by the daemon or directly'),
+  bullet('Unchanged Jeriko commands, callable by the daemon or directly'),
   bullet('Gradually migrated from Node.js to Rust for performance'),
   pageBreak(),
 );
@@ -382,9 +382,9 @@ sections.push(
 
 // ─── 6. WHAT EXISTS TODAY ─────────────────────────────────
 sections.push(
-  h1('6. What Exists Today: JerikoBot v1.0'),
+  h1('6. What Exists Today: Jeriko v1.0'),
   spacer(),
-  para('JerikoBot is not a concept. It is a working product with 46 commands, a plugin system, trigger engine, multi-machine support, and 4 AI backends. It is the foundation on which JerikoOS is built.'),
+  para('Jeriko is not a concept. It is a working product with 46 commands, a plugin system, trigger engine, multi-machine support, and 4 AI backends. It is the foundation on which JerikoOS is built.'),
   spacer(),
 
   h2('6.1 Command Coverage (46 Commands)'),
@@ -425,7 +425,7 @@ sections.push(
   spacer(),
 
   h2('6.3 What This Means'),
-  para('JerikoBot v1.0 is approximately 30% of JerikoOS. The command layer, AI routing, plugin system, trigger engine, and multi-machine orchestration are built and working. What remains is the system daemon (kernel integration) and the boot/UI layer.'),
+  para('Jeriko v1.0 is approximately 30% of JerikoOS. The command layer, AI routing, plugin system, trigger engine, and multi-machine orchestration are built and working. What remains is the system daemon (kernel integration) and the boot/UI layer.'),
   pageBreak(),
 );
 
@@ -476,7 +476,7 @@ sections.push(
   makeTable(
     ['Phase', 'Node.js', 'Rust Daemon', 'State'],
     [
-      ['Today', 'Everything', 'Nothing', 'JerikoBot v1.0'],
+      ['Today', 'Everything', 'Nothing', 'Jeriko v1.0'],
       ['Month 1-2', 'CLI commands', 'HTTP server, WebSocket, config', 'Daemon alongside Node.js'],
       ['Month 3-4', 'CLI commands', 'Telegram, triggers, AI router, eBPF', 'Daemon replaces server'],
       ['Month 5-6', 'Remaining commands', 'Full OS stack, boot, UI', 'JerikoOS v0.1'],
@@ -608,7 +608,7 @@ sections.push(
   para('An AI with kernel-level access requires the most rigorous security model in the industry. JerikoOS implements defense in depth across 5 layers.'),
   spacer(),
 
-  h2('10.1 Current Security (JerikoBot v1.0)'),
+  h2('10.1 Current Security (Jeriko v1.0)'),
   bullet('Mandatory NODE_AUTH_SECRET (fails if unset)'),
   bullet('HMAC-SHA256 token authentication with timing-safe comparison'),
   bullet('Telegram admin allowlist (ADMIN_TELEGRAM_IDS)'),
@@ -688,7 +688,7 @@ sections.push(
   bullet('eBPF network monitoring (TC ingress/egress per process)'),
   bullet('Dashboard: real-time system stats from eBPF'),
   bullet('Settings UI: AI backend config, Telegram setup, env var management'),
-  bullet([{ text: 'Deliverable: ', bold: true }, { text: 'Full JerikoBot functionality running through Rust daemon with live system monitoring' }]),
+  bullet([{ text: 'Deliverable: ', bold: true }, { text: 'Full Jeriko functionality running through Rust daemon with live system monitoring' }]),
   spacer(),
 
   h2('Month 3: Bootable Image'),
@@ -1127,8 +1127,8 @@ sections.push(
   spacer(),
 
   h2('H. Open Source Repositories'),
-  bullet('JerikoBot: github.com/khaleel737/jerikobot'),
-  bullet('Website: jerikobot.vercel.app'),
+  bullet('Jeriko: github.com/khaleel737/Jeriko'),
+  bullet('Website: Jeriko.vercel.app'),
   spacer(),
   spacer(),
   para('\u2014 End of Document \u2014', { align: AlignmentType.CENTER, bold: true }),

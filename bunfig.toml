@@ -1,0 +1,12 @@
+[install]
+peer = false
+optional = true
+
+[run]
+bun = true
+
+[build]
+target = "bun"
+
+[test]
+root = "test"

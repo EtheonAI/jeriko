@@ -1,12 +1,49 @@
+# Dependencies
 node_modules/
+apps/*/node_modules/
+
+# Environment
 .env
+.env.local
+.env.*.local
+
+# Build output
+dist/
+/jeriko
+*.node
+apps/*/.next/
+apps/*/out/
+
+# Bun
+bun.lockb
+
+# Runtime data
+data/
 auth_info_baileys/
-*.log
-data/x-tokens.json
-data/chrome-profile/
-data/session.jsonl
-data/memory.json
-data/triggers.json
-data/trigger-log.json
-data/server.pid
 screenshots/
+*.log
+
+# Native build
+native/target/
+native/npm/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Legacy v1 data (will be migrated)
+# data/x-tokens.json
+# data/chrome-profile/
+# data/session.jsonl
+# data/memory.json
+# data/triggers.json
+# data/trigger-log.json
+# data/server.pid

@@ -1,10 +1,10 @@
-# Contributing to JerikoBot
+# Contributing to Jeriko
 
 ## Development Setup
 
 ```bash
-git clone https://github.com/etheon/jerikobot.git
-cd jerikobot
+git clone https://github.com/etheon/Jeriko.git
+cd Jeriko
 npm install
 
 # Add bin/ to PATH for development

@@ -272,6 +272,47 @@ cp "$BINARY_PATH" "$INSTALL_DIR/jeriko"
 chmod +x "$INSTALL_DIR/jeriko"
 ok "Binary installed to $INSTALL_DIR/jeriko"
 
+# ── Create directories ────────────────────────────────────────────
+
+JERIKO_DIR="$HOME/.jeriko"
+info "Creating directories..."
+mkdir -p "$JERIKO_DIR/data"          # Agent logs, DB
+mkdir -p "$JERIKO_DIR/logs"          # App logs
+mkdir -p "$JERIKO_DIR/workspace"     # Scripts, outputs, temp data (CodeAct)
+mkdir -p "$JERIKO_DIR/projects"      # Web/app dev projects
+mkdir -p "$JERIKO_DIR/memory"        # Session memory, KV store
+mkdir -p "$JERIKO_DIR/plugins"       # Installed plugins
+mkdir -p "$JERIKO_DIR/prompts"       # Custom system prompts
+mkdir -p "$JERIKO_DIR/downloads"     # Cached release assets
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/jeriko"  # Config
+ok "Directories created"
+
+# ── Install templates ────────────────────────────────────────────
+
+LIB_DIR="$HOME/.local/lib/jeriko"
+TEMPLATES_DIR="$LIB_DIR/templates"
+
+info "Downloading project templates..."
+TEMPLATES_ARCHIVE="$DOWNLOAD_DIR/templates-$VERSION.tar.gz"
+
+if download_asset "$VERSION" "templates.tar.gz" "$TEMPLATES_ARCHIVE" 2>/dev/null; then
+    mkdir -p "$TEMPLATES_DIR"
+    tar -xzf "$TEMPLATES_ARCHIVE" -C "$TEMPLATES_DIR" 2>/dev/null
+    rm -f "$TEMPLATES_ARCHIVE"
+
+    # Count installed templates
+    TMPL_COUNT=0
+    for sub in webdev deploy; do
+        if [ -d "$TEMPLATES_DIR/$sub" ]; then
+            TMPL_COUNT=$((TMPL_COUNT + $(ls -d "$TEMPLATES_DIR/$sub"/*/ 2>/dev/null | wc -l)))
+        fi
+    done
+    ok "$TMPL_COUNT project templates installed"
+else
+    warn "Templates archive not found in release — jeriko create may have limited templates"
+    warn "Templates will be installed from source when running 'jeriko setup' in the repo"
+fi
+
 # ── Run setup ────────────────────────────────────────────────────
 
 info "Running post-install setup..."

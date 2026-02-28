@@ -1,0 +1,326 @@
+@import "tailwindcss";
+
+/* Minimalist Portfolio Design System */
+
+@layer base {
+  :root {
+    /* Base colors */
+    --background: 0 0% 98%;
+    --foreground: 220 15% 15%;
+
+    /* Card system */
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    /* Primary brand colors */
+    --primary: 220 25% 25%;
+    --primary-foreground: 0 0% 98%;
+    --primary-glow: 220 25% 35%;
+
+    /* Secondary system */
+    --secondary: 220 8% 92%;
+    --secondary-foreground: 220 15% 15%;
+
+    /* Accent colors */
+    --accent: 25 95% 65%;
+    --accent-foreground: 220 15% 15%;
+    --accent-soft: 25 85% 85%;
+
+    /* Muted system */
+    --muted: 220 8% 96%;
+    --muted-foreground: 220 8% 45%;
+
+    /* Interactive states */
+    --destructive: 0 75% 60%;
+    --destructive-foreground: 0 0% 98%;
+    
+    /* Success/status colors */
+    --success: 120 60% 50%;
+    --success-foreground: 0 0% 98%;
+    --success-soft: 120 60% 95%;
+    
+    /* Timeline system */
+    --timeline-bg: 220 25% 25%;
+    --timeline-foreground: 0 0% 98%;
+    --timeline-border: 220 20% 35%;
+    --timeline-line: 220 25% 25%;
+    --timeline-icon-bg: 220 25% 25%;
+    --timeline-icon-border: 220 25% 25%;
+    --timeline-date: 220 25% 25%;
+    
+    /* App-specific colors */
+    --logo-primary: 220 100% 70%;
+    --logo-secondary: 195 100% 70%;
+    --app-muted: 0 0% 53%;
+    
+    --border: 220 8% 88%;
+    --input: 220 8% 94%;
+    --ring: 220 25% 25%;
+
+    /* Design system tokens */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
+    --gradient-accent: linear-gradient(135deg, hsl(var(--accent)), hsl(var(--accent-soft)));
+    --gradient-subtle: linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted)));
+    
+    /* Shadows */
+    --shadow-elegant: 0 10px 30px -10px hsl(var(--primary) / 0.15);
+    --shadow-glow: 0 0 40px hsl(var(--accent) / 0.2);
+    --shadow-card: 0 2px 20px -5px hsl(var(--primary) / 0.1);
+    
+    /* Animations */
+    --transition-smooth: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-fast: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    --transition-spring: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    --radius: 0.5rem;
+
+    --sidebar-background: 0 0% 98%;
+
+    --sidebar-foreground: 240 5.3% 26.1%;
+
+    --sidebar-primary: 240 5.9% 10%;
+
+    --sidebar-primary-foreground: 0 0% 98%;
+
+    --sidebar-accent: 240 4.8% 95.9%;
+
+    --sidebar-accent-foreground: 240 5.9% 10%;
+
+    --sidebar-border: 220 13% 91%;
+
+    --sidebar-ring: 217.2 91.2% 59.8%;
+  }
+
+  .dark {
+    /* Dark mode colors */
+    --background: 220 25% 8%;
+    --foreground: 0 0% 95%;
+
+    --card: 220 20% 12%;
+    --card-foreground: 0 0% 95%;
+
+    --primary: 25 95% 65%;
+    --primary-foreground: 220 25% 8%;
+    --primary-glow: 25 85% 75%;
+
+    --secondary: 220 15% 20%;
+    --secondary-foreground: 0 0% 90%;
+
+    --accent: 25 95% 65%;
+    --accent-foreground: 220 25% 8%;
+    --accent-soft: 25 85% 25%;
+
+    --muted: 220 15% 15%;
+    --muted-foreground: 220 8% 65%;
+
+    --destructive: 0 75% 60%;
+    --destructive-foreground: 0 0% 95%;
+
+    /* Success/status colors - dark mode */
+    --success: 120 60% 55%;
+    --success-foreground: 220 25% 8%;
+    --success-soft: 120 30% 20%;
+    
+    /* Timeline system - dark mode */
+    --timeline-bg: 220 15% 30%;
+    --timeline-foreground: 0 0% 95%;
+    --timeline-border: 220 15% 40%;
+    --timeline-line: 220 8% 65%;
+    --timeline-icon-bg: 220 8% 65%;
+    --timeline-icon-border: 220 8% 75%;
+    --timeline-date: 220 8% 75%;
+    
+    /* App-specific colors - dark mode */
+    --logo-primary: 220 100% 70%;
+    --logo-secondary: 195 100% 70%;
+    --app-muted: 0 0% 53%;
+
+    --border: 220 15% 25%;
+    --input: 220 15% 18%;
+    --ring: 25 95% 65%;
+
+    /* Dark mode design tokens */
+    --gradient-primary: linear-gradient(135deg, hsl(var(--primary)), hsl(var(--primary-glow)));
+    --gradient-accent: linear-gradient(135deg, hsl(var(--accent)), hsl(var(--accent-soft)));
+    --gradient-subtle: linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted)));
+    
+    --shadow-elegant: 0 10px 30px -10px hsl(0 0% 0% / 0.3);
+    --shadow-glow: 0 0 40px hsl(var(--accent) / 0.3);
+    --shadow-card: 0 2px 20px -5px hsl(0 0% 0% / 0.2);
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    scroll-behavior: smooth;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Elegant animations */
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+
+  .animate-pulse-glow {
+    animation: pulse-glow 3s ease-in-out infinite;
+  }
+
+  .animate-slide-up {
+    animation: slide-up 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  }
+
+  .animate-fade-in {
+    animation: fade-in 1s ease-out forwards;
+  }
+
+  .animate-scale-hover {
+    transition: var(--transition-fast);
+  }
+
+  .animate-scale-hover:hover {
+    transform: scale(1.05);
+  }
+
+  /* Gradient backgrounds */
+  .bg-gradient-primary {
+    background: var(--gradient-primary);
+  }
+
+  .bg-gradient-accent {
+    background: var(--gradient-accent);
+  }
+
+  .bg-gradient-subtle {
+    background: var(--gradient-subtle);
+  }
+
+  /* Elegant shadows */
+  .shadow-elegant {
+    box-shadow: var(--shadow-elegant);
+  }
+
+  .shadow-glow {
+    box-shadow: var(--shadow-glow);
+  }
+
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+
+  /* Text effects */
+  .text-gradient {
+    background: var(--gradient-primary);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .text-accent-gradient {
+    background: var(--gradient-accent);
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  /* Smooth transitions */
+  .transition-smooth {
+    transition: var(--transition-smooth);
+  }
+
+  .transition-fast {
+    transition: var(--transition-fast);
+  }
+
+  .transition-spring {
+    transition: var(--transition-spring);
+  }
+
+  /* Interactive elements */
+
+  /* Particle background */
+  .particles-bg {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    pointer-events: none;
+  }
+
+  .particle {
+    position: absolute;
+    width: 2px;
+    height: 2px;
+    background: hsl(var(--accent));
+    border-radius: 50%;
+    animation: particle-float 10s linear infinite;
+    opacity: 0.3;
+  }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-20px); }
+}
+
+@keyframes pulse-glow {
+  0%, 100% { 
+    box-shadow: 0 0 20px hsl(var(--accent) / 0.3);
+  }
+  50% { 
+    box-shadow: 0 0 40px hsl(var(--accent) / 0.6);
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(60px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes particle-float {
+  0% {
+    transform: translateY(100vh) translateX(-10px);
+    opacity: 0;
+  }
+  10% {
+    opacity: 0.3;
+  }
+  90% {
+    opacity: 0.3;
+  }
+  100% {
+    transform: translateY(-100px) translateX(10px);
+    opacity: 0;
+  }
+}
+

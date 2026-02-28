@@ -1,0 +1,33 @@
+{
+  "data": [
+    {
+      "title": "Sales Today",
+      "icon": "receipt",
+      "value": "13,456",
+      "diff": 34,
+      "period": "today",
+      "comparedTo": "COMPARED TO YESTERDAY"
+    },
+    {
+      "title": "Visitors",
+      "icon": "coin",
+      "value": "4,145",
+      "diff": -13,
+      "period": "annual",
+      "comparedTo": "COMPARED TO LAST YEAR"
+    },
+    {
+      "title": "Total Earnings",
+      "icon": "discount",
+      "value": "$ 74,5",
+      "diff": 18,
+      "period": "monthly",
+      "comparedTo": "COMPARED TO LAST MONTH"
+    },
+    {
+      "title": "Pending Orders",
+      "icon": "user",
+      "value": "188"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+[package]
+name = "jeriko-native"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", features = ["async", "serde-json", "tokio_rt"] }
+napi-derive = "2"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+sha2 = "0.10"
+base64 = "0.22"
+obfstr = "0.4"
+hostname = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+futures = "0.3"
+
+[build-dependencies]
+napi-build = "2"
+
+[profile.release]
+lto = true
+strip = "symbols"
+opt-level = "z"
+codegen-units = 1
+panic = "abort"
+
+[package.metadata.napi]
+name = "jeriko-native"
+triples = [
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-unknown-linux-gnu",
+]

@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "category": "Category 1",
+    "title": "Title 1",
+    "description": "I am a placeholder for a text insight"
+  },
+  {
+    "id": 2,
+    "category": "Category 2", 
+    "title": "Title 2",
+    "description": "I am a placeholder for a text insight"
+  },
+  {
+    "id": 3,
+    "category": "Category 3",
+    "title": "Title 3",
+    "description": "I am a placeholder for a text insight"
+  }
+]

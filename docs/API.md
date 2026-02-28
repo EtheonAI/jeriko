@@ -1,10 +1,10 @@
-# JerikoBot Server API Reference
+# Jeriko Server API Reference
 
-Complete reference for the JerikoBot server: HTTP endpoints, WebSocket protocol, Telegram bot commands, AI routing, and webhook receivers.
+Complete reference for the Jeriko server: HTTP endpoints, WebSocket protocol, Telegram bot commands, AI routing, and webhook receivers.
 
 ## Overview
 
-The JerikoBot server is a unified runtime combining four interfaces:
+The Jeriko server is a unified runtime combining four interfaces:
 
 | Interface  | Transport          | Purpose                          |
 |------------|--------------------|----------------------------------|
@@ -113,7 +113,7 @@ Health check. No authentication required.
 **Response:**
 ```json
 {
-  "name": "jerikobot",
+  "name": "Jeriko",
   "status": "running",
   "uptime": 3600.123,
   "nodes": 2,
@@ -123,7 +123,7 @@ Health check. No authentication required.
 
 | Field            | Type   | Description                        |
 |------------------|--------|------------------------------------|
-| `name`           | string | Always `"jerikobot"`               |
+| `name`           | string | Always `"Jeriko"`               |
 | `status`         | string | Always `"running"`                 |
 | `uptime`         | number | Server uptime in seconds           |
 | `nodes`          | number | Count of connected WebSocket nodes |
@@ -477,7 +477,7 @@ All tools from `tools/index.js` are registered as Telegram slash commands. There
 | `/stripe [flags]`   | Stripe payments, customers, invoices             |
 | `/x [flags]`        | X.com (Twitter) operations                       |
 | `/twilio [flags]`   | Twilio voice calls, SMS/MMS, recordings          |
-| `/install_plugin [flags]` | Install a JerikoBot plugin               |
+| `/install_plugin [flags]` | Install a Jeriko plugin               |
 | `/trust_plugin [flags]`  | Trust or revoke a plugin                  |
 | `/tools`            | List all available tool commands                 |
 

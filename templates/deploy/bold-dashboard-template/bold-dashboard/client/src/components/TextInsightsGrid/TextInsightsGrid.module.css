@@ -1,0 +1,22 @@
+.root {
+  padding: 0;
+}
+
+.title {
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.category {
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.insightTitle {
+  font-weight: 500;
+  line-height: 1.2;
+}
+
+.description {
+  line-height: 1.4;
+}

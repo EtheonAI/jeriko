@@ -1,6 +1,6 @@
 # Trigger System Guide
 
-Triggers are reactive AI automation. Define a condition, and JerikoBot executes an action when it fires -- either by sending the event to Claude for intelligent processing, or by running a shell command directly.
+Triggers are reactive AI automation. Define a condition, and Jeriko executes an action when it fires -- either by sending the event to Claude for intelligent processing, or by running a shell command directly.
 
 ## Overview
 
@@ -54,6 +54,19 @@ POST http://yourserver:3000/hooks/<trigger-id>
 ```
 
 Configure this URL in the external service. The webhook payload is passed to the action as event data.
+
+**Live Webhook URL:** `https://bot.jeriko.ai/hooks/<trigger-id>` (named Cloudflare Tunnel, permanent URL)
+
+**Pre-configured Webhook Triggers:**
+
+| Service | Trigger ID | Events | Hook Formatter |
+|---------|-----------|--------|----------------|
+| Stripe | ff87d788 | charges, invoices, payments, customers | `jeriko stripe hook --no-notify` |
+| PayPal | 8a7f8e3f | payments, subscriptions, checkouts | `jeriko paypal hook --no-notify` |
+| GitHub | 4eae23a1 | push, PRs, issues, releases, CI | `jeriko github hook --no-notify` |
+| Twilio | 3f896c67 | call status, SMS delivery | `jeriko twilio hook --no-notify` |
+
+**Hook Formatters:** Each service has a `hook` subcommand that formats webhook payloads into clean, human-readable notifications without requiring AI. The `--no-notify` flag prevents the hook from sending its own Telegram message (the engine handles both Telegram + macOS notification).
 
 Optional signature verification: set `secret` in the trigger config. Supports GitHub (`x-hub-signature-256`), Stripe (`stripe-signature`), and generic HMAC (`x-webhook-signature`).
 

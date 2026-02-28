@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ── JerikoBot Install Test Orchestrator ─────────────────────────────
+# ── Jeriko Install Test Orchestrator ─────────────────────────────
 # Builds Docker images and runs install tests.
 #
 # Usage:
@@ -23,7 +23,7 @@ ok()   { echo -e "  ${GREEN}[ok]${RESET} $1"; }
 err()  { echo -e "  ${RED}[!!]${RESET} $1"; }
 
 echo ""
-echo -e "  ${BOLD}${CYAN}JerikoBot Install Tests${RESET}"
+echo -e "  ${BOLD}${CYAN}Jeriko Install Tests${RESET}"
 echo -e "  ${DIM}Docker-based installation verification${RESET}"
 echo ""
 
@@ -46,13 +46,13 @@ ok "Docker is available"
 run_linux_test() {
   echo ""
   info "Building Linux test image..."
-  docker build -t jerikobot-test-linux "$SCRIPT_DIR/docker/test-linux/"
-  ok "Image built: jerikobot-test-linux"
+  docker build -t Jeriko-test-linux "$SCRIPT_DIR/docker/test-linux/"
+  ok "Image built: Jeriko-test-linux"
 
   info "Running Linux install test..."
   echo ""
 
-  if docker run --rm -v "$PROJECT_DIR:/repo:ro" jerikobot-test-linux; then
+  if docker run --rm -v "$PROJECT_DIR:/repo:ro" Jeriko-test-linux; then
     ok "Linux install test PASSED"
     return 0
   else
