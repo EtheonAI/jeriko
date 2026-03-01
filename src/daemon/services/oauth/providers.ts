@@ -1,8 +1,8 @@
 // OAuth 2.0 provider configurations.
 //
 // Defines authorization endpoints, token endpoints, scopes, and env var mappings
-// for each connector that supports OAuth. API-key-only connectors (Stripe, Twilio,
-// PayPal) are not listed here — they continue using /auth.
+// for each connector that supports OAuth. API-key-only connectors (Twilio, PayPal)
+// are not listed here — they continue using /auth.
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,7 +21,11 @@ export interface OAuthProvider {
   scopes: string[];
   /** Env var for OAuth client ID (e.g. "GITHUB_OAUTH_CLIENT_ID"). */
   clientIdVar: string;
-  /** Env var for OAuth client secret. */
+  /**
+   * Env var for OAuth client secret.
+   * For providers using Basic auth exchange (e.g. Stripe), this holds the
+   * API secret key used as the Basic auth username.
+   */
   clientSecretVar: string;
   /** Env var where the access token is saved (e.g. "GITHUB_TOKEN"). */
   tokenEnvVar: string;
@@ -31,6 +35,13 @@ export interface OAuthProvider {
   usePKCE?: boolean;
   /** Extra params to include in the token exchange POST. */
   extraTokenParams?: Record<string, string>;
+  /**
+   * How to authenticate the token exchange request.
+   * - "body" (default): Send client_id + client_secret in the POST body.
+   * - "basic": Send clientSecretVar as HTTP Basic auth (username:password format).
+   *   Stripe uses this — the secret API key is the username, password is empty.
+   */
+  tokenExchangeAuth?: "body" | "basic";
 }
 
 // ---------------------------------------------------------------------------
@@ -38,6 +49,18 @@ export interface OAuthProvider {
 // ---------------------------------------------------------------------------
 
 export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
+  {
+    name: "stripe",
+    label: "Stripe",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
+    tokenUrl: "https://api.stripe.com/v1/oauth/token",
+    scopes: [],
+    clientIdVar: "STRIPE_OAUTH_CLIENT_ID",
+    clientSecretVar: "STRIPE_SECRET_KEY",
+    tokenEnvVar: "STRIPE_ACCESS_TOKEN",
+    refreshTokenEnvVar: "STRIPE_REFRESH_TOKEN",
+    tokenExchangeAuth: "basic",
+  },
   {
     name: "github",
     label: "GitHub",
@@ -86,12 +109,37 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "vercel",
     label: "Vercel",
-    authUrl: "https://vercel.com/integrations/oauth/authorize",
-    tokenUrl: "https://api.vercel.com/v2/oauth/access_token",
-    scopes: [],
+    authUrl: "https://vercel.com/oauth/authorize",
+    tokenUrl: "https://api.vercel.com/login/oauth/token",
+    scopes: ["openid", "email", "profile", "offline_access"],
     clientIdVar: "VERCEL_OAUTH_CLIENT_ID",
     clientSecretVar: "VERCEL_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "VERCEL_TOKEN",
+    refreshTokenEnvVar: "VERCEL_REFRESH_TOKEN",
+    usePKCE: true,
+  },
+  {
+    name: "gmail",
+    label: "Gmail",
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
+    tokenUrl: "https://oauth2.googleapis.com/token",
+    scopes: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
+    clientIdVar: "GMAIL_OAUTH_CLIENT_ID",
+    clientSecretVar: "GMAIL_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "GMAIL_ACCESS_TOKEN",
+    refreshTokenEnvVar: "GMAIL_REFRESH_TOKEN",
+    extraTokenParams: { access_type: "offline", prompt: "consent" },
+  },
+  {
+    name: "outlook",
+    label: "Outlook",
+    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    scopes: ["Mail.ReadWrite", "Mail.Send", "offline_access"],
+    clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID",
+    clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "OUTLOOK_ACCESS_TOKEN",
+    refreshTokenEnvVar: "OUTLOOK_REFRESH_TOKEN",
   },
 ] as const;
 

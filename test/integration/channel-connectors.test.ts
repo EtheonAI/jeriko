@@ -26,8 +26,8 @@ const SECRETS_PATH = join(homedir(), ".config", "jeriko", ".env");
 // ---------------------------------------------------------------------------
 
 describe("CONNECTOR_DEFS", () => {
-  test("has exactly 8 connectors", () => {
-    expect(CONNECTOR_DEFS).toHaveLength(8);
+  test("has exactly 10 connectors", () => {
+    expect(CONNECTOR_DEFS).toHaveLength(10);
   });
 
   test("all connectors have required fields", () => {
@@ -46,7 +46,7 @@ describe("CONNECTOR_DEFS", () => {
   });
 
   test("connector names match CLI command names", () => {
-    const expected = ["stripe", "paypal", "github", "twilio", "vercel", "x", "gdrive", "onedrive"];
+    const expected = ["stripe", "paypal", "github", "twilio", "vercel", "x", "gdrive", "onedrive", "gmail", "outlook"];
     const actual = CONNECTOR_DEFS.map((d) => d.name);
     expect(actual).toEqual(expected);
   });

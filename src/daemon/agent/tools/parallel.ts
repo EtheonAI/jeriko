@@ -3,6 +3,8 @@
 import { registerTool } from "./registry.js";
 import type { ToolDefinition } from "./registry.js";
 import { fanOut, AGENT_TYPES, type AgentType } from "../orchestrator.js";
+import { getActiveSystemPrompt, getActiveParentMessages, getActiveBackend, getActiveModel } from "../orchestrator-context.js";
+import { readFileSync } from "node:fs";
 
 const MAX_CONCURRENT = 4;
 const VALID_TYPES = Object.keys(AGENT_TYPES);
@@ -36,17 +38,38 @@ async function execute(args: Record<string, unknown>): Promise<string> {
       };
     });
 
-    const results = await fanOut(subTasks, { maxConcurrency: concurrency });
+    // Inherit parent's system prompt, model, and conversation context
+    const systemPrompt = getActiveSystemPrompt();
+    const parentMessages = getActiveParentMessages();
+    const backend = getActiveBackend();
+    const model = getActiveModel();
+
+    const results = await fanOut(subTasks, {
+      maxConcurrency: concurrency,
+      systemPrompt,
+      parentMessages: parentMessages.length > 0 ? parentMessages : undefined,
+      defaultBackend: backend,
+      defaultModel: model,
+    });
 
     const formatted = results.map((r) => ({
       label: r.label,
       status: r.status,
       agentType: r.agentType,
       response: r.response,
-      toolCalls: r.context.toolCalls.length,
-      filesWritten: r.context.filesWritten,
-      filesEdited: r.context.filesEdited,
-      errors: r.context.errors,
+      context: {
+        toolCalls: r.context.toolCalls,
+        filesWritten: r.context.filesWritten.map((path) => ({
+          path,
+          content: readFileSafe(path),
+        })),
+        filesEdited: r.context.filesEdited.map((path) => ({
+          path,
+          content: readFileSafe(path),
+        })),
+        errors: r.context.errors,
+        artifacts: r.context.artifacts,
+      },
       tokensIn: r.tokensIn,
       tokensOut: r.tokensOut,
       durationMs: r.durationMs,
@@ -56,6 +79,25 @@ async function execute(args: Record<string, unknown>): Promise<string> {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return JSON.stringify({ ok: false, error: `Parallel execution failed: ${msg}` });
+  }
+}
+
+/** Maximum bytes to read back from a file for context return. */
+const MAX_FILE_CONTENT_BYTES = 4096;
+
+/**
+ * Read a file safely, returning content capped at MAX_FILE_CONTENT_BYTES.
+ * Returns "(unreadable)" if the file doesn't exist or can't be read.
+ */
+function readFileSafe(path: string): string {
+  try {
+    const buf = readFileSync(path);
+    if (buf.length <= MAX_FILE_CONTENT_BYTES) {
+      return buf.toString("utf-8");
+    }
+    return buf.subarray(0, MAX_FILE_CONTENT_BYTES).toString("utf-8") + "... (truncated)";
+  } catch {
+    return "(unreadable)";
   }
 }
 

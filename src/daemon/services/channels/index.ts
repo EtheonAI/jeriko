@@ -11,6 +11,20 @@ export interface SentMessage {
   messageId: string | number;
 }
 
+// ---------------------------------------------------------------------------
+// Inline keyboard — platform-agnostic button layout
+// ---------------------------------------------------------------------------
+
+export interface InlineButton {
+  /** Button text shown to the user. */
+  label: string;
+  /** Callback data sent when pressed — typically a slash command (e.g. "/connect github"). */
+  data: string;
+}
+
+/** Rows of inline buttons. Each inner array is one row. */
+export type KeyboardLayout = InlineButton[][];
+
 export interface FileAttachment {
   type: "photo" | "document" | "voice" | "video" | "audio" | "animation" | "sticker";
   fileId: string;
@@ -68,6 +82,8 @@ export interface ChannelAdapter {
   downloadFile?(fileId: string, filename?: string): Promise<string>;
   /** Delete a message by ID. Used to remove messages containing API keys. */
   deleteMessage?(target: string, messageId: string | number): Promise<void>;
+  /** Send a message with inline keyboard buttons. Falls back to plain text. */
+  sendKeyboard?(target: string, text: string, keyboard: KeyboardLayout): Promise<void>;
 
   onMessage(handler: MessageHandler): void;
 }
@@ -326,6 +342,16 @@ export class ChannelRegistry {
     const adapter = this.adapters.get(channelName);
     if (adapter?.sendTyping) {
       await adapter.sendTyping(target);
+    }
+  }
+
+  async sendKeyboard(channelName: string, target: string, text: string, keyboard: KeyboardLayout): Promise<void> {
+    const adapter = this.getConnectedAdapter(channelName);
+    if (adapter.sendKeyboard) {
+      await adapter.sendKeyboard(target, text, keyboard);
+    } else {
+      // Fallback: plain text with command hints
+      await this.send(channelName, target, text);
     }
   }
 

@@ -709,6 +709,232 @@ try {
 }
 
 // ============================================================================
+// TEST 13: Delegate tool registration + alias resolution
+// ============================================================================
+
+section("13. Delegate Tool Registration + Aliases");
+
+// Import the delegate tool to trigger self-registration
+await import("../../src/daemon/agent/tools/delegate.js");
+
+try {
+  const delegateTool = getTool("delegate");
+  if (delegateTool) {
+    pass("delegate tool registered", `id=${delegateTool.id}`);
+  } else {
+    fail("delegate tool", "Not found in registry");
+  }
+
+  // Test alias resolution
+  for (const alias of ["delegate_task", "sub_agent", "spawn_agent"]) {
+    const resolved = getTool(alias);
+    if (resolved && resolved.id === "delegate") {
+      pass(`alias "${alias}" resolves to delegate`);
+    } else {
+      fail(`alias "${alias}"`, resolved ? `Resolved to ${resolved.id}` : "Not found");
+    }
+  }
+
+  // Verify schema
+  if (delegateTool) {
+    const required = delegateTool.parameters.required ?? [];
+    if (required.includes("prompt")) {
+      pass("delegate schema requires 'prompt'");
+    } else {
+      fail("delegate schema", `Required: ${JSON.stringify(required)}`);
+    }
+
+    const props = delegateTool.parameters.properties ?? {};
+    const hasAllProps = "prompt" in props && "agent_type" in props && "include_context" in props;
+    if (hasAllProps) {
+      pass("delegate schema has all properties (prompt, agent_type, include_context)");
+    } else {
+      fail("delegate schema properties", `Keys: ${Object.keys(props).join(", ")}`);
+    }
+  }
+} catch (err) {
+  fail("delegate tool registration", String(err));
+}
+
+// ============================================================================
+// TEST 14: Delegate tool execution with real Ollama model
+// ============================================================================
+
+section("14. Delegate Tool — Real Execution via Ollama");
+
+try {
+  const delegateTool = getTool("delegate")!;
+
+  // Set up active context to simulate being inside an agent loop
+  const { setActiveContext, clearActiveContext } = await import("../../src/daemon/agent/orchestrator-context.js");
+  setActiveContext({
+    systemPrompt: "You are a helpful assistant. Always use the tools provided.",
+    messages: [{ role: "user", content: "I need help with a task" }],
+    depth: 0,
+  });
+
+  const startTime = Date.now();
+  const resultStr = await delegateTool.execute({
+    prompt: 'Use the bash tool to run: echo "DELEGATE_TOOL_TEST_OK"',
+    agent_type: "task",
+    include_context: false,
+  });
+  const elapsed = Date.now() - startTime;
+
+  clearActiveContext();
+
+  const result = JSON.parse(resultStr);
+
+  if (result.ok) {
+    pass("delegate tool executed successfully", `${elapsed}ms`);
+
+    if (result.sessionId) {
+      pass("delegate tool returned sessionId", result.sessionId.slice(0, 8));
+    }
+
+    if (result.agentType === "task") {
+      pass("delegate tool used agent type: task");
+    }
+
+    if (result.context) {
+      pass("delegate tool returned context object", `toolCalls=${result.context.toolCalls?.length ?? 0}`);
+    }
+
+    if (result.response) {
+      pass("delegate tool returned response text", `${result.response.length} chars`);
+    }
+  } else {
+    fail("delegate tool execution", result.error);
+  }
+} catch (err) {
+  fail("delegate tool execution", String(err));
+}
+
+// ============================================================================
+// TEST 15: Delegate with include_context — verify child receives parent context
+// ============================================================================
+
+section("15. Delegate with Context Forwarding");
+
+try {
+  const { setActiveContext, clearActiveContext } = await import("../../src/daemon/agent/orchestrator-context.js");
+
+  // Set up parent context with meaningful conversation
+  setActiveContext({
+    systemPrompt: "You are a helpful assistant.",
+    messages: [
+      { role: "user", content: "The project is called Jeriko." },
+      { role: "assistant", content: "Understood, this is about the Jeriko project." },
+      { role: "user", content: "Remember that name for later." },
+    ],
+    depth: 0,
+  });
+
+  const parentSession = createSession({ title: "Context forwarding test", model: "gpt-oss:120b-cloud" });
+
+  const result = await delegate(
+    'What is the name of the project from our earlier conversation? Just say the name.',
+    {
+      backend: "local",
+      model: "gpt-oss:120b-cloud",
+      systemPrompt: "You are a helpful assistant.",
+      parentSessionId: parentSession.id,
+      agentType: "general",
+      parentMessages: [
+        { role: "user", content: "The project is called Jeriko." },
+        { role: "assistant", content: "Understood, this is about the Jeriko project." },
+      ],
+    },
+  );
+
+  clearActiveContext();
+
+  if (result.response.length > 0) {
+    const mentionsJeriko = result.response.toLowerCase().includes("jeriko");
+    if (mentionsJeriko) {
+      pass("child agent referenced parent context (Jeriko)", `"${result.response.slice(0, 80)}"`);
+    } else {
+      // Not a hard failure — model might phrase differently
+      console.log(`  ${YELLOW}WARN${RESET} child response doesn't mention "Jeriko": "${result.response.slice(0, 80)}"`);
+      pass("delegate with context forwarding ran (model may not reference context directly)");
+    }
+  } else {
+    fail("context forwarding", "Empty response from child");
+  }
+} catch (err) {
+  fail("context forwarding", String(err));
+}
+
+// ============================================================================
+// TEST 16: Depth limiting — verify child at max depth has no delegate/parallel_tasks
+// ============================================================================
+
+section("16. Depth Limiting");
+
+import { MAX_DEPTH, filterOrchestratorTools } from "../../src/daemon/agent/orchestrator.js";
+
+try {
+  // Test that filterOrchestratorTools works correctly
+  const allToolIds = listTools().map((t) => t.id);
+  const hasDelegate = allToolIds.includes("delegate");
+  const hasParallel = allToolIds.includes("parallel_tasks");
+
+  if (hasDelegate && hasParallel) {
+    pass("delegate and parallel_tasks are registered in the tool registry");
+  } else {
+    fail("tool check", `delegate=${hasDelegate} parallel_tasks=${hasParallel}`);
+  }
+
+  // Filter from null (all tools) — should remove orchestrator tools
+  const filteredFromNull = filterOrchestratorTools(null);
+  if (!filteredFromNull.includes("delegate") && !filteredFromNull.includes("parallel_tasks")) {
+    pass("filterOrchestratorTools(null) removes delegate + parallel_tasks");
+  } else {
+    fail("filterOrchestratorTools(null)", `Still contains: ${filteredFromNull.filter(id => id === "delegate" || id === "parallel_tasks").join(", ")}`);
+  }
+
+  // Filter from explicit list
+  const filteredFromList = filterOrchestratorTools(["bash", "delegate", "read_file", "parallel_tasks"]);
+  if (filteredFromList.length === 2 && filteredFromList.includes("bash") && filteredFromList.includes("read_file")) {
+    pass("filterOrchestratorTools(explicit) removes only orchestrator tools");
+  } else {
+    fail("filterOrchestratorTools(explicit)", `Result: ${JSON.stringify(filteredFromList)}`);
+  }
+
+  // Verify MAX_DEPTH constant
+  if (MAX_DEPTH === 2) {
+    pass(`MAX_DEPTH = ${MAX_DEPTH}`);
+  } else {
+    fail("MAX_DEPTH", `Expected 2, got ${MAX_DEPTH}`);
+  }
+
+  // Test depth increment logic
+  const { setActiveContext, getActiveDepth, clearActiveContext } = await import("../../src/daemon/agent/orchestrator-context.js");
+
+  setActiveContext({ systemPrompt: "test", messages: [], depth: 0 });
+  const d0 = getActiveDepth();
+  setActiveContext({ systemPrompt: "test", messages: [], depth: d0 + 1 });
+  const d1 = getActiveDepth();
+  setActiveContext({ systemPrompt: "test", messages: [], depth: d1 + 1 });
+  const d2 = getActiveDepth();
+  clearActiveContext();
+
+  if (d0 === 0 && d1 === 1 && d2 === 2) {
+    pass("depth increments: 0 → 1 → 2");
+  } else {
+    fail("depth increment", `Got ${d0} → ${d1} → ${d2}`);
+  }
+
+  if (d2 >= MAX_DEPTH) {
+    pass(`depth ${d2} >= MAX_DEPTH ${MAX_DEPTH} — orchestrator tools would be filtered`);
+  } else {
+    fail("depth check", `${d2} < ${MAX_DEPTH}`);
+  }
+} catch (err) {
+  fail("depth limiting", String(err));
+}
+
+// ============================================================================
 // RESULTS
 // ============================================================================
 

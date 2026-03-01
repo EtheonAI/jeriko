@@ -1,10 +1,6 @@
 // Discord channel adapter — uses discord.js for gateway connection.
+// Package is optional — only loaded when Discord is configured.
 
-import {
-  Client,
-  GatewayIntentBits,
-  type Message as DiscordMessage,
-} from "discord.js";
 import type { ChannelAdapter, MessageHandler, MessageMetadata } from "./index.js";
 import { getLogger } from "../../../shared/logger.js";
 
@@ -24,7 +20,7 @@ export interface DiscordConfig {
 export class DiscordChannel implements ChannelAdapter {
   readonly name = "discord" as const;
 
-  private client: Client;
+  private client: any;
   private handlers: MessageHandler[] = [];
   private connected = false;
   private adminIds: Set<string>;
@@ -35,17 +31,30 @@ export class DiscordChannel implements ChannelAdapter {
     this.adminIds = new Set(config.adminIds ?? []);
     this.guildIds = new Set(config.guildIds ?? []);
     this.channelIds = new Set(config.channelIds ?? []);
+  }
 
-    this.client = new Client({
+  private async ensureClient(): Promise<any> {
+    if (this.client) return this.client;
+
+    let discord: any;
+    try {
+      discord = await import("discord.js");
+    } catch {
+      throw new Error(
+        'Discord channel requires discord.js. Install it: bun add discord.js',
+      );
+    }
+
+    this.client = new discord.Client({
       intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
+        discord.GatewayIntentBits.Guilds,
+        discord.GatewayIntentBits.GuildMessages,
+        discord.GatewayIntentBits.MessageContent,
+        discord.GatewayIntentBits.DirectMessages,
       ],
     });
 
-    this.client.on("messageCreate", (msg: DiscordMessage) => {
+    this.client.on("messageCreate", (msg: any) => {
       // Ignore bot messages
       if (msg.author.bot) return;
 
@@ -80,6 +89,8 @@ export class DiscordChannel implements ChannelAdapter {
         }
       }
     });
+
+    return this.client;
   }
 
   async connect(): Promise<void> {
@@ -89,7 +100,8 @@ export class DiscordChannel implements ChannelAdapter {
       throw new Error("Discord bot token is not configured");
     }
 
-    await this.client.login(this.config.token);
+    const client = await this.ensureClient();
+    await client.login(this.config.token);
     this.connected = true;
     log.info("Discord bot connected");
   }
@@ -97,7 +109,7 @@ export class DiscordChannel implements ChannelAdapter {
   async disconnect(): Promise<void> {
     if (!this.connected) return;
 
-    await this.client.destroy();
+    await this.client?.destroy();
     this.connected = false;
     log.info("Discord bot disconnected");
   }

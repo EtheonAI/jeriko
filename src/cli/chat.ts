@@ -120,6 +120,8 @@ async function runInProcessChat(): Promise<void> {
     import("../daemon/agent/tools/search.js"),
     import("../daemon/agent/tools/web.js"),
     import("../daemon/agent/tools/browse.js"),
+    import("../daemon/agent/tools/parallel.js"),
+    import("../daemon/agent/tools/delegate.js"),
   ]);
 
   const { loadConfig } = await import("../shared/config.js");

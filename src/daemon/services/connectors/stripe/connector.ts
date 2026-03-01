@@ -1,172 +1,262 @@
 /**
  * Stripe connector — charges, subscriptions, customers, and webhook handling.
+ *
+ * Extends ConnectorBase for unified lifecycle, dispatch, and HTTP helpers.
+ *
+ * Supports two auth modes:
+ *   1. API key (STRIPE_SECRET_KEY) — permanent, for your own Stripe account.
+ *   2. OAuth (STRIPE_ACCESS_TOKEN) — short-lived (1h), for accessing other
+ *      Stripe accounts via a Stripe App. Refreshed automatically using
+ *      STRIPE_REFRESH_TOKEN + STRIPE_SECRET_KEY (Basic auth).
+ *
+ * If both are set, OAuth token takes priority. If the OAuth token expires
+ * (401), the connector refreshes it transparently and retries.
  */
 
-import type {
-  ConnectorInterface,
-  ConnectorResult,
-  HealthResult,
-  WebhookEvent,
-} from "../interface.js";
-import { withRetry, withTimeout } from "../middleware.js";
+import type { ConnectorResult, WebhookEvent } from "../interface.js";
+import { ConnectorBase } from "../base.js";
+import { refreshToken } from "../middleware.js";
+import { saveSecret } from "../../../../shared/secrets.js";
 import { verifyStripeSignature } from "./webhook.js";
 
-const STRIPE_API = "https://api.stripe.com/v1";
-
-const ALIASES: Record<string, string> = {
-  "balance": "balance.retrieve",
-  "charges": "charges.list",
-  "customers": "customers.list",
-  "subscriptions": "subscriptions.list",
-  "invoices": "invoices.list",
-  "products": "products.list",
-  "prices": "prices.list",
-  "events": "events.list",
-  "webhooks": "webhooks.list",
-  "payouts": "payouts.list",
-  "refunds": "refunds.list",
-};
-
-export class StripeConnector implements ConnectorInterface {
+export class StripeConnector extends ConnectorBase {
   readonly name = "stripe";
   readonly version = "1.0.0";
 
-  private apiKey = "";
+  protected readonly baseUrl = "https://api.stripe.com/v1";
+  protected readonly healthPath = "/balance";
+  protected readonly label = "Stripe";
+
+  /** API secret key (sk_test_... / sk_live_...) — always required. */
+  private secretKey = "";
+  /** OAuth access token — optional, takes priority over secretKey for API calls. */
+  private accessToken = "";
+  /** OAuth refresh token — used to refresh accessToken when it expires. */
+  private refreshTokenValue = "";
   private webhookSecret = "";
 
   // ---------------------------------------------------------------------------
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  async init(): Promise<void> {
+  override async init(): Promise<void> {
     const key = process.env.STRIPE_SECRET_KEY;
     if (!key) {
       throw new Error("STRIPE_SECRET_KEY env var is required");
     }
-    this.apiKey = key;
+    this.secretKey = key;
+    this.accessToken = process.env.STRIPE_ACCESS_TOKEN ?? "";
+    this.refreshTokenValue = process.env.STRIPE_REFRESH_TOKEN ?? "";
     this.webhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? "";
   }
 
-  async health(): Promise<HealthResult> {
-    const start = Date.now();
-    try {
-      const res = await withTimeout(
-        () =>
-          fetch(`${STRIPE_API}/balance`, {
-            headers: { Authorization: `Bearer ${this.apiKey}` },
-          }),
-        5000,
-      );
-      const latency = Date.now() - start;
-      if (!res.ok) {
-        const body = await res.text();
-        return { healthy: false, latency_ms: latency, error: `HTTP ${res.status}: ${body}` };
-      }
-      return { healthy: true, latency_ms: latency };
-    } catch (err) {
-      return {
-        healthy: false,
-        latency_ms: Date.now() - start,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+  // ---------------------------------------------------------------------------
+  // Auth — OAuth token (preferred) or API key (fallback)
+  // ---------------------------------------------------------------------------
+
+  protected async buildAuthHeader(): Promise<string> {
+    const token = await this.getToken();
+    return `Bearer ${token}`;
+  }
+
+  private async getToken(): Promise<string> {
+    // OAuth token takes priority when available
+    if (this.accessToken) return this.accessToken;
+    // Fall back to the permanent API secret key
+    return this.secretKey;
+  }
+
+  /** Whether OAuth refresh credentials are available. */
+  private canRefresh(): boolean {
+    return !!(this.refreshTokenValue && this.secretKey);
   }
 
   // ---------------------------------------------------------------------------
-  // API calls
+  // 401-aware call — detect expired OAuth tokens and refresh
   // ---------------------------------------------------------------------------
 
-  async call(method: string, params: Record<string, unknown>): Promise<ConnectorResult> {
-    const resolved = ALIASES[method] ?? method;
+  override async call(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<ConnectorResult> {
+    const result = await super.call(method, params);
 
-    const handlers: Record<string, (p: Record<string, unknown>) => Promise<ConnectorResult>> = {
+    // Only attempt refresh if we're using an OAuth token (not API key)
+    if (!result.ok && result.status === 401 && this.accessToken && this.canRefresh()) {
+      this.accessToken = "";
+      await refreshToken(this.name, () => this.doRefresh());
+      return super.call(method, params);
+    }
+
+    return result;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Token refresh — Stripe uses Basic auth with the secret key
+  // ---------------------------------------------------------------------------
+
+  private async doRefresh(): Promise<string> {
+    const res = await fetch("https://api.stripe.com/v1/oauth/token", {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(this.secretKey + ":").toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: this.refreshTokenValue,
+      }).toString(),
+    });
+
+    if (!res.ok) {
+      throw new Error(`Stripe token refresh failed: HTTP ${res.status}`);
+    }
+
+    const data = (await res.json()) as {
+      access_token: string;
+      refresh_token?: string;
+    };
+
+    this.accessToken = data.access_token;
+    saveSecret("STRIPE_ACCESS_TOKEN", data.access_token);
+
+    // Stripe rotates refresh tokens on every exchange
+    if (data.refresh_token) {
+      this.refreshTokenValue = data.refresh_token;
+      saveSecret("STRIPE_REFRESH_TOKEN", data.refresh_token);
+    }
+
+    return this.accessToken;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rate limiting
+  // ---------------------------------------------------------------------------
+
+  protected override parseRateLimit(
+    headers: Headers,
+  ): { remaining: number; reset_at: string } | undefined {
+    const remaining = headers.get("x-ratelimit-remaining");
+    const reset = headers.get("x-ratelimit-reset");
+    if (remaining !== null && reset !== null) {
+      return {
+        remaining: parseInt(remaining, 10),
+        reset_at: new Date(parseInt(reset, 10) * 1000).toISOString(),
+      };
+    }
+    return undefined;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Aliases — bare resource names resolve to .list
+  // ---------------------------------------------------------------------------
+
+  protected override aliases(): Record<string, string> {
+    return {
+      balance: "balance.retrieve",
+      charges: "charges.list",
+      customers: "customers.list",
+      subscriptions: "subscriptions.list",
+      invoices: "invoices.list",
+      products: "products.list",
+      prices: "prices.list",
+      events: "events.list",
+      webhooks: "webhooks.list",
+      payouts: "payouts.list",
+      refunds: "refunds.list",
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // API method dispatch
+  // ---------------------------------------------------------------------------
+
+  protected handlers() {
+    return {
       // Charges
-      "charges.create": (p) => this.post("/charges", p),
-      "charges.retrieve": (p) => this.get(`/charges/${p.id}`),
-      "charges.list": (p) => this.get("/charges", p),
+      "charges.create": (p: Record<string, unknown>) => this.postForm("/charges", p),
+      "charges.retrieve": (p: Record<string, unknown>) => this.get(`/charges/${p.id}`),
+      "charges.list": (p: Record<string, unknown>) => this.get("/charges", p),
 
       // Customers
-      "customers.create": (p) => this.post("/customers", p),
-      "customers.retrieve": (p) => this.get(`/customers/${p.id}`),
-      "customers.list": (p) => this.get("/customers", p),
+      "customers.create": (p: Record<string, unknown>) => this.postForm("/customers", p),
+      "customers.retrieve": (p: Record<string, unknown>) => this.get(`/customers/${p.id}`),
+      "customers.list": (p: Record<string, unknown>) => this.get("/customers", p),
 
       // Subscriptions
-      "subscriptions.create": (p) => this.post("/subscriptions", p),
-      "subscriptions.retrieve": (p) => this.get(`/subscriptions/${p.id}`),
-      "subscriptions.cancel": (p) => this.del(`/subscriptions/${p.id}`),
-      "subscriptions.list": (p) => this.get("/subscriptions", p),
+      "subscriptions.create": (p: Record<string, unknown>) => this.postForm("/subscriptions", p),
+      "subscriptions.retrieve": (p: Record<string, unknown>) => this.get(`/subscriptions/${p.id}`),
+      "subscriptions.cancel": (p: Record<string, unknown>) => this.del(`/subscriptions/${p.id}`),
+      "subscriptions.list": (p: Record<string, unknown>) => this.get("/subscriptions", p),
 
       // Payment Intents
-      "payment_intents.create": (p) => this.post("/payment_intents", p),
-      "payment_intents.retrieve": (p) => this.get(`/payment_intents/${p.id}`),
-      "payment_intents.confirm": (p) => this.post(`/payment_intents/${p.id}/confirm`, p),
+      "payment_intents.create": (p: Record<string, unknown>) => this.postForm("/payment_intents", p),
+      "payment_intents.retrieve": (p: Record<string, unknown>) => this.get(`/payment_intents/${p.id}`),
+      "payment_intents.confirm": (p: Record<string, unknown>) =>
+        this.postForm(`/payment_intents/${p.id}/confirm`, p),
 
       // Invoices
-      "invoices.create": (p) => this.post("/invoices", p),
-      "invoices.retrieve": (p) => this.get(`/invoices/${p.id}`),
-      "invoices.list": (p) => this.get("/invoices", p),
-      "invoices.finalize": (p) => this.post(`/invoices/${p.id}/finalize`, {}),
-      "invoices.send": (p) => this.post(`/invoices/${p.id}/send`, {}),
-      "invoices.void": (p) => this.post(`/invoices/${p.id}/void`, {}),
+      "invoices.create": (p: Record<string, unknown>) => this.postForm("/invoices", p),
+      "invoices.retrieve": (p: Record<string, unknown>) => this.get(`/invoices/${p.id}`),
+      "invoices.list": (p: Record<string, unknown>) => this.get("/invoices", p),
+      "invoices.finalize": (p: Record<string, unknown>) =>
+        this.postForm(`/invoices/${p.id}/finalize`, {}),
+      "invoices.send": (p: Record<string, unknown>) =>
+        this.postForm(`/invoices/${p.id}/send`, {}),
+      "invoices.void": (p: Record<string, unknown>) =>
+        this.postForm(`/invoices/${p.id}/void`, {}),
 
       // Refunds
-      "refunds.create": (p) => this.post("/refunds", p),
-      "refunds.list": (p) => this.get("/refunds", p),
-      "refunds.get": (p) => this.get(`/refunds/${p.id}`),
+      "refunds.create": (p: Record<string, unknown>) => this.postForm("/refunds", p),
+      "refunds.list": (p: Record<string, unknown>) => this.get("/refunds", p),
+      "refunds.get": (p: Record<string, unknown>) => this.get(`/refunds/${p.id}`),
 
       // Balance
       "balance.retrieve": () => this.get("/balance"),
 
       // Products
-      "products.create": (p) => this.post("/products", p),
-      "products.list": (p) => this.get("/products", p),
-      "products.get": (p) => this.get(`/products/${p.id}`),
-      "products.update": (p) => this.post(`/products/${p.id}`, p),
-      "products.delete": (p) => this.del(`/products/${p.id}`),
+      "products.create": (p: Record<string, unknown>) => this.postForm("/products", p),
+      "products.list": (p: Record<string, unknown>) => this.get("/products", p),
+      "products.get": (p: Record<string, unknown>) => this.get(`/products/${p.id}`),
+      "products.update": (p: Record<string, unknown>) => this.postForm(`/products/${p.id}`, p),
+      "products.delete": (p: Record<string, unknown>) => this.del(`/products/${p.id}`),
 
       // Prices
-      "prices.create": (p) => this.post("/prices", p),
-      "prices.list": (p) => this.get("/prices", p),
-      "prices.get": (p) => this.get(`/prices/${p.id}`),
+      "prices.create": (p: Record<string, unknown>) => this.postForm("/prices", p),
+      "prices.list": (p: Record<string, unknown>) => this.get("/prices", p),
+      "prices.get": (p: Record<string, unknown>) => this.get(`/prices/${p.id}`),
 
       // Payouts
-      "payouts.create": (p) => this.post("/payouts", p),
-      "payouts.list": (p) => this.get("/payouts", p),
-      "payouts.get": (p) => this.get(`/payouts/${p.id}`),
+      "payouts.create": (p: Record<string, unknown>) => this.postForm("/payouts", p),
+      "payouts.list": (p: Record<string, unknown>) => this.get("/payouts", p),
+      "payouts.get": (p: Record<string, unknown>) => this.get(`/payouts/${p.id}`),
 
       // Events
-      "events.list": (p) => this.get("/events", p),
-      "events.get": (p) => this.get(`/events/${p.id}`),
+      "events.list": (p: Record<string, unknown>) => this.get("/events", p),
+      "events.get": (p: Record<string, unknown>) => this.get(`/events/${p.id}`),
 
       // Webhooks
       "webhooks.list": () => this.get("/webhook_endpoints"),
-      "webhooks.create": (p) => this.post("/webhook_endpoints", p),
-      "webhooks.delete": (p) => this.del(`/webhook_endpoints/${p.id}`),
+      "webhooks.create": (p: Record<string, unknown>) => this.postForm("/webhook_endpoints", p),
+      "webhooks.delete": (p: Record<string, unknown>) => this.del(`/webhook_endpoints/${p.id}`),
 
       // Checkout Sessions
-      "checkout.create": (p) => this.post("/checkout/sessions", p),
-      "checkout.list": (p) => this.get("/checkout/sessions", p),
-      "checkout.get": (p) => this.get(`/checkout/sessions/${p.id}`),
+      "checkout.create": (p: Record<string, unknown>) => this.postForm("/checkout/sessions", p),
+      "checkout.list": (p: Record<string, unknown>) => this.get("/checkout/sessions", p),
+      "checkout.get": (p: Record<string, unknown>) => this.get(`/checkout/sessions/${p.id}`),
 
       // Payment Links
-      "payment_links.create": (p) => this.post("/payment_links", p),
-      "payment_links.list": (p) => this.get("/payment_links", p),
-      "payment_links.get": (p) => this.get(`/payment_links/${p.id}`),
+      "payment_links.create": (p: Record<string, unknown>) => this.postForm("/payment_links", p),
+      "payment_links.list": (p: Record<string, unknown>) => this.get("/payment_links", p),
+      "payment_links.get": (p: Record<string, unknown>) => this.get(`/payment_links/${p.id}`),
     };
-
-    const handler = handlers[resolved];
-    if (!handler) {
-      return { ok: false, error: `Unknown Stripe method: ${method}` };
-    }
-
-    return withRetry(() => handler(params), 2, 500);
   }
 
   // ---------------------------------------------------------------------------
-  // Webhooks
+  // Webhooks — Stripe-Signature HMAC-SHA256 verification
   // ---------------------------------------------------------------------------
 
-  async webhook(headers: Record<string, string>, body: string): Promise<WebhookEvent> {
+  override async webhook(headers: Record<string, string>, body: string): Promise<WebhookEvent> {
     const signature = headers["stripe-signature"] ?? "";
     const verified = verifyStripeSignature(body, signature, this.webhookSecret);
 
@@ -185,83 +275,5 @@ export class StripeConnector implements ConnectorInterface {
       verified,
       received_at: new Date().toISOString(),
     };
-  }
-
-  // ---------------------------------------------------------------------------
-  // Shutdown
-  // ---------------------------------------------------------------------------
-
-  async shutdown(): Promise<void> {
-    // Stripe is stateless HTTP — nothing to tear down.
-  }
-
-  // ---------------------------------------------------------------------------
-  // HTTP helpers
-  // ---------------------------------------------------------------------------
-
-  private async get(path: string, params?: Record<string, unknown>): Promise<ConnectorResult> {
-    let url = `${STRIPE_API}${path}`;
-    if (params && Object.keys(params).length > 0) {
-      const qs = new URLSearchParams();
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && k !== "id") qs.set(k, String(v));
-      }
-      const str = qs.toString();
-      if (str) url += `?${str}`;
-    }
-
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${this.apiKey}` },
-    });
-    return this.toResult(res);
-  }
-
-  private async post(path: string, params: Record<string, unknown>): Promise<ConnectorResult> {
-    const body = new URLSearchParams();
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && k !== "id") body.set(k, String(v));
-    }
-
-    const res = await fetch(`${STRIPE_API}${path}`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: body.toString(),
-    });
-    return this.toResult(res);
-  }
-
-  private async del(path: string): Promise<ConnectorResult> {
-    const res = await fetch(`${STRIPE_API}${path}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${this.apiKey}` },
-    });
-    return this.toResult(res);
-  }
-
-  private async toResult(res: Response): Promise<ConnectorResult> {
-    const data = await res.json();
-    const rateLimit = this.parseRateLimit(res.headers);
-    if (!res.ok) {
-      const msg = (data as any)?.error?.message ?? `HTTP ${res.status}`;
-      return { ok: false, error: msg, rate_limit: rateLimit };
-    }
-    return { ok: true, data, rate_limit: rateLimit };
-  }
-
-  private parseRateLimit(headers: Headers): { remaining: number; reset_at: string } | undefined {
-    // Stripe doesn't expose standard rate-limit headers for most endpoints,
-    // but when they do we capture them.
-    const remaining = headers.get("x-ratelimit-remaining");
-    const reset = headers.get("x-ratelimit-reset");
-    if (remaining !== null && reset !== null) {
-      return {
-        remaining: parseInt(remaining, 10),
-        reset_at: new Date(parseInt(reset, 10) * 1000).toISOString(),
-      };
-    }
-    return undefined;
   }
 }

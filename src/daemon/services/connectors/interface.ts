@@ -13,6 +13,8 @@ export interface ConnectorResult {
   ok: boolean;
   data?: unknown;
   error?: string;
+  /** HTTP status code (present on error results for programmatic detection). */
+  status?: number;
   rate_limit?: { remaining: number; reset_at: string };
 }
 

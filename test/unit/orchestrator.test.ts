@@ -35,9 +35,19 @@ import {
   readContextByKind,
   getChildSessions,
   orchestratorBus,
+  filterOrchestratorTools,
+  MAX_DEPTH,
   type AgentType,
   type SubTaskContext,
 } from "../../src/daemon/agent/orchestrator.js";
+
+import {
+  setActiveContext,
+  getActiveSystemPrompt,
+  getActiveParentMessages,
+  getActiveDepth,
+  clearActiveContext,
+} from "../../src/daemon/agent/orchestrator-context.js";
 
 import { createSession } from "../../src/daemon/agent/session/session.js";
 import { getDatabase } from "../../src/daemon/storage/db.js";
@@ -280,5 +290,150 @@ describe("model compatibility", () => {
       const session = createSession({ title: `test-${model}`, model });
       expect(session.model).toBe(model);
     }
+  });
+});
+
+// ─── Delegate tool registration tests ───────────────────────────────────────
+
+describe("delegate tool registration", () => {
+  it("delegate tool registers with correct id and aliases", async () => {
+    // Import the delegate tool to trigger self-registration
+    await import("../../src/daemon/agent/tools/delegate.js");
+
+    const { getTool } = await import("../../src/daemon/agent/tools/registry.js");
+    const tool = getTool("delegate");
+    expect(tool).toBeDefined();
+    expect(tool!.id).toBe("delegate");
+    expect(tool!.name).toBe("delegate");
+    expect(tool!.aliases).toContain("delegate_task");
+    expect(tool!.aliases).toContain("sub_agent");
+    expect(tool!.aliases).toContain("spawn_agent");
+  });
+
+  it("delegate tool resolves via aliases", async () => {
+    const { getTool } = await import("../../src/daemon/agent/tools/registry.js");
+
+    // Each alias should resolve to the delegate tool
+    for (const alias of ["delegate_task", "sub_agent", "spawn_agent"]) {
+      const tool = getTool(alias);
+      expect(tool).toBeDefined();
+      expect(tool!.id).toBe("delegate");
+    }
+  });
+
+  it("delegate tool has required schema properties", async () => {
+    const { getTool } = await import("../../src/daemon/agent/tools/registry.js");
+    const tool = getTool("delegate")!;
+
+    expect(tool.parameters.required).toContain("prompt");
+    expect(tool.parameters.properties).toBeDefined();
+
+    const props = tool.parameters.properties!;
+    expect(props.prompt).toBeDefined();
+    expect(props.agent_type).toBeDefined();
+    expect(props.include_context).toBeDefined();
+    expect(props.agent_type!.enum).toEqual(Object.keys(AGENT_TYPES));
+  });
+});
+
+// ─── Depth control tests ────────────────────────────────────────────────────
+
+describe("depth control", () => {
+  it("MAX_DEPTH is 2", () => {
+    expect(MAX_DEPTH).toBe(2);
+  });
+
+  it("filterOrchestratorTools removes delegate and parallel_tasks from null (all tools)", async () => {
+    // Ensure tools are registered — import triggers self-registration
+    const { registerTool, clearTools } = await import("../../src/daemon/agent/tools/registry.js");
+
+    // Register test tools to simulate a populated registry
+    const testTools = ["bash", "read_file", "delegate", "parallel_tasks"];
+    for (const id of testTools) {
+      try {
+        registerTool({
+          id, name: id, description: `test ${id}`,
+          parameters: { type: "object" },
+          execute: async () => "",
+        });
+      } catch { /* already registered */ }
+    }
+
+    const filtered = filterOrchestratorTools(null);
+    expect(filtered).not.toContain("delegate");
+    expect(filtered).not.toContain("parallel_tasks");
+    // Should still have other tools
+    expect(filtered.length).toBeGreaterThan(0);
+  });
+
+  it("filterOrchestratorTools removes delegate and parallel_tasks from explicit list", () => {
+    const input = ["bash", "read_file", "delegate", "parallel_tasks", "write_file"];
+    const filtered = filterOrchestratorTools(input);
+    expect(filtered).toEqual(["bash", "read_file", "write_file"]);
+  });
+
+  it("filterOrchestratorTools passes through lists without orchestrator tools unchanged", () => {
+    const input = ["bash", "read_file", "write_file"];
+    const filtered = filterOrchestratorTools(input);
+    expect(filtered).toEqual(["bash", "read_file", "write_file"]);
+  });
+
+  it("filterOrchestratorTools handles empty array", () => {
+    const filtered = filterOrchestratorTools([]);
+    expect(filtered).toEqual([]);
+  });
+});
+
+// ─── Context forwarding tests ───────────────────────────────────────────────
+
+describe("context forwarding via orchestrator-context", () => {
+  afterAll(() => {
+    clearActiveContext();
+  });
+
+  it("setActiveContext and getActiveSystemPrompt roundtrip", () => {
+    setActiveContext({ systemPrompt: "You are Jeriko.", messages: [], depth: 0 });
+    expect(getActiveSystemPrompt()).toBe("You are Jeriko.");
+    clearActiveContext();
+  });
+
+  it("getActiveParentMessages filters system messages", () => {
+    setActiveContext({
+      systemPrompt: "test",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "hi" },
+      ],
+      depth: 0,
+    });
+
+    const msgs = getActiveParentMessages();
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0]!.role).toBe("user");
+    expect(msgs[1]!.role).toBe("assistant");
+    clearActiveContext();
+  });
+
+  it("getActiveDepth increments correctly for child agents", () => {
+    // Simulate: top-level agent at depth 0
+    setActiveContext({ systemPrompt: "test", messages: [], depth: 0 });
+    expect(getActiveDepth()).toBe(0);
+
+    // delegate() reads getActiveDepth() and creates child at depth 1
+    const childDepth = getActiveDepth() + 1;
+    expect(childDepth).toBe(1);
+
+    // Simulate: child agent sets its own context
+    setActiveContext({ systemPrompt: "test", messages: [], depth: childDepth });
+    expect(getActiveDepth()).toBe(1);
+
+    // delegate() from child creates grandchild at depth 2
+    const grandchildDepth = getActiveDepth() + 1;
+    expect(grandchildDepth).toBe(2);
+
+    // At depth 2 (MAX_DEPTH), orchestrator tools should be filtered
+    expect(grandchildDepth >= MAX_DEPTH).toBe(true);
+    clearActiveContext();
   });
 });

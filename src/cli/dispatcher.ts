@@ -87,6 +87,9 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: x } = await import("./commands/integrations/x.js");
   const { command: gdrive } = await import("./commands/integrations/gdrive.js");
   const { command: onedrive } = await import("./commands/integrations/onedrive.js");
+  const { command: gmail } = await import("./commands/integrations/gmail.js");
+  const { command: outlook } = await import("./commands/integrations/outlook.js");
+  const { command: connectors } = await import("./commands/integrations/connectors.js");
 
   // Dev
   const { command: code } = await import("./commands/dev/code.js");
@@ -118,7 +121,7 @@ async function loadBuiltinCommands(): Promise<void> {
     browse, search, screenshot,
     email, msg, notify, audio,
     notes, remind, calendar, contacts, music, clipboard, window, camera, open, location,
-    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive,
+    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, connectors,
     code, create, dev, parallel,
     ask, memory, discover, prompt,
     init, server, task, job, setup,
@@ -276,10 +279,10 @@ export async function dispatcher(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // No command → interactive chat
+  // No command → interactive TUI (with fallback to plain REPL)
   if (parsed.positional.length === 0) {
-    const { startChat } = await import("./chat.js");
-    await startChat();
+    const { startTUI } = await import("./tui/render.js");
+    await startTUI();
     return;
   }
 

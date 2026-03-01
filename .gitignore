@@ -47,3 +47,4 @@ native/npm/
 # data/triggers.json
 # data/trigger-log.json
 # data/server.pid
+.wrangler/

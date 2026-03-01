@@ -29,6 +29,13 @@ export interface ConnectorDef {
     clientIdVar: string;
     clientSecretVar: string;
   };
+  /**
+   * API-specific parameter name for pagination limit.
+   * Used by the unified gateway to map `--limit N` to the correct param.
+   * Examples: "max_results" (Google), "top" (Microsoft), "per_page" (GitHub).
+   * If undefined or matches "limit", no renaming is needed.
+   */
+  limitParam?: string;
 }
 
 export const CONNECTOR_DEFS: ConnectorDef[] = [
@@ -37,7 +44,9 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     label: "Stripe",
     description: "Payments, subscriptions, invoices",
     required: ["STRIPE_SECRET_KEY"],
-    optional: ["STRIPE_WEBHOOK_SECRET"],
+    optional: ["STRIPE_WEBHOOK_SECRET", "STRIPE_ACCESS_TOKEN", "STRIPE_REFRESH_TOKEN"],
+    oauth: { clientIdVar: "STRIPE_OAUTH_CLIENT_ID", clientSecretVar: "STRIPE_SECRET_KEY" },
+    // Stripe natively uses "limit" — no remapping needed
   },
   {
     name: "paypal",
@@ -45,6 +54,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Orders, subscriptions, payouts, invoices",
     required: ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"],
     optional: ["PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX"],
+    limitParam: "page_size",
   },
   {
     name: "github",
@@ -53,6 +63,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     required: [["GITHUB_TOKEN", "GH_TOKEN"]],
     optional: ["GITHUB_WEBHOOK_SECRET"],
     oauth: { clientIdVar: "GITHUB_OAUTH_CLIENT_ID", clientSecretVar: "GITHUB_OAUTH_CLIENT_SECRET" },
+    limitParam: "per_page",
   },
   {
     name: "twilio",
@@ -60,14 +71,16 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "SMS, voice calls, WhatsApp",
     required: ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"],
     optional: ["TWILIO_FROM_NUMBER"],
+    // Twilio natively uses "limit" — no remapping needed
   },
   {
     name: "vercel",
     label: "Vercel",
     description: "Deployments, projects, domains",
     required: ["VERCEL_TOKEN"],
-    optional: ["VERCEL_TEAM_ID"],
+    optional: ["VERCEL_TEAM_ID", "VERCEL_REFRESH_TOKEN"],
     oauth: { clientIdVar: "VERCEL_OAUTH_CLIENT_ID", clientSecretVar: "VERCEL_OAUTH_CLIENT_SECRET" },
+    // Vercel natively uses "limit" — no remapping needed
   },
   {
     name: "x",
@@ -76,6 +89,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     required: [["X_BEARER_TOKEN", "TWITTER_BEARER_TOKEN"]],
     optional: ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET"],
     oauth: { clientIdVar: "X_OAUTH_CLIENT_ID", clientSecretVar: "X_OAUTH_CLIENT_SECRET" },
+    limitParam: "max_results",
   },
   {
     name: "gdrive",
@@ -84,6 +98,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     required: ["GDRIVE_ACCESS_TOKEN"],
     optional: [],
     oauth: { clientIdVar: "GDRIVE_OAUTH_CLIENT_ID", clientSecretVar: "GDRIVE_OAUTH_CLIENT_SECRET" },
+    limitParam: "page_size",
   },
   {
     name: "onedrive",
@@ -92,6 +107,25 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     required: ["ONEDRIVE_ACCESS_TOKEN"],
     optional: [],
     oauth: { clientIdVar: "ONEDRIVE_OAUTH_CLIENT_ID", clientSecretVar: "ONEDRIVE_OAUTH_CLIENT_SECRET" },
+    limitParam: "top",
+  },
+  {
+    name: "gmail",
+    label: "Gmail",
+    description: "Email, labels, drafts, threads",
+    required: ["GMAIL_ACCESS_TOKEN"],
+    optional: [],
+    oauth: { clientIdVar: "GMAIL_OAUTH_CLIENT_ID", clientSecretVar: "GMAIL_OAUTH_CLIENT_SECRET" },
+    limitParam: "max_results",
+  },
+  {
+    name: "outlook",
+    label: "Outlook",
+    description: "Email, folders, calendar",
+    required: ["OUTLOOK_ACCESS_TOKEN"],
+    optional: [],
+    oauth: { clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID", clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET" },
+    limitParam: "top",
   },
 ];
 

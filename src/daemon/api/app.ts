@@ -12,10 +12,12 @@ import { channelRoutes } from "./routes/channel.js";
 import { healthRoutes } from "./routes/health.js";
 import { connectorRoutes } from "./routes/connector.js";
 import { schedulerRoutes } from "./routes/scheduler.js";
+import { triggerRoutes } from "./routes/trigger.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { createWebSocketHandlers } from "./websocket.js";
 import type { ChannelRegistry } from "../services/channels/index.js";
 import type { TriggerEngine } from "../services/triggers/engine.js";
+import type { ConnectorManager } from "../services/connectors/manager.js";
 
 const log = getLogger();
 
@@ -26,6 +28,7 @@ const log = getLogger();
 export interface AppContext {
   channels: ChannelRegistry;
   triggers: TriggerEngine;
+  connectors: ConnectorManager;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +72,7 @@ export function createApp(ctx: AppContext): Hono {
   app.use("*", async (c, next) => {
     c.set("channels" as never, ctx.channels as never);
     c.set("triggers" as never, ctx.triggers as never);
+    c.set("connectors" as never, ctx.connectors as never);
     return next();
   });
 
@@ -83,6 +87,7 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/channel", channelRoutes());
   app.route("/connector", connectorRoutes());
   app.route("/scheduler", schedulerRoutes());
+  app.route("/triggers", triggerRoutes());
   app.route("/oauth", oauthRoutes());
 
   // -----------------------------------------------------------------------

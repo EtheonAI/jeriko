@@ -1,21 +1,21 @@
 /**
  * Vercel connector — deployments, projects, domains, and webhook handling.
+ *
+ * Extends ConnectorBase for unified lifecycle, dispatch, and HTTP helpers.
+ * Vercel uses Bearer auth with a static token and appends teamId to all URLs.
  */
 
 import { createHmac, timingSafeEqual } from "crypto";
-import type {
-  ConnectorInterface,
-  ConnectorResult,
-  HealthResult,
-  WebhookEvent,
-} from "../interface.js";
-import { withRetry, withTimeout } from "../middleware.js";
+import type { ConnectorResult, WebhookEvent } from "../interface.js";
+import { ConnectorBase } from "../base.js";
 
-const VERCEL_API = "https://api.vercel.com";
-
-export class VercelConnector implements ConnectorInterface {
+export class VercelConnector extends ConnectorBase {
   readonly name = "vercel";
   readonly version = "1.0.0";
+
+  protected readonly baseUrl = "https://api.vercel.com";
+  protected readonly healthPath = "/v2/user";
+  protected readonly label = "Vercel";
 
   private token = "";
   private teamId = "";
@@ -25,7 +25,7 @@ export class VercelConnector implements ConnectorInterface {
   // Lifecycle
   // ---------------------------------------------------------------------------
 
-  async init(): Promise<void> {
+  override async init(): Promise<void> {
     const token = process.env.VERCEL_TOKEN;
     if (!token) {
       throw new Error("VERCEL_TOKEN env var is required");
@@ -35,96 +35,115 @@ export class VercelConnector implements ConnectorInterface {
     this.webhookSecret = process.env.VERCEL_WEBHOOK_SECRET ?? "";
   }
 
-  async health(): Promise<HealthResult> {
-    const start = Date.now();
-    try {
-      const res = await withTimeout(
-        () =>
-          fetch(`${VERCEL_API}/v2/user`, {
-            headers: this.headers(),
-          }),
-        5000,
-      );
-      const latency = Date.now() - start;
-      if (!res.ok) {
-        return { healthy: false, latency_ms: latency, error: `HTTP ${res.status}` };
-      }
-      return { healthy: true, latency_ms: latency };
-    } catch (err) {
-      return {
-        healthy: false,
-        latency_ms: Date.now() - start,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
+  // ---------------------------------------------------------------------------
+  // Auth — static Bearer token
+  // ---------------------------------------------------------------------------
+
+  protected async buildAuthHeader(): Promise<string> {
+    return `Bearer ${this.token}`;
   }
 
   // ---------------------------------------------------------------------------
-  // API calls
+  // URL building — append teamId to all requests
   // ---------------------------------------------------------------------------
 
-  async call(method: string, params: Record<string, unknown>): Promise<ConnectorResult> {
-    // Aliases — resolve before handler lookup
-    const aliases: Record<string, string> = {
+  protected override buildUrl(path: string): string {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (this.teamId) url.searchParams.set("teamId", this.teamId);
+    return url.toString();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Call — handle --team flag as per-request teamId override
+  // ---------------------------------------------------------------------------
+
+  override async call(
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<ConnectorResult> {
+    const team = (params.team ?? params.teamId) as string | undefined;
+    if (team) {
+      this.teamId = team;
+      delete params.team;
+      delete params.teamId;
+    }
+    return super.call(method, params);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Aliases
+  // ---------------------------------------------------------------------------
+
+  protected override aliases(): Record<string, string> {
+    return {
       deployments: "deployments.list",
       projects: "projects.list",
       domains: "domains.list",
       env: "env.list",
     };
-    method = aliases[method] ?? method;
+  }
 
-    const handlers: Record<string, (p: Record<string, unknown>) => Promise<ConnectorResult>> = {
-      "deployments.list": (p) => this.get(`/v6/deployments`, p),
-      "deployments.get": (p) => this.get(`/v13/deployments/${p.id}`),
-      "deployments.create": (p) =>
+  // ---------------------------------------------------------------------------
+  // API method dispatch
+  // ---------------------------------------------------------------------------
+
+  protected handlers() {
+    return {
+      "deployments.list": (p: Record<string, unknown>) => this.get("/v6/deployments", p),
+      "deployments.get": (p: Record<string, unknown>) =>
+        this.get(`/v13/deployments/${p.id}`),
+      "deployments.create": (p: Record<string, unknown>) =>
         this.post("/v13/deployments", {
           name: p.name,
           target: p.target,
           gitSource: p.gitSource,
         }),
-      "deployments.cancel": (p) =>
+      "deployments.cancel": (p: Record<string, unknown>) =>
         this.patch(`/v12/deployments/${p.id}/cancel`, {}),
-      "deployments.delete": (p) => this.del(`/v13/deployments/${p.id}`),
+      "deployments.delete": (p: Record<string, unknown>) =>
+        this.del(`/v13/deployments/${p.id}`),
       "projects.list": () => this.get("/v9/projects"),
-      "projects.get": (p) => this.get(`/v9/projects/${p.id}`),
-      "projects.create": (p) =>
+      "projects.get": (p: Record<string, unknown>) =>
+        this.get(`/v9/projects/${p.id}`),
+      "projects.create": (p: Record<string, unknown>) =>
         this.post("/v9/projects", {
           name: p.name,
           framework: p.framework,
           gitRepository: p.gitRepository,
         }),
-      "projects.delete": (p) => this.del(`/v9/projects/${p.id}`),
-      "domains.list": (p) => this.get(`/v9/projects/${p.project_id}/domains`),
-      "domains.add": (p) =>
+      "projects.delete": (p: Record<string, unknown>) =>
+        this.del(`/v9/projects/${p.id}`),
+      "domains.list": (p: Record<string, unknown>) =>
+        this.get(`/v9/projects/${p.project_id}/domains`),
+      "domains.add": (p: Record<string, unknown>) =>
         this.post(`/v9/projects/${p.project_id}/domains`, { name: p.domain }),
-      "domains.remove": (p) =>
+      "domains.remove": (p: Record<string, unknown>) =>
         this.del(`/v9/projects/${p.project_id}/domains/${p.domain}`),
-      "env.list": (p) => this.get(`/v9/projects/${p.project_id}/env`),
-      "env.create": (p) =>
+      "env.list": (p: Record<string, unknown>) =>
+        this.get(`/v9/projects/${p.project_id}/env`),
+      "env.create": (p: Record<string, unknown>) =>
         this.post(`/v10/projects/${p.project_id}/env`, {
           key: p.key,
           value: p.value,
           target: p.target ?? ["production", "preview", "development"],
           type: p.type ?? "encrypted",
         }),
-      "env.delete": (p) => this.del(`/v9/projects/${p.project_id}/env/${p.id}`),
+      "env.delete": (p: Record<string, unknown>) =>
+        this.del(`/v9/projects/${p.project_id}/env/${p.id}`),
       "team.get": () => this.get("/v2/teams"),
-      "logs.list": (p) => this.get(`/v2/deployments/${p.id}/events`),
+      "logs.list": (p: Record<string, unknown>) =>
+        this.get(`/v2/deployments/${p.id}/events`),
     };
-
-    const handler = handlers[method];
-    if (!handler) {
-      return { ok: false, error: `Unknown Vercel method: ${method}` };
-    }
-
-    return withRetry(() => handler(params), 2, 500);
   }
 
   // ---------------------------------------------------------------------------
   // Webhooks — HMAC-SHA1 verification
   // ---------------------------------------------------------------------------
 
-  async webhook(headers: Record<string, string>, body: string): Promise<WebhookEvent> {
+  override async webhook(
+    headers: Record<string, string>,
+    body: string,
+  ): Promise<WebhookEvent> {
     const signature = headers["x-vercel-signature"] ?? "";
     const verified = this.verifySignature(body, signature);
 
@@ -147,87 +166,10 @@ export class VercelConnector implements ConnectorInterface {
 
   private verifySignature(body: string, signature: string): boolean {
     if (!this.webhookSecret || !signature) return false;
-    const expected = createHmac("sha1", this.webhookSecret).update(body).digest("hex");
+    const expected = createHmac("sha1", this.webhookSecret)
+      .update(body)
+      .digest("hex");
     if (expected.length !== signature.length) return false;
     return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
-  }
-
-  // ---------------------------------------------------------------------------
-  // Shutdown
-  // ---------------------------------------------------------------------------
-
-  async shutdown(): Promise<void> {
-    // Stateless HTTP — nothing to tear down.
-  }
-
-  // ---------------------------------------------------------------------------
-  // HTTP helpers
-  // ---------------------------------------------------------------------------
-
-  private headers(): Record<string, string> {
-    return { Authorization: `Bearer ${this.token}` };
-  }
-
-  private teamParam(): string {
-    return this.teamId ? `teamId=${this.teamId}` : "";
-  }
-
-  private buildUrl(path: string, params?: Record<string, unknown>): string {
-    const url = new URL(`${VERCEL_API}${path}`);
-    if (this.teamId) url.searchParams.set("teamId", this.teamId);
-    if (params) {
-      for (const [k, v] of Object.entries(params)) {
-        if (v !== undefined && k !== "id" && k !== "project_id" && k !== "domain") {
-          url.searchParams.set(k, String(v));
-        }
-      }
-    }
-    return url.toString();
-  }
-
-  private async get(path: string, params?: Record<string, unknown>): Promise<ConnectorResult> {
-    const res = await fetch(this.buildUrl(path, params), { headers: this.headers() });
-    return this.toResult(res);
-  }
-
-  private async post(path: string, body: Record<string, unknown>): Promise<ConnectorResult> {
-    const res = await fetch(this.buildUrl(path), {
-      method: "POST",
-      headers: { ...this.headers(), "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return this.toResult(res);
-  }
-
-  private async patch(path: string, body: Record<string, unknown>): Promise<ConnectorResult> {
-    const res = await fetch(this.buildUrl(path), {
-      method: "PATCH",
-      headers: { ...this.headers(), "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    return this.toResult(res);
-  }
-
-  private async del(path: string): Promise<ConnectorResult> {
-    const res = await fetch(this.buildUrl(path), {
-      method: "DELETE",
-      headers: this.headers(),
-    });
-    return this.toResult(res);
-  }
-
-  private async toResult(res: Response): Promise<ConnectorResult> {
-    let data: unknown;
-    const text = await res.text();
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
-    }
-    if (!res.ok) {
-      const msg = (data as any)?.error?.message ?? `HTTP ${res.status}`;
-      return { ok: false, error: msg };
-    }
-    return { ok: true, data };
   }
 }

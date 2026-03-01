@@ -4,6 +4,7 @@ optional = true
 
 [run]
 bun = true
+preload = ["./node_modules/@opentui/solid/scripts/preload.ts"]
 
 [build]
 target = "bun"

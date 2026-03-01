@@ -1,6 +1,6 @@
 // Slack channel adapter — uses @slack/bolt for Socket Mode.
+// Package is optional — only loaded when Slack is configured.
 
-import { App, type MessageEvent } from "@slack/bolt";
 import type { ChannelAdapter, MessageHandler, MessageMetadata } from "./index.js";
 import { getLogger } from "../../../shared/logger.js";
 
@@ -20,7 +20,7 @@ export interface SlackConfig {
 export class SlackChannel implements ChannelAdapter {
   readonly name = "slack" as const;
 
-  private app: App;
+  private app: any;
   private handlers: MessageHandler[] = [];
   private connected = false;
   private adminIds: Set<string>;
@@ -29,16 +29,29 @@ export class SlackChannel implements ChannelAdapter {
   constructor(private config: SlackConfig) {
     this.adminIds = new Set(config.adminIds ?? []);
     this.channelIds = new Set(config.channelIds ?? []);
+  }
 
-    this.app = new App({
-      token: config.botToken,
-      appToken: config.appToken,
+  private async ensureApp(): Promise<any> {
+    if (this.app) return this.app;
+
+    let bolt: any;
+    try {
+      bolt = await import("@slack/bolt");
+    } catch {
+      throw new Error(
+        'Slack channel requires @slack/bolt. Install it: bun add @slack/bolt',
+      );
+    }
+
+    this.app = new bolt.App({
+      token: this.config.botToken,
+      appToken: this.config.appToken,
       socketMode: true,
     });
 
     // Listen for all message events
-    this.app.message(async ({ message }) => {
-      const msg = message as MessageEvent & { text?: string; user?: string; thread_ts?: string };
+    this.app.message(async ({ message }: any) => {
+      const msg = message as { subtype?: string; text?: string; user?: string; channel: string; channel_type?: string; thread_ts?: string };
 
       // Ignore bot messages and message changes
       if (msg.subtype) return;
@@ -57,7 +70,7 @@ export class SlackChannel implements ChannelAdapter {
         channel: "slack",
         chat_id: msg.channel,
         is_group: isGroup,
-        sender_name: senderId, // Slack user ID; resolve display name via API if needed
+        sender_name: senderId,
         reply_to: msg.thread_ts,
       };
 
@@ -69,6 +82,8 @@ export class SlackChannel implements ChannelAdapter {
         }
       }
     });
+
+    return this.app;
   }
 
   async connect(): Promise<void> {
@@ -78,7 +93,8 @@ export class SlackChannel implements ChannelAdapter {
       throw new Error("Slack bot token and app token are required");
     }
 
-    await this.app.start();
+    const app = await this.ensureApp();
+    await app.start();
     this.connected = true;
     log.info("Slack bot connected (Socket Mode)");
   }
@@ -86,7 +102,7 @@ export class SlackChannel implements ChannelAdapter {
   async disconnect(): Promise<void> {
     if (!this.connected) return;
 
-    await this.app.stop();
+    await this.app?.stop();
     this.connected = false;
     log.info("Slack bot disconnected");
   }

@@ -10,9 +10,12 @@ export type {
   RateLimitConfig,
 } from "./interface.js";
 
-// Registry
-export { ConnectorRegistry } from "./registry.js";
-export type { ConnectorFactory } from "./registry.js";
+// Base classes
+export { ConnectorBase, BearerConnector } from "./base.js";
+export type { BearerAuthConfig } from "./base.js";
+
+// Registry — single source of truth for connector factories
+export { CONNECTOR_FACTORIES, loadConnector } from "./registry.js";
 
 // Middleware
 export {
@@ -33,3 +36,5 @@ export { TwilioConnector } from "./twilio/connector.js";
 export { XConnector } from "./x/connector.js";
 export { GDriveConnector } from "./gdrive/connector.js";
 export { OneDriveConnector } from "./onedrive/connector.js";
+export { GmailConnector } from "./gmail/connector.js";
+export { OutlookConnector } from "./outlook/connector.js";

@@ -40,7 +40,7 @@ export function webhookRoutes(): Hono {
     });
 
     try {
-      const handled = await triggers.handleWebhook(triggerId, payload, headers);
+      const handled = await triggers.handleWebhook(triggerId, payload, headers, rawBody);
 
       if (!handled) {
         log.warn(`Webhook received for unknown/disabled trigger: ${triggerId}`);

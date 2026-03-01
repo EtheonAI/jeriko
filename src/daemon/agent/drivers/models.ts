@@ -1,8 +1,10 @@
 // Model registry — the single source of truth for model capabilities.
 //
 // ALL capability data is dynamic:
-//   - Anthropic + OpenAI → fetched from models.dev at boot
-//   - Local/Ollama       → probed from Ollama's /api/show at first use
+//   - Cloud providers → fetched from models.dev at boot (ALL providers, not just a subset)
+//   - Local/Ollama    → probed from Ollama's /api/show, then cross-referenced against
+//                       models.dev family index to inherit model-intrinsic properties
+//                       (reasoning, context window, output limits)
 //
 // ZERO hardcoded model lists. Every decision in the system (tools, reasoning,
 // compaction, max output) reads from this registry.
@@ -49,6 +51,18 @@ const aliasIndex = new Map<string, Map<string, string>>();
 
 /** Cached local model probes (Ollama /api/show results). */
 const localProbeCache = new Map<string, ModelCapabilities>();
+
+/**
+ * Family-based cross-reference index — maps normalized family names to the best
+ * known capabilities for that model family across ALL providers on models.dev.
+ *
+ * Used to enrich Ollama probes with model-intrinsic properties (reasoning, context,
+ * output limits) that can't be detected from Ollama's /api/show endpoint alone.
+ *
+ * Key: normalized family name (e.g., "deepseek-v3", "llama-4", "qwen3")
+ * Value: best ModelCapabilities for that family (highest context, has reasoning, etc.)
+ */
+const familyCrossRef = new Map<string, ModelCapabilities>();
 
 /** Whether we've successfully fetched from models.dev. */
 let fetched = false;
@@ -108,7 +122,7 @@ const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
 };
 
 // ---------------------------------------------------------------------------
-// Fetch from models.dev (Anthropic + OpenAI)
+// Fetch from models.dev (all providers)
 // ---------------------------------------------------------------------------
 
 const MODELS_URL = "https://models.dev/api.json";
@@ -139,9 +153,12 @@ export async function loadModelRegistry(): Promise<void> {
 }
 
 function parseRegistry(data: Record<string, unknown>): void {
-  const providers = ["anthropic", "openai"];
-
-  for (const providerId of providers) {
+  // Parse ALL providers from models.dev — not a hardcoded subset.
+  // This builds a comprehensive capability index used for:
+  //   1. Direct model resolution (anthropic, openai — our native drivers)
+  //   2. Cross-referencing Ollama cloud models against known capabilities
+  //      (e.g., deepseek-v3 under deepinfra → reasoning: true)
+  for (const providerId of Object.keys(data)) {
     const provider = data[providerId] as Record<string, unknown> | undefined;
     if (!provider || typeof provider !== "object") continue;
 
@@ -183,6 +200,11 @@ function parseRegistry(data: Record<string, unknown>): void {
     aliasIndex.set(providerId, providerAliases);
     updateFamilyDefaults(providerId);
   }
+
+  // After parsing all providers, build the family cross-reference index.
+  // This enables Ollama cloud models to inherit capabilities (reasoning, context,
+  // output limits) from the authoritative models.dev data.
+  buildFamilyCrossRef();
 }
 
 /** For each family, pick the best model (latest, most capable). */
@@ -214,6 +236,165 @@ function pickBest(models: ModelCapabilities[]): ModelCapabilities {
     if (a.context !== b.context) return b.context - a.context;
     return b.id.localeCompare(a.id);
   })[0]!;
+}
+
+// ---------------------------------------------------------------------------
+// Family cross-reference — maps Ollama model names to models.dev capabilities
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the family cross-reference index from all parsed capIndex entries.
+ * For each unique normalized family name, keep the entry with the richest
+ * capabilities (highest context, has reasoning, has tool_call).
+ *
+ * Also indexes by normalized model ID for direct name matching.
+ */
+function buildFamilyCrossRef(): void {
+  familyCrossRef.clear();
+
+  for (const [, caps] of capIndex) {
+    if (!caps.family) continue;
+
+    // Index by normalized family name
+    const normFamily = normalizeModelName(caps.family);
+    indexCrossRef(normFamily, caps);
+
+    // Also index by normalized model ID for direct matches
+    // e.g., "deepseek-v3-0324" can match "deepseek-v3" from Ollama
+    const normId = normalizeModelName(caps.id);
+    if (normId !== normFamily) {
+      indexCrossRef(normId, caps);
+    }
+  }
+
+  log.debug(`Family cross-ref built: ${familyCrossRef.size} entries from ${capIndex.size} models`);
+}
+
+function indexCrossRef(key: string, caps: ModelCapabilities): void {
+  const existing = familyCrossRef.get(key);
+  if (!existing || scoreCaps(caps) > scoreCaps(existing)) {
+    familyCrossRef.set(key, caps);
+  }
+}
+
+/** Score capabilities for comparison — higher = more capable. */
+function scoreCaps(caps: ModelCapabilities): number {
+  return (
+    (caps.toolCall ? 4 : 0) +
+    (caps.reasoning ? 4 : 0) +
+    (caps.context > 0 ? 2 : 0) +
+    (caps.maxOutput > 0 ? 1 : 0)
+  );
+}
+
+/**
+ * Normalize a model or family name for cross-reference matching.
+ * Converts to lowercase, normalizes separators to dashes, collapses duplicates.
+ *
+ * Examples:
+ *   "DeepSeek-V3"       → "deepseek-v3"
+ *   "Llama 3.3 70B"     → "llama-3-3-70b"
+ *   "GPT-4o"            → "gpt-4o"
+ *   "claude-sonnet-4-6" → "claude-sonnet-4-6"
+ */
+export function normalizeModelName(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[._\s]+/g, "-")
+    .replace(/--+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Generate progressively less specific keys for cross-referencing an Ollama
+ * model name against the family index.
+ *
+ * Strategy: start with the exact base name, then progressively strip trailing
+ * dash-delimited segments. Also generates variants with dash-before-digit
+ * normalization (e.g., "llama4" → "llama-4") since Ollama and models.dev
+ * use different naming conventions.
+ *
+ * Examples:
+ *   "deepseek-v3.1:671b-cloud" → ["deepseek-v3-1", "deepseek-v3", "deepseek",
+ *                                  "deepseek-v-3-1", "deepseek-v-3", "deepseek-v"]
+ *   "llama4:maverick-cloud"    → ["llama4", "llama-4", "llama"]
+ *   "qwen3.5:32b-cloud"       → ["qwen3-5", "qwen3", "qwen-3-5", "qwen-3", "qwen"]
+ */
+export function generateMatchKeys(modelId: string): string[] {
+  const base = modelId.split(":")[0]!;
+  const norm = normalizeModelName(base);
+
+  const keys = new Set<string>();
+  keys.add(norm);
+
+  // Variant: insert dash before digits following letters ("llama4" → "llama-4")
+  const withDash = norm.replace(/([a-z])(\d)/g, "$1-$2");
+  if (withDash !== norm) keys.add(withDash);
+
+  // Progressively strip trailing dash-segments from both the original
+  // normalized name AND the dash-before-digit variant. This ensures we
+  // reach the base family name regardless of naming convention.
+  //   "llama-4"       → strip "-4"       → "llama"
+  //   "deepseek-v3-1" → strip "-1"       → "deepseek-v3" → strip "-v3" → "deepseek"
+  //   "kimi-k2-5"     → strip "-5"       → "kimi-k2"     → strip "-k2" → "kimi"
+  for (const start of new Set([norm, withDash])) {
+    let stripped = start;
+    while (true) {
+      const lastDash = stripped.lastIndexOf("-");
+      if (lastDash < 1) break;
+      const shorter = stripped.slice(0, lastDash);
+      if (shorter.length < 2) break;
+      keys.add(shorter);
+      stripped = shorter;
+    }
+  }
+
+  return [...keys];
+}
+
+/**
+ * Cross-reference an Ollama model against the models.dev registry.
+ *
+ * Merges capabilities: keeps Ollama probe data for runtime-specific properties
+ * (toolCall — determined by template support) and inherits model-intrinsic
+ * properties from models.dev (reasoning, context window, output limit).
+ *
+ * The Ollama probe detects what the runtime CAN do (tool calling via template).
+ * models.dev knows what the model IS (reasoning-capable, context size, etc.).
+ * Merging both gives the most accurate picture.
+ */
+function crossReferenceWithRegistry(
+  modelId: string,
+  probed: ModelCapabilities,
+): ModelCapabilities {
+  if (familyCrossRef.size === 0) return probed;
+
+  const candidates = generateMatchKeys(modelId);
+
+  for (const key of candidates) {
+    const ref = familyCrossRef.get(key);
+    if (ref) {
+      log.debug(
+        `Ollama cross-ref "${modelId}" → matched "${ref.id}" ` +
+        `(family: ${ref.family}, provider: ${ref.provider}) ` +
+        `[reasoning=${ref.reasoning} ctx=${ref.context} out=${ref.maxOutput}]`,
+      );
+
+      return {
+        ...probed,
+        // Inherit model-intrinsic capabilities from models.dev
+        reasoning: ref.reasoning,
+        // Use the larger value — Ollama probe may underreport, but models.dev
+        // reflects the model's true capacity regardless of runtime config.
+        context: Math.max(probed.context, ref.context),
+        maxOutput: Math.max(probed.maxOutput, ref.maxOutput),
+        // Keep toolCall from Ollama probe — it reflects whether the Ollama
+        // runtime actually supports tool calling for this model (template-dependent).
+      };
+    }
+  }
+
+  return probed;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,7 +484,7 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     log.debug(`Ollama probe "${modelId}" error: ${msg}`);
   }
 
-  const caps: ModelCapabilities = {
+  const probed: ModelCapabilities = {
     id: modelId,
     provider: "local",
     family,
@@ -315,8 +496,13 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     costOutput: 0,
   };
 
-  localProbeCache.set(modelId, caps);
-  return caps;
+  // Cross-reference with models.dev to detect capabilities that Ollama's
+  // /api/show can't report — primarily `reasoning` mode, but also more
+  // accurate context/output limits from the model's spec sheet.
+  const enriched = crossReferenceWithRegistry(modelId, probed);
+
+  localProbeCache.set(modelId, enriched);
+  return enriched;
 }
 
 function getOllamaBaseUrl(): string {
@@ -341,16 +527,21 @@ function getOllamaBaseUrl(): string {
 export function resolveModel(provider: string, alias: string): string {
   const normalized = alias.toLowerCase();
 
-  // 1. Exact match
+  // 1. Exact match in capability index
   if (capIndex.has(`${provider}:${alias}`)) return alias;
   if (capIndex.has(`${provider}:${normalized}`)) return normalized;
 
-  // 2. Dynamic alias from fetched registry
-  if (fetched) {
-    const aliases = aliasIndex.get(provider);
-    if (aliases) {
-      const direct = aliases.get(normalized);
-      if (direct) return direct;
+  // 2. Alias lookup — always check aliasIndex (populated by both models.dev
+  //    AND registerProviderAliases for custom providers). The `fetched` guard
+  //    only applies to the fuzzy substring matching (step 2b), not direct lookup.
+  const aliases = aliasIndex.get(provider);
+  if (aliases) {
+    // 2a. Direct alias match — works for both models.dev and custom providers
+    const direct = aliases.get(normalized);
+    if (direct) return direct;
+
+    // 2b. Fuzzy substring match — only from models.dev data (requires fetch)
+    if (fetched) {
       for (const [key, modelId] of aliases) {
         if (key.includes(normalized) || normalized.includes(key)) return modelId;
       }
@@ -378,6 +569,7 @@ export function resolveModel(provider: string, alias: string): string {
  * Get capabilities for a resolved model ID.
  * For cloud models → reads from models.dev cache.
  * For local models → returns cached Ollama probe result, or a pre-probe default.
+ * For custom providers → cross-references with models.dev family index.
  *
  * IMPORTANT: For local models, call probeLocalModel() first (async) to get
  * accurate capabilities. This sync version returns cached data or a fallback.
@@ -395,6 +587,31 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
   // 3. Case-insensitive search
   for (const [k, v] of capIndex) {
     if (k.toLowerCase() === key.toLowerCase()) return v;
+  }
+
+  // 3.5. Cross-reference with family index for custom providers.
+  // This auto-detects reasoning, context, and output caps for custom provider
+  // models by matching against the models.dev family data (e.g., a "deepseek-chat-v3"
+  // model on OpenRouter inherits DeepSeek V3's known capabilities).
+  //
+  // Only applies when no built-in provider fallback exists — built-in providers
+  // (anthropic, openai, local, claude-code) have intentional fallback caps that
+  // override model-level data (e.g., claude-code disables toolCall by design).
+  if (familyCrossRef.size > 0 && !FALLBACK_CAPS[provider]) {
+    const matchKeys = generateMatchKeys(modelId);
+    for (const matchKey of matchKeys) {
+      const ref = familyCrossRef.get(matchKey);
+      if (ref) {
+        return {
+          ...ref,
+          id: modelId,
+          provider,
+          // Zero out cost — custom provider pricing differs from the reference provider
+          costInput: 0,
+          costOutput: 0,
+        };
+      }
+    }
   }
 
   // 4. Provider fallback
@@ -428,4 +645,114 @@ export function listModels(provider?: string): ModelCapabilities[] {
     for (const [, caps] of localProbeCache) results.push(caps);
   }
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Custom provider alias registration
+// ---------------------------------------------------------------------------
+
+/**
+ * Register model aliases for a custom provider.
+ *
+ * Called by `registerCustomProviders()` at boot for each ProviderConfig that
+ * has a `models` mapping. Populates the alias index so that
+ * `resolveModel(providerId, alias)` works for custom provider model shortcuts.
+ *
+ * @param providerId  Provider ID (e.g. "openrouter")
+ * @param aliases     Alias → real model ID mapping (e.g. { "deepseek": "deepseek/deepseek-chat-v3" })
+ */
+export function registerProviderAliases(
+  providerId: string,
+  aliases: Record<string, string>,
+): void {
+  const existing = aliasIndex.get(providerId) ?? new Map<string, string>();
+  for (const [alias, modelId] of Object.entries(aliases)) {
+    existing.set(alias.toLowerCase(), modelId);
+  }
+  aliasIndex.set(providerId, existing);
+}
+
+/**
+ * Check whether a name is a known provider.
+ *
+ * Checks (in order):
+ *   1. Dynamic alias index (populated from models.dev + custom providers)
+ *   2. Static fallback capability providers
+ *   3. Driver registry (catches built-in aliases like "claude", "gpt", "ollama")
+ *
+ * Used by parseModelSpec() to distinguish "provider:model" from "model:tag".
+ */
+export function isKnownProvider(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (aliasIndex.has(lower) || FALLBACK_CAPS[lower] !== undefined) return true;
+
+  // Check the driver registry — lazy require to avoid top-level circular import.
+  // At runtime this is cheap because drivers/index.js is already loaded by boot step 7.
+  try {
+    const { getDriver } = require("./index.js");
+    getDriver(lower);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Model spec parsing — "provider:model" syntax
+// ---------------------------------------------------------------------------
+
+export interface ModelSpec {
+  /** Backend/driver name (e.g. "openrouter", "anthropic", "local"). */
+  backend: string;
+  /** Model identifier within the backend. */
+  model: string;
+}
+
+/**
+ * Parse a model specifier that may use "provider:model" syntax.
+ *
+ * Rules:
+ *   - If input contains ":", split on the first colon.
+ *   - If the left side is a known driver/provider → { backend: left, model: right }
+ *   - If the left side is NOT a known driver → treat the whole string as the model
+ *     (backward compat for Ollama "llama3:70b" format)
+ *   - If no colon → return the whole string as both backend and model
+ *
+ * @param spec          The model specifier string.
+ * @param isDriverKnown Optional function to check if a name is a registered driver.
+ *                      Defaults to checking the driver registry via getDriver().
+ */
+export function parseModelSpec(
+  spec: string,
+  isDriverKnown?: (name: string) => boolean,
+): ModelSpec {
+  const colonIdx = spec.indexOf(":");
+  if (colonIdx < 0) {
+    return { backend: spec, model: spec };
+  }
+
+  const left = spec.slice(0, colonIdx);
+  const right = spec.slice(colonIdx + 1);
+
+  // Use provided check function or fall back to isKnownProvider
+  const checkFn = isDriverKnown ?? isKnownProvider;
+
+  // Also check the driver registry (handles built-in aliases like "claude", "gpt")
+  let knownAsDriver = false;
+  try {
+    // Lazy import to avoid circular dependency — isKnownProvider uses aliasIndex
+    // which is sufficient for custom providers, but built-in drivers are registered
+    // in the driver registry with aliases not in aliasIndex.
+    knownAsDriver = checkFn(left);
+  } catch {
+    // Not found — not a known provider
+  }
+
+  if (knownAsDriver) {
+    return { backend: left, model: right };
+  }
+
+  // Left side isn't a known provider — treat the whole string as model
+  // (backward compat for Ollama "llama3:70b" format)
+  return { backend: spec, model: spec };
 }

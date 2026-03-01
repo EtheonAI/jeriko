@@ -12,8 +12,6 @@ set -e
 
 VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
 DIST_DIR="dist"
-BUILD_FLAGS="--compile --minify --bytecode --external qrcode-terminal --external link-preview-js --external jimp --external sharp"
-ENTRY="src/index.ts"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
 BOLD='\033[1m'; NC='\033[0m'
@@ -22,18 +20,15 @@ info()  { echo -e "${BLUE}→${NC} $1"; }
 ok()    { echo -e "${GREEN}✓${NC} $1"; }
 err()   { echo -e "${RED}✗${NC} $1" >&2; }
 
-# Platform → Bun target mapping
-get_target() {
+# Returns .exe for Windows platforms, empty string otherwise
+get_ext() {
     case "$1" in
-        darwin-arm64) echo "bun-darwin-arm64" ;;
-        darwin-x64)   echo "bun-darwin-x64" ;;
-        linux-arm64)  echo "bun-linux-arm64" ;;
-        linux-x64)    echo "bun-linux-x64" ;;
+        windows-*) echo ".exe" ;;
         *) echo "" ;;
     esac
 }
 
-ALL_PLATFORMS="darwin-arm64 darwin-x64 linux-arm64 linux-x64"
+ALL_PLATFORMS="darwin-arm64 darwin-x64 linux-arm64 linux-x64 linux-arm64-musl linux-x64-musl windows-x64 windows-arm64"
 
 echo ""
 echo -e "${BOLD}Jeriko Release Builder v${VERSION}${NC}"
@@ -48,25 +43,34 @@ else
     PLATFORMS="$ALL_PLATFORMS"
 fi
 
-# Build each platform
-BUILT=""
-for platform in $PLATFORMS; do
-    target=$(get_target "$platform")
-    if [ -z "$target" ]; then
-        err "Unknown platform: $platform"
-        echo "  Available: $ALL_PLATFORMS"
+# Build using build.ts (handles Solid plugin, externals, minification)
+# --all builds every target into dist/; single platform uses --target
+if [ "$PLATFORMS" = "$ALL_PLATFORMS" ]; then
+    info "Building all platforms via build.ts..."
+    if ! bun run scripts/build.ts --all 2>&1; then
+        err "Build failed"
         exit 1
     fi
+else
+    for platform in $PLATFORMS; do
+        info "Building ${platform} via build.ts..."
+        if ! bun run scripts/build.ts --target "$platform" 2>&1; then
+            err "Failed to build ${platform}"
+        fi
+    done
+    # build.ts with --target puts output in dist/ automatically (no override needed,
+    # its resolveTargets for a single target outputs to dist/)
+fi
 
-    outfile="$DIST_DIR/jeriko-${platform}"
-    info "Building ${platform}..."
-
-    if bun build "$ENTRY" $BUILD_FLAGS --target="$target" --outfile="$outfile" 2>&1; then
+# Collect successfully built platforms
+BUILT=""
+for platform in $PLATFORMS; do
+    ext=$(get_ext "$platform")
+    outfile="$DIST_DIR/jeriko-${platform}${ext}"
+    if [ -f "$outfile" ]; then
         size=$(ls -lh "$outfile" | awk '{print $5}')
         ok "Built ${platform} (${size})"
         BUILT="$BUILT $platform"
-    else
-        err "Failed to build ${platform}"
     fi
 done
 
@@ -97,7 +101,8 @@ echo "  \"platforms\": {" >> "$MANIFEST"
 
 first=true
 for platform in $BUILT; do
-    binary="$DIST_DIR/jeriko-${platform}"
+    ext=$(get_ext "$platform")
+    binary="$DIST_DIR/jeriko-${platform}${ext}"
     [ ! -f "$binary" ] && continue
 
     checksum=$(shasum -a 256 "$binary" 2>/dev/null || sha256sum "$binary" 2>/dev/null)
@@ -105,7 +110,7 @@ for platform in $BUILT; do
     size=$(stat -f%z "$binary" 2>/dev/null || stat -c%s "$binary" 2>/dev/null)
 
     if [ "$first" = true ]; then first=false; else echo "," >> "$MANIFEST"; fi
-    printf "    \"%s\": { \"checksum\": \"%s\", \"size\": %s }" "$platform" "$checksum" "$size" >> "$MANIFEST"
+    printf "    \"%s\": { \"checksum\": \"%s\", \"size\": %s, \"filename\": \"%s\" }" "$platform" "$checksum" "$size" "jeriko-${platform}${ext}" >> "$MANIFEST"
 done
 
 echo "" >> "$MANIFEST"
@@ -118,7 +123,8 @@ ok "Manifest written to $MANIFEST"
 echo ""
 echo -e "${BOLD}Release artifacts:${NC}"
 for platform in $BUILT; do
-    binary="$DIST_DIR/jeriko-${platform}"
+    ext=$(get_ext "$platform")
+    binary="$DIST_DIR/jeriko-${platform}${ext}"
     size=$(ls -lh "$binary" | awk '{print $5}')
     echo "  $binary  ($size)"
 done

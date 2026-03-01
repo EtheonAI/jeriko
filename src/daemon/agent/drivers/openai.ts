@@ -7,8 +7,8 @@ import type {
   StreamChunk,
   DriverConfig,
   DriverMessage,
-  ToolCall,
 } from "./index.js";
+import { parseOpenAIStream } from "./openai-stream.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -170,112 +170,7 @@ export class OpenAIDriver implements LLMDriver {
       return;
     }
 
-    // Parse SSE stream.
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    const partialToolCalls = new Map<
-      number,
-      { id: string; name: string; arguments: string }
-    >();
-
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6).trim();
-          if (data === "[DONE]") {
-            for (const [, partial] of partialToolCalls) {
-              const tc: ToolCall = {
-                id: partial.id,
-                name: partial.name,
-                arguments: partial.arguments,
-              };
-              yield { type: "tool_call", content: "", tool_call: tc };
-            }
-            partialToolCalls.clear();
-            yield { type: "done", content: "" };
-            return;
-          }
-
-          let event: Record<string, unknown>;
-          try {
-            event = JSON.parse(data);
-          } catch {
-            continue;
-          }
-
-          const choices = event.choices as
-            | Array<Record<string, unknown>>
-            | undefined;
-          if (!choices?.length) continue;
-
-          const delta = choices[0]!.delta as Record<string, unknown> | undefined;
-          if (!delta) continue;
-
-          const finishReason = choices[0]!.finish_reason as string | null;
-
-          if (delta.content) {
-            yield { type: "text", content: delta.content as string };
-          }
-
-          // Reasoning content (o-series internal reasoning, if exposed)
-          if (delta.reasoning_content) {
-            yield { type: "thinking", content: delta.reasoning_content as string };
-          }
-
-          // Tool calls (streamed incrementally)
-          const toolCalls = delta.tool_calls as
-            | Array<Record<string, unknown>>
-            | undefined;
-          if (toolCalls) {
-            for (const tc of toolCalls) {
-              const idx = tc.index as number;
-              const fn = tc.function as Record<string, unknown> | undefined;
-
-              if (!partialToolCalls.has(idx)) {
-                partialToolCalls.set(idx, {
-                  id: (tc.id as string) ?? "",
-                  name: fn?.name as string ?? "",
-                  arguments: "",
-                });
-              }
-              const partial = partialToolCalls.get(idx)!;
-              if (tc.id) partial.id = tc.id as string;
-              if (fn?.name) partial.name = fn.name as string;
-              if (fn?.arguments) partial.arguments += fn.arguments as string;
-            }
-          }
-
-          if (finishReason === "tool_calls") {
-            for (const [, partial] of partialToolCalls) {
-              const toolCall: ToolCall = {
-                id: partial.id,
-                name: partial.name,
-                arguments: partial.arguments,
-              };
-              yield { type: "tool_call", content: "", tool_call: toolCall };
-            }
-            partialToolCalls.clear();
-          }
-
-          if (finishReason === "stop" || finishReason === "length") {
-            yield { type: "done", content: "" };
-            return;
-          }
-        }
-      }
-    } finally {
-      reader.releaseLock();
-    }
-
-    yield { type: "done", content: "" };
+    // Delegate SSE parsing to shared stream parser.
+    yield* parseOpenAIStream({ response, signal: config.signal });
   }
 }

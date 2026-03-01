@@ -54,15 +54,11 @@ export interface AuditLog {
   created_at: number;
 }
 
-/** Scheduled/reactive trigger configuration. */
-export interface Trigger {
-  id: string;
-  type: "cron" | "webhook" | "file" | "http";
-  config: string; // JSON-encoded
-  enabled: number; // 0 | 1
-  last_fired: number | null;
-  created_at: number;
-}
+/**
+ * Trigger configuration — managed by TriggerStore (trigger_config table).
+ * See TriggerConfig in daemon/services/triggers/engine.ts for the runtime type.
+ * The trigger_config table is self-bootstrapped by TriggerStore.ensureTable().
+ */
 
 /** Generic key-value pair. */
 export interface KeyValue {
@@ -133,16 +129,6 @@ CREATE TABLE IF NOT EXISTS audit_log (
   created_at  INTEGER NOT NULL
 );` as const;
 
-export const SQL_CREATE_TRIGGER = `
-CREATE TABLE IF NOT EXISTS trigger_def (
-  id         TEXT    PRIMARY KEY,
-  type       TEXT    NOT NULL CHECK (type IN ('cron', 'webhook', 'file', 'http')),
-  config     TEXT    NOT NULL DEFAULT '{}',
-  enabled    INTEGER NOT NULL DEFAULT 1,
-  last_fired INTEGER,
-  created_at INTEGER NOT NULL
-);` as const;
-
 export const SQL_CREATE_KEY_VALUE = `
 CREATE TABLE IF NOT EXISTS key_value (
   key        TEXT    PRIMARY KEY,
@@ -150,12 +136,12 @@ CREATE TABLE IF NOT EXISTS key_value (
   updated_at INTEGER NOT NULL
 );` as const;
 
-/** All CREATE TABLE statements in dependency order. */
+/** All CREATE TABLE statements in dependency order.
+ * Note: trigger_config is self-bootstrapped by TriggerStore — not included here. */
 export const ALL_CREATE_TABLES = [
   SQL_CREATE_SESSION,
   SQL_CREATE_MESSAGE,
   SQL_CREATE_PART,
   SQL_CREATE_AUDIT_LOG,
-  SQL_CREATE_TRIGGER,
   SQL_CREATE_KEY_VALUE,
 ] as const;

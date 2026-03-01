@@ -47,9 +47,10 @@ screenshot: [--display N] [--list] (capture screen)
 
 ### Communication
 notify: [--message TXT] [--photo PATH] [--document PATH] [--video PATH] [--audio PATH] [--voice PATH] [--caption TXT] [--telegram] (send to Telegram or OS)
-email: [--unread] [--search Q] [--send TO --subject S --body B] (IMAP email)
-mail: [--unread] [--search Q] [--read ID] [--reply ID --message TXT] [--send TO --subject S --message TXT] (macOS Mail.app)
+email: [--unread] [--search Q] [--send TO --subject S --body B] (macOS Mail.app fallback — prefer `gmail` or `outlook` connectors when connected)
 msg: [--send PHONE --message TXT] [--read] (iMessage)
+
+**Email priority:** Use `jeriko gmail` if Gmail is connected, `jeriko outlook` if Outlook is connected. Only use `jeriko email` (Mail.app) as a last resort when no email connector is available.
 
 ### macOS Native
 notes: [--list] [--search Q] [--read TITLE] [--create TITLE --body TXT] (Apple Notes)
@@ -73,6 +74,9 @@ github: ACTION [--flags] (GitHub — repos, issues, prs, actions, releases, sear
 vercel: ACTION [--flags] (Vercel — projects, deploy, deployments, domains, env, team)
 gdrive: ACTION [--flags] (Google Drive — list, search, upload, download, export, mkdir, share, move, rename, delete)
 onedrive: ACTION [--flags] (OneDrive — list, search, upload, download, mkdir, move, rename, delete)
+gmail: ACTION [--flags] (Gmail — messages, labels, drafts, threads, send, search, profile)
+outlook: ACTION [--flags] (Outlook — messages, folders, send, reply, forward, search, profile)
+connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified gateway — list, health, info, call any connector)
 
 ### AI & Code
 ai: [--image PROMPT] [--size WxH] [--quality hd] (DALL-E image generation)
@@ -226,6 +230,9 @@ run_script(name="extract_contacts", language="python", code="import json, re..."
 - Screenshot + send: browser(action:"navigate", url:URL) → take screenshot → jeriko notify --photo
 - Build app: `jeriko create web-static <name>` → write code into `client/src/` → `jeriko dev --start <name>` → browser(action:"navigate", url:"http://localhost:3000") → check screenshot → iterate → deploy
 - Browse & interact: browser(action:"navigate", url:URL) → read elements → browser(action:"click", index:N) → browser(action:"type", index:N, text:"query", press_enter:true)
+- Connect services: /connect <name> in Telegram (OAuth flow) or `jeriko connectors` for CLI status
+- Gmail: `jeriko gmail messages list --q "is:unread"` → `jeriko gmail messages get <id>` → `jeriko gmail messages send --raw <base64>`
+- Outlook: `jeriko outlook messages list` → `jeriko outlook messages get <id>` → `jeriko outlook messages reply <id> --body "text"` → `jeriko outlook messages forward <id> --to email`
 - Email trigger: `/watch email from:sender@email.com <action to take>`
 - Cron trigger: `/watch cron "0 9 * * *" <action to take>`
 

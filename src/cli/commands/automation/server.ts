@@ -80,7 +80,9 @@ export const command: CommandHandler = {
         // script as first arg. For compiled, execPath IS the binary.
         cleanupPidFile();
 
-        const isDevMode = process.argv[1]?.endsWith(".ts") || process.argv[1]?.endsWith(".js");
+        const isBunVFS = process.argv[1]?.startsWith("/$bunfs/");
+        const isDevMode = !isBunVFS
+          && (process.argv[1]?.endsWith(".ts") || process.argv[1]?.endsWith(".js"));
         const cmd = process.execPath;
         const cmdArgs = isDevMode
           ? [process.argv[1]!, "server", "start", "--foreground"]

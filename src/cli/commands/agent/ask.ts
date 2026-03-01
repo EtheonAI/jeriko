@@ -35,10 +35,15 @@ export const command: CommandHandler = {
       fail("Pipe input not yet implemented. Usage: jeriko ask <question>");
     }
 
-    const model = flagStr(parsed, "model", "");
+    const rawModel = flagStr(parsed, "model", "");
     const systemOverride = flagStr(parsed, "system", "");
     const maxTokens = flagStr(parsed, "max-tokens", "");
     const noTools = flagBool(parsed, "no-tools");
+
+    // Parse "provider:model" syntax (e.g. "openrouter:deepseek")
+    // The full spec is passed to the daemon for resolution — the CLI doesn't
+    // need to resolve it. For in-process mode, we parse it here.
+    const model = rawModel;
 
     // Load system prompt: explicit --system flag takes priority, then AGENT.md
     const system = systemOverride || loadSystemPrompt();
@@ -48,22 +53,45 @@ export const command: CommandHandler = {
     const daemonRunning = existsSync(socketPath);
 
     if (daemonRunning) {
-      // Route through daemon Unix socket
+      // Route through daemon Unix socket with streaming IPC.
+      // Events arrive incrementally — text deltas, tool calls, errors —
+      // so the CLI can display progress in real-time and the connection
+      // stays alive for arbitrarily long agent operations (multi-delegate, fan-out).
       try {
-        const { sendRequest } = await import("../../../daemon/api/socket.js");
+        const { sendStreamRequest } = await import("../../../daemon/api/socket.js");
         const params: Record<string, unknown> = { message: question };
         if (model) params.model = model;
         if (system) params.system = system;
         if (maxTokens) params.max_tokens = parseInt(maxTokens, 10);
         if (noTools) params.tools = false;
 
-        const response = await sendRequest("ask", params);
-        if (response.ok) {
-          const data = response.data as Record<string, unknown>;
-          console.log(data.response ?? JSON.stringify(data));
-        } else {
-          fail(response.error ?? "Daemon request failed");
+        let fullResponse = "";
+        for await (const event of sendStreamRequest("ask", params)) {
+          switch (event.type) {
+            case "text_delta":
+              process.stdout.write(event.content as string);
+              fullResponse += event.content;
+              break;
+            case "tool_call_start":
+              if (process.stdout.isTTY) {
+                const toolCall = event.toolCall as Record<string, unknown>;
+                process.stderr.write(`\n[tool: ${toolCall.name}]\n`);
+              }
+              break;
+            case "tool_result":
+              if (process.stdout.isTTY && event.isError) {
+                process.stderr.write(`[tool error: ${event.result}]\n`);
+              }
+              break;
+            case "error":
+              process.stderr.write(`\nError: ${event.message}\n`);
+              break;
+            case "turn_complete":
+              break;
+          }
         }
+
+        if (fullResponse) console.log();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         fail(`Daemon query failed: ${msg}`);
@@ -85,6 +113,8 @@ export const command: CommandHandler = {
           import("../../../daemon/agent/tools/search.js"),
           import("../../../daemon/agent/tools/web.js"),
           import("../../../daemon/agent/tools/browse.js"),
+          import("../../../daemon/agent/tools/parallel.js"),
+          import("../../../daemon/agent/tools/delegate.js"),
         ]);
 
         const { loadConfig } = await import("../../../shared/config.js");
@@ -95,6 +125,17 @@ export const command: CommandHandler = {
 
         const config = loadConfig();
         const resolvedModel = model || config.agent.model;
+
+        // Register custom providers for in-process mode
+        if (config.providers?.length) {
+          const { registerCustomProviders } = await import("../../../daemon/agent/drivers/providers.js");
+          registerCustomProviders(config.providers);
+        }
+
+        // Parse "provider:model" syntax
+        const { parseModelSpec } = await import("../../../daemon/agent/drivers/models.js");
+        const { backend: parsedBackend, model: parsedModel } = parseModelSpec(resolvedModel);
+
         const session = createSession({ model: resolvedModel, title: question.slice(0, 80) });
         kvSet("state:last_session_id", session.id);
 
@@ -104,8 +145,8 @@ export const command: CommandHandler = {
 
         const agentConfig = {
           sessionId: session.id,
-          backend: resolvedModel,
-          model: resolvedModel,
+          backend: parsedBackend,
+          model: parsedModel,
           systemPrompt: system || undefined,
           maxTokens: maxTokens ? parseInt(maxTokens, 10) : config.agent.maxTokens,
           temperature: config.agent.temperature,

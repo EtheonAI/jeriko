@@ -13,16 +13,31 @@ import { getConfigDir } from "./config.js";
 
 const SECRETS_FILE = join(getConfigDir(), ".env");
 
+/** Legacy dotenv config file from v1 — loaded as fallback. */
+const LEGACY_CONFIG_FILE = join(getConfigDir(), "config");
+
 /**
- * Load secrets from ~/.config/jeriko/.env into process.env.
+ * Load secrets from dotenv files into process.env.
  *
- * Only sets vars that are NOT already set — real env vars take precedence.
- * Called once at daemon boot, before connector initialization.
+ * Load order (first match wins — earlier sources take precedence):
+ *   1. Real env vars (process.env from shell)
+ *   2. ~/.config/jeriko/.env       (primary secrets file, v2)
+ *   3. ~/.config/jeriko/config     (legacy dotenv file, v1 migration)
+ *
+ * Only sets vars that are NOT already set. Called once at daemon boot.
  */
 export function loadSecrets(): void {
-  if (!existsSync(SECRETS_FILE)) return;
+  loadDotenvFile(SECRETS_FILE);
+  loadDotenvFile(LEGACY_CONFIG_FILE);
+}
 
-  const content = readFileSync(SECRETS_FILE, "utf-8");
+/**
+ * Parse a dotenv-format file and set unset vars in process.env.
+ */
+function loadDotenvFile(filePath: string): void {
+  if (!existsSync(filePath)) return;
+
+  const content = readFileSync(filePath, "utf-8");
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
@@ -41,7 +56,7 @@ export function loadSecrets(): void {
       value = value.slice(1, -1);
     }
 
-    // Env vars take precedence — only set if not already defined
+    // Only set if not already defined — env vars and earlier files take precedence
     if (!process.env[key]) {
       process.env[key] = value;
     }

@@ -1,22 +1,10 @@
-// Connector health routes — status of external service integrations.
+// Connector routes — health, status, and call dispatch for external integrations.
 
 import { Hono } from "hono";
-import { loadConfig } from "../../../shared/config.js";
 import { getLogger } from "../../../shared/logger.js";
+import type { ConnectorManager } from "../../services/connectors/manager.js";
 
 const log = getLogger();
-
-// ---------------------------------------------------------------------------
-// Connector status types
-// ---------------------------------------------------------------------------
-
-interface ConnectorStatus {
-  name: string;
-  configured: boolean;
-  healthy: boolean;
-  last_check?: string;
-  error?: string;
-}
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -27,45 +15,18 @@ export function connectorRoutes(): Hono {
 
   /**
    * GET /connector — List all connectors with their configuration and health status.
+   *
+   * Iterates CONNECTOR_DEFS via ConnectorManager, runs real health checks
+   * (cached for 30s), and returns structured status for each connector.
    */
   router.get("/", async (c) => {
-    const config = loadConfig();
-    const statuses: ConnectorStatus[] = [];
+    const connectors = c.get("connectors" as never) as ConnectorManager;
 
-    // Stripe
-    statuses.push({
-      name: "stripe",
-      configured: !!config.connectors.stripe.webhookSecret,
-      healthy: !!config.connectors.stripe.webhookSecret,
-      last_check: new Date().toISOString(),
-    });
+    if (!connectors) {
+      return c.json({ ok: false, error: "Connector manager not available" }, 503);
+    }
 
-    // PayPal
-    statuses.push({
-      name: "paypal",
-      configured: !!config.connectors.paypal.webhookId,
-      healthy: !!config.connectors.paypal.webhookId,
-      last_check: new Date().toISOString(),
-    });
-
-    // GitHub
-    statuses.push({
-      name: "github",
-      configured: !!config.connectors.github.webhookSecret,
-      healthy: !!config.connectors.github.webhookSecret,
-      last_check: new Date().toISOString(),
-    });
-
-    // Twilio
-    const twilioConfigured =
-      !!config.connectors.twilio.accountSid && !!config.connectors.twilio.authToken;
-    statuses.push({
-      name: "twilio",
-      configured: twilioConfigured,
-      healthy: twilioConfigured,
-      last_check: new Date().toISOString(),
-    });
-
+    const statuses = await connectors.healthAll();
     return c.json({ ok: true, data: statuses });
   });
 
@@ -74,45 +35,45 @@ export function connectorRoutes(): Hono {
    */
   router.get("/:name", async (c) => {
     const name = c.req.param("name");
-    const config = loadConfig();
+    const connectors = c.get("connectors" as never) as ConnectorManager;
 
-    const connectorMap: Record<string, () => ConnectorStatus> = {
-      stripe: () => ({
-        name: "stripe",
-        configured: !!config.connectors.stripe.webhookSecret,
-        healthy: !!config.connectors.stripe.webhookSecret,
-        last_check: new Date().toISOString(),
-      }),
-      paypal: () => ({
-        name: "paypal",
-        configured: !!config.connectors.paypal.webhookId,
-        healthy: !!config.connectors.paypal.webhookId,
-        last_check: new Date().toISOString(),
-      }),
-      github: () => ({
-        name: "github",
-        configured: !!config.connectors.github.webhookSecret,
-        healthy: !!config.connectors.github.webhookSecret,
-        last_check: new Date().toISOString(),
-      }),
-      twilio: () => {
-        const configured =
-          !!config.connectors.twilio.accountSid && !!config.connectors.twilio.authToken;
-        return {
-          name: "twilio",
-          configured,
-          healthy: configured,
-          last_check: new Date().toISOString(),
-        };
-      },
-    };
-
-    const factory = connectorMap[name];
-    if (!factory) {
-      return c.json({ ok: false, error: `Connector "${name}" not found` }, 404);
+    if (!connectors) {
+      return c.json({ ok: false, error: "Connector manager not available" }, 503);
     }
 
-    return c.json({ ok: true, data: factory() });
+    if (!connectors.names.includes(name)) {
+      return c.json({ ok: false, error: `Unknown connector: "${name}"` }, 404);
+    }
+
+    const status = await connectors.health(name);
+    return c.json({ ok: true, data: status });
+  });
+
+  /**
+   * POST /connector/:name/call — Execute a method on a connector.
+   *
+   * Body: { method: "charges.list", params: { limit: 10 } }
+   */
+  router.post("/:name/call", async (c) => {
+    const name = c.req.param("name");
+    const connectors = c.get("connectors" as never) as ConnectorManager;
+
+    if (!connectors) {
+      return c.json({ ok: false, error: "Connector manager not available" }, 503);
+    }
+
+    const connector = await connectors.get(name);
+    if (!connector) {
+      return c.json({ ok: false, error: `Connector "${name}" is not available` }, 404);
+    }
+
+    const body = await c.req.json<{ method: string; params?: Record<string, unknown> }>();
+    if (!body.method) {
+      return c.json({ ok: false, error: "method is required" }, 400);
+    }
+
+    const result = await connector.call(body.method, body.params ?? {});
+    return c.json(result, result.ok ? 200 : 502);
   });
 
   return router;

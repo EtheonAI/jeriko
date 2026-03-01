@@ -10,9 +10,11 @@
 import { runAgent, type AgentRunConfig, type AgentEvent } from "./agent.js";
 import { createSession, type SessionCreateOpts } from "./session/session.js";
 import { addMessage } from "./session/message.js";
+import { listTools } from "./tools/registry.js";
 import { getDatabase } from "../storage/db.js";
 import { getLogger } from "../../shared/logger.js";
 import { Bus } from "../../shared/bus.js";
+import { getActiveDepth, getActiveContext, setActiveContext } from "./orchestrator-context.js";
 import type { DriverMessage } from "./drivers/index.js";
 import type { AgentContext } from "../storage/schema.js";
 import { randomUUID } from "node:crypto";
@@ -37,8 +39,8 @@ export const AGENT_TYPES = {
   /** Research only — web search, browser, read files, list files. No mutations. */
   research: ["web_search", "browser", "read_file", "list_files", "search_files"],
 
-  /** Task agent — can read, write, edit, run bash, browse. No web search. */
-  task: ["bash", "browser", "read_file", "write_file", "edit_file", "list_files", "search_files"],
+  /** Task agent — can read, write, edit, run bash, browse, capture. No web search. */
+  task: ["bash", "browser", "read_file", "write_file", "edit_file", "list_files", "search_files", "camera", "screenshot"],
 
   /** Explorer — fast codebase navigation. Read-only, no bash. */
   explore: ["read_file", "list_files", "search_files"],
@@ -49,11 +51,36 @@ export const AGENT_TYPES = {
 
 export type AgentType = keyof typeof AGENT_TYPES;
 
+/**
+ * Maximum nesting depth for sub-agent orchestration.
+ * At this depth, orchestrator tools (delegate, parallel_tasks) are filtered
+ * from the child's tool set to prevent infinite recursion.
+ */
+export const MAX_DEPTH = 2;
+
+/** Tool IDs that enable sub-agent spawning — filtered at MAX_DEPTH. */
+const ORCHESTRATOR_TOOL_IDS = new Set(["delegate", "parallel_tasks"]);
+
 /** Validate and return tool IDs for an agent type. */
 export function getToolsForType(agentType: AgentType): string[] | null {
   const tools = AGENT_TYPES[agentType];
   if (tools === null) return null; // all tools
   return [...tools];
+}
+
+/**
+ * Filter orchestrator tools from a tool list when at max depth.
+ * If toolIds is null (all tools), enumerates the full registry and excludes
+ * the orchestrator tools. If toolIds is an explicit list, filters them out.
+ */
+export function filterOrchestratorTools(toolIds: string[] | null): string[] {
+  if (toolIds === null) {
+    // Enumerate all registered tools, excluding orchestrator tools
+    return listTools()
+      .map((t) => t.id)
+      .filter((id) => !ORCHESTRATOR_TOOL_IDS.has(id));
+  }
+  return toolIds.filter((id) => !ORCHESTRATOR_TOOL_IDS.has(id));
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +227,10 @@ export interface FanOutOptions {
   defaultAgentType?: AgentType;
   /** System prompt for all sub-agents. */
   systemPrompt?: string;
+  /** Parent messages to forward as context to sub-agents. */
+  parentMessages?: DriverMessage[];
+  /** Optional AbortSignal — checked before each wave and forwarded to sub-agents. */
+  signal?: AbortSignal;
 }
 
 /** Result from a delegate call. */
@@ -233,14 +264,29 @@ export async function delegate(
     toolIds?: string[];
     parentSessionId?: string;
     agentType?: AgentType;
+    /** Parent conversation messages to forward as context to the sub-agent. */
+    parentMessages?: DriverMessage[];
     /** Optional AbortSignal — forwarded to the agent loop and LLM driver. */
     signal?: AbortSignal;
   } = {},
 ): Promise<DelegateResult> {
   const agentType = opts.agentType ?? "general";
 
+  // ── Depth control ──────────────────────────────────────────────────
+  // Read the parent's depth from orchestrator-context (set by runAgent).
+  // Increment for the child. At MAX_DEPTH, filter out orchestrator tools
+  // to prevent infinite recursion.
+  const parentDepth = getActiveDepth();
+  const childDepth = parentDepth + 1;
+
   // Resolve tool set: explicit toolIds > agentType preset > all tools
-  const resolvedToolIds = opts.toolIds ?? getToolsForType(agentType);
+  let resolvedToolIds = opts.toolIds ?? getToolsForType(agentType);
+
+  // At max depth, strip orchestrator tools so the child can't spawn further
+  if (childDepth >= MAX_DEPTH) {
+    resolvedToolIds = filterOrchestratorTools(resolvedToolIds);
+    log.debug(`Delegate: depth ${childDepth} >= MAX_DEPTH ${MAX_DEPTH} — orchestrator tools filtered`);
+  }
 
   const sessionOpts: SessionCreateOpts = {
     title: prompt.slice(0, 80),
@@ -256,6 +302,17 @@ export async function delegate(
   if (opts.systemPrompt) {
     history.push({ role: "system", content: opts.systemPrompt });
   }
+
+  // ── Context forwarding ─────────────────────────────────────────────
+  // If parentMessages are provided, serialize them into a single system
+  // message prepended to the child's history. This gives the sub-agent
+  // awareness of what the parent was doing without raw conversation turns
+  // (which confuse OSS models with non-alternating roles).
+  if (opts.parentMessages && opts.parentMessages.length > 0) {
+    const contextSummary = serializeParentContext(opts.parentMessages);
+    history.push({ role: "system", content: contextSummary });
+  }
+
   history.push({ role: "user", content: prompt });
 
   const config: AgentRunConfig = {
@@ -265,6 +322,7 @@ export async function delegate(
     systemPrompt: opts.systemPrompt,
     toolIds: resolvedToolIds,
     signal: opts.signal,
+    depth: childDepth,
   };
 
   // Emit start event
@@ -280,6 +338,13 @@ export async function delegate(
   let tokensOut = 0;
   let rounds = 0;
   const events: AgentEvent[] = [];
+
+  // ── Re-entrancy: save parent's context ──────────────────────────────
+  // The child's runAgent() will overwrite the module-level active context.
+  // We save the parent's context here and restore it after the child completes.
+  // This ensures that if the parent calls multiple delegate tools in sequence,
+  // each one inherits the correct backend/model/depth from the parent.
+  const parentContext = getActiveContext();
 
   // Run the agent loop and capture structured context in real-time
   for await (const event of runAgent(config, history)) {
@@ -352,6 +417,14 @@ export async function delegate(
     }
   }
 
+  // ── Re-entrancy: restore parent's context ────────────────────────────
+  // The child's runAgent() cleared the active context on exit.
+  // Restore the parent's context so subsequent tool calls in the same
+  // parent round still have access to the correct backend/model/depth.
+  if (parentContext) {
+    setActiveContext(parentContext);
+  }
+
   // Write final metrics
   writeContext(session.id, "metric", "tokens", JSON.stringify({ tokensIn, tokensOut, rounds }));
 
@@ -409,6 +482,12 @@ export async function fanOut(
   log.info(`FanOut: ${tasks.length} tasks, max concurrency=${maxConcurrency}`);
 
   for (let i = 0; i < tasks.length; i += maxConcurrency) {
+    // Check abort signal before starting each wave
+    if (opts.signal?.aborted) {
+      log.info("FanOut: abort signal received, stopping before next wave");
+      break;
+    }
+
     const wave = tasks.slice(i, i + maxConcurrency);
     const waveNumber = Math.floor(i / maxConcurrency) + 1;
     log.debug(`FanOut wave ${waveNumber}: ${wave.length} task(s)`);
@@ -468,6 +547,8 @@ async function executeSubTask(
       toolIds: task.toolIds,
       parentSessionId: opts.parentSessionId,
       agentType,
+      parentMessages: opts.parentMessages,
+      signal: opts.signal,
     });
 
     return {
@@ -577,4 +658,33 @@ function emptyContext(): SubTaskContext {
     errors: [],
     metrics: { tokensIn: 0, tokensOut: 0, rounds: 0 },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Context serialization — structured text for OSS model compatibility
+// ---------------------------------------------------------------------------
+
+/** Maximum characters per message when serializing parent context. */
+const MAX_MESSAGE_CHARS = 2000;
+
+/**
+ * Serialize parent conversation messages into a single structured text block.
+ * Uses a simple format that OSS models won't confuse with conversation turns.
+ *
+ * The output is a system-level context block, not raw user/assistant messages,
+ * to avoid confusing models that expect strict role alternation.
+ */
+function serializeParentContext(messages: DriverMessage[]): string {
+  const lines = ["[PARENT CONTEXT — The following is context from the parent agent's conversation:]"];
+
+  for (const msg of messages) {
+    const role = msg.role.toUpperCase();
+    const content = msg.content.length > MAX_MESSAGE_CHARS
+      ? msg.content.slice(0, MAX_MESSAGE_CHARS) + "... (truncated)"
+      : msg.content;
+    lines.push(`[${role}]: ${content}`);
+  }
+
+  lines.push("[END PARENT CONTEXT]");
+  return lines.join("\n");
 }

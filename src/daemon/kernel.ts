@@ -8,9 +8,10 @@ import { ChannelRegistry } from "./services/channels/index.js";
 import { startChannelRouter } from "./services/channels/router.js";
 import { TriggerEngine } from "./services/triggers/engine.js";
 import { createApp, startServer, stopServer, type AppContext } from "./api/app.js";
-import { startSocketServer, stopSocketServer, registerMethod } from "./api/socket.js";
+import { startSocketServer, stopSocketServer, registerMethod, registerStreamMethod } from "./api/socket.js";
 import { WorkerPool } from "./workers/pool.js";
 import { PluginLoader } from "./plugin/loader.js";
+import { ConnectorManager } from "./services/connectors/manager.js";
 import type { Database } from "bun:sqlite";
 
 // ---------------------------------------------------------------------------
@@ -23,6 +24,7 @@ export interface KernelState {
   db: Database | null;
   channels: ChannelRegistry | null;
   triggers: TriggerEngine | null;
+  connectors: ConnectorManager | null;
   workers: WorkerPool | null;
   plugins: PluginLoader | null;
   server: ReturnType<typeof Bun.serve> | null;
@@ -39,6 +41,7 @@ const state: KernelState = {
   db: null,
   channels: null,
   triggers: null,
+  connectors: null,
   workers: null,
   plugins: null,
   server: null,
@@ -119,8 +122,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/search.js"),
     import("./agent/tools/web.js"),
     import("./agent/tools/screenshot.js"),
+    import("./agent/tools/camera.js"),
     import("./agent/tools/parallel.js"),
     import("./agent/tools/browse.js"),
+    import("./agent/tools/delegate.js"),
   ]);
   log.info("Kernel boot: step 6 — built-in tools registered");
 
@@ -132,6 +137,13 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     loadModelRegistry(),
     import("./agent/drivers/index.js"),
   ]);
+
+  // Register custom providers from config (OpenRouter, DeepInfra, Together, Groq, etc.)
+  if (config.providers?.length) {
+    const { registerCustomProviders } = await import("./agent/drivers/providers.js");
+    registerCustomProviders(config.providers);
+  }
+
   log.info("Kernel boot: step 7 — LLM drivers initialized, model registry loaded");
 
   // Step 8: Create worker pool
@@ -154,6 +166,24 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   if (config.channels.whatsapp.enabled) {
     const { WhatsAppChannel } = await import("./services/channels/whatsapp.js");
     channels.register(new WhatsAppChannel());
+  }
+  if (config.channels.slack.botToken && config.channels.slack.appToken) {
+    const { SlackChannel } = await import("./services/channels/slack.js");
+    channels.register(new SlackChannel({
+      botToken: config.channels.slack.botToken,
+      appToken: config.channels.slack.appToken,
+      channelIds: config.channels.slack.channelIds.length > 0 ? config.channels.slack.channelIds : undefined,
+      adminIds: config.channels.slack.adminIds.length > 0 ? config.channels.slack.adminIds : undefined,
+    }));
+  }
+  if (config.channels.discord.token) {
+    const { DiscordChannel } = await import("./services/channels/discord.js");
+    channels.register(new DiscordChannel({
+      token: config.channels.discord.token,
+      guildIds: config.channels.discord.guildIds.length > 0 ? config.channels.discord.guildIds : undefined,
+      channelIds: config.channels.discord.channelIds.length > 0 ? config.channels.discord.channelIds : undefined,
+      adminIds: config.channels.discord.adminIds.length > 0 ? config.channels.discord.adminIds : undefined,
+    }));
   }
   // Load system prompt from ~/.config/jeriko/agent.md (copied from AGENT.md at install).
   // This gives the AI its "Jeriko" identity and command knowledge.
@@ -189,6 +219,25 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   state.triggers = triggers;
   log.info("Kernel boot: step 10 — trigger engine created");
 
+  // Step 10.5: Create connector manager (lazy init — connectors load on first use)
+  const connectors = new ConnectorManager();
+  state.connectors = connectors;
+
+  // Wire connector manager into trigger engine for webhook dispatch
+  triggers.setConnectorManager(connectors);
+
+  // Wire channel registry into trigger engine for notifications.
+  // Admin targets come from Telegram admin IDs (primary notification channel).
+  const notifyTargets: Array<{ channel: string; chatId: string }> = [];
+  if (config.channels.telegram.token && config.channels.telegram.adminIds.length > 0) {
+    for (const id of config.channels.telegram.adminIds) {
+      notifyTargets.push({ channel: "telegram", chatId: id });
+    }
+  }
+  triggers.setChannelRegistry(channels, notifyTargets);
+
+  log.info("Kernel boot: step 10.5 — connector manager + channel notifications wired to trigger engine");
+
   // Step 11: Load plugins
   const plugins = new PluginLoader();
   await plugins.loadAll();
@@ -206,7 +255,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   // Step 14: Start socket IPC server
   startSocketServer();
 
-  registerMethod("ask", async (params) => {
+  registerStreamMethod("ask", async (params, emit) => {
     const { runAgent } = await import("./agent/agent.js");
     const { createSession, getSession } = await import("./agent/session/session.js");
     const { addMessage, addPart, getMessages } = await import("./agent/session/message.js");
@@ -215,7 +264,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const message = params.message as string;
     if (!message) throw new Error("message is required");
 
-    const model = (params.model as string) || state.config!.agent.model;
+    // Parse "provider:model" syntax (e.g. "openrouter:deepseek")
+    const rawModel = (params.model as string) || state.config!.agent.model;
+    const { parseModelSpec } = await import("./agent/drivers/models.js");
+    const { backend: modelBackend, model: modelId } = parseModelSpec(rawModel);
+    const model = modelId;
 
     // Reuse existing session or create a new one.
     // The CLI can pass session_id explicitly, otherwise we resume the last
@@ -246,7 +299,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
     const agentConfig = {
       sessionId,
-      backend: model,
+      backend: modelBackend,
       model,
       systemPrompt: (params.system as string) || systemPrompt || undefined,
       maxTokens: (params.max_tokens as number) || state.config!.agent.maxTokens,
@@ -261,6 +314,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     let tokensOut = 0;
 
     for await (const event of runAgent(agentConfig, history)) {
+      // Stream each event to the CLI in real-time
+      emit(event as unknown as Record<string, unknown>);
+
+      // Also collect for the final summary response
       if (event.type === "text_delta") response += event.content;
       if (event.type === "error") lastError = event.message;
       if (event.type === "turn_complete") {
@@ -305,7 +362,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   log.info("Kernel boot: step 14 — socket IPC server started");
 
   // Step 15: Start HTTP server
-  const appCtx: AppContext = { channels, triggers };
+  const appCtx: AppContext = { channels, triggers, connectors };
   const app = createApp(appCtx);
   const server = startServer(app, { port: opts?.port });
   state.server = server;
@@ -359,6 +416,13 @@ export async function shutdown(): Promise<void> {
     await state.channels.disconnectAll();
     state.channels = null;
     log.info("Shutdown: channels disconnected");
+  }
+
+  // 2.5. Shut down connectors
+  if (state.connectors) {
+    await state.connectors.shutdownAll();
+    state.connectors = null;
+    log.info("Shutdown: connectors shut down");
   }
 
   // 3. Stop trigger engine

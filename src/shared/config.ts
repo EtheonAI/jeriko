@@ -22,6 +22,8 @@ export interface AgentConfig {
 export interface ChannelsConfig {
   telegram: { token: string; adminIds: string[] };
   whatsapp: { enabled: boolean };
+  slack: { botToken: string; appToken: string; channelIds: string[]; adminIds: string[] };
+  discord: { token: string; guildIds: string[]; channelIds: string[]; adminIds: string[] };
 }
 
 export interface ConnectorsConfig {
@@ -56,6 +58,31 @@ export interface LoggingConfig {
   maxFiles: number;
 }
 
+/**
+ * Configuration for a custom LLM provider (OpenRouter, DeepInfra, Together, Groq, etc.).
+ *
+ * Each entry creates an OpenAI-compatible driver at boot, registered under `id`.
+ * API keys support environment variable references: "{env:MY_API_KEY}".
+ */
+export interface ProviderConfig {
+  /** Driver registry name — used as the backend identifier (e.g. "openrouter"). */
+  id: string;
+  /** Human-readable display name (e.g. "OpenRouter"). */
+  name: string;
+  /** API base URL (e.g. "https://openrouter.ai/api/v1"). */
+  baseUrl: string;
+  /** API key — literal string or "{env:VAR_NAME}" for env var reference. */
+  apiKey: string;
+  /** Protocol type (default: "openai-compatible"). */
+  type?: "openai-compatible" | "anthropic";
+  /** Extra HTTP headers sent with every request. */
+  headers?: Record<string, string>;
+  /** Alias → real model ID mapping (e.g. { "deepseek": "deepseek/deepseek-chat-v3" }). */
+  models?: Record<string, string>;
+  /** Default model for this provider (used when no model specified after colon). */
+  defaultModel?: string;
+}
+
 export interface JerikoConfig {
   agent: AgentConfig;
   channels: ChannelsConfig;
@@ -63,6 +90,8 @@ export interface JerikoConfig {
   security: SecurityConfig;
   storage: StorageConfig;
   logging: LoggingConfig;
+  /** Custom LLM providers (OpenRouter, DeepInfra, Together, Groq, etc.). */
+  providers?: ProviderConfig[];
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +108,8 @@ const DEFAULTS: JerikoConfig = {
   channels: {
     telegram: { token: "", adminIds: [] },
     whatsapp: { enabled: false },
+    slack: { botToken: "", appToken: "", channelIds: [], adminIds: [] },
+    discord: { token: "", guildIds: [], channelIds: [], adminIds: [] },
   },
   connectors: {
     stripe:  { webhookSecret: "" },
@@ -240,6 +271,21 @@ function applyEnvOverrides(config: JerikoConfig): void {
   if (env.WHATSAPP_ENABLED === "true" || env.WHATSAPP_ENABLED === "1") {
     config.channels.whatsapp.enabled = true;
   }
+
+  // Slack — Socket Mode requires both bot token and app-level token
+  const slackBotToken = env.JERIKO_SLACK_BOT_TOKEN || env.SLACK_BOT_TOKEN;
+  const slackAppToken = env.JERIKO_SLACK_APP_TOKEN || env.SLACK_APP_TOKEN;
+  if (slackBotToken) config.channels.slack.botToken = slackBotToken;
+  if (slackAppToken) config.channels.slack.appToken = slackAppToken;
+  if (env.SLACK_CHANNEL_IDS) config.channels.slack.channelIds = env.SLACK_CHANNEL_IDS.split(",").map(s => s.trim());
+  if (env.SLACK_ADMIN_IDS) config.channels.slack.adminIds = env.SLACK_ADMIN_IDS.split(",").map(s => s.trim());
+
+  // Discord — requires bot token with MESSAGE_CONTENT intent
+  const discordToken = env.JERIKO_DISCORD_TOKEN || env.DISCORD_BOT_TOKEN;
+  if (discordToken) config.channels.discord.token = discordToken;
+  if (env.DISCORD_GUILD_IDS) config.channels.discord.guildIds = env.DISCORD_GUILD_IDS.split(",").map(s => s.trim());
+  if (env.DISCORD_CHANNEL_IDS) config.channels.discord.channelIds = env.DISCORD_CHANNEL_IDS.split(",").map(s => s.trim());
+  if (env.DISCORD_ADMIN_IDS) config.channels.discord.adminIds = env.DISCORD_ADMIN_IDS.split(",").map(s => s.trim());
 
   // Connectors
   if (env.STRIPE_WEBHOOK_SECRET)  config.connectors.stripe.webhookSecret = env.STRIPE_WEBHOOK_SECRET;

@@ -103,7 +103,7 @@ export function oauthRoutes(): Hono {
 
     const clientId = process.env[provider.clientIdVar];
     if (!clientId) {
-      return c.html(errorHtml(`${provider.label} OAuth is not configured on the server.`), 500);
+      return c.html(errorHtml(`${provider.label} OAuth is not configured on the server.`), 503);
     }
 
     const redirectUri = `${getCallbackBase()}/oauth/${provider.name}/callback`;
@@ -180,19 +180,28 @@ export function oauthRoutes(): Hono {
     const clientId = process.env[provider.clientIdVar];
     const clientSecret = process.env[provider.clientSecretVar];
     if (!clientId || !clientSecret) {
-      return c.html(errorHtml(`${provider.label} OAuth credentials are not configured.`), 500);
+      return c.html(errorHtml(`${provider.label} OAuth credentials are not configured.`), 503);
     }
 
     const redirectUri = `${getCallbackBase()}/oauth/${provider.name}/callback`;
 
-    // Exchange authorization code for access token
+    // Exchange authorization code for access token.
+    //
+    // Two auth modes for token exchange:
+    // - "body" (default): client_id + client_secret in the POST body.
+    // - "basic": HTTP Basic auth (Stripe uses secret API key as username).
+    const useBasicAuth = provider.tokenExchangeAuth === "basic";
+
     const tokenParams: Record<string, string> = {
       grant_type: "authorization_code",
       code,
-      client_id: clientId,
-      client_secret: clientSecret,
       redirect_uri: redirectUri,
     };
+
+    if (!useBasicAuth) {
+      tokenParams.client_id = clientId;
+      tokenParams.client_secret = clientSecret;
+    }
 
     // Include PKCE code_verifier if applicable
     if (pending.codeVerifier) {
@@ -200,12 +209,19 @@ export function oauthRoutes(): Hono {
     }
 
     try {
+      const headers: Record<string, string> = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      };
+
+      if (useBasicAuth) {
+        // Stripe-style: secret key as Basic auth username, empty password
+        headers.Authorization = `Basic ${Buffer.from(clientSecret + ":").toString("base64")}`;
+      }
+
       const tokenResponse = await fetch(provider.tokenUrl, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
+        headers,
         body: new URLSearchParams(tokenParams).toString(),
       });
 

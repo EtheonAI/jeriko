@@ -5,6 +5,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
+import { isSelfInstallTarget } from "../automation/install-utils.js";
+import { runSelfInstall } from "../automation/self-install.js";
 
 const PLUGINS_DIR = join(homedir(), ".jeriko", "plugins");
 const REGISTRY_FILE = join(PLUGINS_DIR, "registry.json");
@@ -19,14 +21,18 @@ interface PluginEntry {
 
 export const command: CommandHandler = {
   name: "install",
-  description: "Install plugin",
+  description: "Install Jeriko or a plugin",
   async run(args: string[]) {
     const parsed = parseArgs(args);
 
     if (flagBool(parsed, "help")) {
-      console.log("Usage: jeriko install <package> [options]");
-      console.log("\nInstall a Jeriko plugin from npm or a local path.");
-      console.log("\nExamples:");
+      console.log("Usage: jeriko install [target|package] [options]");
+      console.log("\nSelf-install (used by web installers):");
+      console.log("  jeriko install                    Install current binary (latest)");
+      console.log("  jeriko install stable              Install as stable");
+      console.log("  jeriko install latest              Install as latest");
+      console.log("  jeriko install 2.0.0               Install as specific version");
+      console.log("\nPlugin install:");
       console.log("  jeriko install @jeriko/plugin-slack");
       console.log("  jeriko install ./my-plugin");
       console.log("  jeriko install https://github.com/user/jeriko-plugin");
@@ -37,7 +43,12 @@ export const command: CommandHandler = {
     }
 
     const pkg = parsed.positional[0];
-    if (!pkg) fail("Missing package name. Usage: jeriko install <package>");
+
+    // Self-install: no arg, or arg matches stable|latest|semver
+    if (!pkg || isSelfInstallTarget(pkg)) {
+      await runSelfInstall(pkg || "latest");
+      return;
+    }
 
     const autoTrust = flagBool(parsed, "trust");
 

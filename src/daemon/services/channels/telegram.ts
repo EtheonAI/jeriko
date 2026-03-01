@@ -3,6 +3,8 @@
 // Supports:
 //   - Text messages (send + receive)
 //   - Long messages auto-split into multiple Telegram messages
+//   - Inline keyboard buttons (interactive menus for commands)
+//   - Callback query handling (button presses routed back as commands)
 //   - Photos (send by file path or URL)
 //   - Documents (send by file path)
 //   - Photo/document/voice receive with file_id extraction for downloading
@@ -11,13 +13,14 @@
 //   - Typing indicators
 //   - Bot command registration (replaces stale v1 commands on connect)
 
-import { Bot, InputFile, type Context as GrammyContext } from "grammy";
+import { Bot, InlineKeyboard, InputFile, type Context as GrammyContext } from "grammy";
 import type {
   ChannelAdapter,
   MessageHandler,
   MessageMetadata,
   SentMessage,
   FileAttachment,
+  KeyboardLayout,
 } from "./index.js";
 import { getLogger } from "../../../shared/logger.js";
 import { existsSync, mkdirSync } from "node:fs";
@@ -150,6 +153,18 @@ export class TelegramChannel implements ChannelAdapter {
       }];
       this.dispatchMessage(ctx, `[sticker: ${sticker.emoji ?? ""}]`, attachments);
     });
+
+    // ── Callback queries — button presses from inline keyboards ──────
+    this.bot.on("callback_query:data", async (ctx: GrammyContext) => {
+      const data = ctx.callbackQuery?.data;
+      if (!data || !ctx.from) return;
+
+      // Acknowledge the button press (removes loading spinner)
+      await ctx.answerCallbackQuery().catch(() => {});
+
+      // Route callback data as if the user typed the command
+      this.dispatchCallback(ctx, data);
+    });
   }
 
   /** Common message dispatch — admin filter + metadata extraction. */
@@ -195,6 +210,38 @@ export class TelegramChannel implements ChannelAdapter {
     }
   }
 
+  /** Dispatch a callback query (button press) as a command through the handler chain. */
+  private dispatchCallback(ctx: GrammyContext, data: string): void {
+    if (!ctx.from) return;
+
+    const senderId = String(ctx.from.id);
+    if (this.adminIds.size > 0 && !this.adminIds.has(senderId)) return;
+
+    const chatId = String(ctx.callbackQuery?.message?.chat?.id ?? ctx.from.id);
+    const isGroup =
+      ctx.callbackQuery?.message?.chat?.type === "group" ||
+      ctx.callbackQuery?.message?.chat?.type === "supergroup";
+    const senderName =
+      [ctx.from.first_name, ctx.from.last_name].filter(Boolean).join(" ") ||
+      ctx.from.username ||
+      senderId;
+
+    const metadata: MessageMetadata = {
+      channel: "telegram",
+      chat_id: chatId,
+      is_group: isGroup,
+      sender_name: senderName,
+    };
+
+    for (const handler of this.handlers) {
+      try {
+        handler(senderId, data, metadata);
+      } catch (err) {
+        log.error(`Telegram callback handler error: ${err}`);
+      }
+    }
+  }
+
   // ── Lifecycle ───────────────────────────────────────────────────────
 
   async connect(): Promise<void> {
@@ -206,18 +253,26 @@ export class TelegramChannel implements ChannelAdapter {
 
     await this.bot.api.deleteWebhook({ drop_pending_updates: false });
 
-    // Replace any stale bot commands from previous versions
+    // Register all slash commands visible in the Telegram menu.
+    // Must match the commands handled by the channel router in router.ts.
     await this.bot.api.setMyCommands([
       { command: "help", description: "Show available commands" },
       { command: "new", description: "Start a new session" },
       { command: "stop", description: "Stop current processing" },
+      { command: "clear", description: "Clear session history" },
+      { command: "kill", description: "Delete session and start fresh" },
+      { command: "session", description: "Show session info" },
+      { command: "sessions", description: "List recent sessions" },
+      { command: "switch", description: "Resume a session by ID" },
+      { command: "archive", description: "Archive current session" },
       { command: "model", description: "Get or set the active model" },
+      { command: "connect", description: "OAuth login (GitHub, X, etc.)" },
+      { command: "disconnect", description: "Remove OAuth token" },
       { command: "connectors", description: "Show integrations status" },
       { command: "auth", description: "Configure connector API keys" },
       { command: "health", description: "Test connector connectivity" },
-      { command: "session", description: "Show session info" },
-      { command: "sessions", description: "List recent sessions" },
       { command: "status", description: "Show daemon status" },
+      { command: "sys", description: "Show system info" },
     ]);
 
     this.bot.start({
@@ -358,6 +413,32 @@ export class TelegramChannel implements ChannelAdapter {
     await this.bot.api.sendVoice(chatId, new InputFile(path), {
       caption: caption?.slice(0, 1024),
     });
+  }
+
+  /** Send a message with inline keyboard buttons. */
+  async sendKeyboard(target: string, text: string, keyboard: KeyboardLayout): Promise<void> {
+    if (!this.connected) throw new Error("Telegram channel is not connected");
+    const chatId = Number(target);
+
+    const kb = new InlineKeyboard();
+    for (const row of keyboard) {
+      for (const button of row) {
+        kb.text(button.label, button.data);
+      }
+      kb.row();
+    }
+
+    try {
+      await this.bot.api.sendMessage(chatId, text.slice(0, 4096), {
+        parse_mode: "Markdown",
+        reply_markup: kb,
+      });
+    } catch {
+      // Markdown failed — retry plain text
+      await this.bot.api.sendMessage(chatId, text.slice(0, 4096), {
+        reply_markup: kb,
+      });
+    }
   }
 
   /** Delete a message from a chat. Used to remove messages containing API keys. */

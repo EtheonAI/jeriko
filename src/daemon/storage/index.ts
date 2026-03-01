@@ -7,7 +7,6 @@ export type {
   Message,
   Part,
   AuditLog,
-  Trigger,
   KeyValue,
 } from "./schema.js";
 export {
@@ -15,7 +14,6 @@ export {
   SQL_CREATE_MESSAGE,
   SQL_CREATE_PART,
   SQL_CREATE_AUDIT_LOG,
-  SQL_CREATE_TRIGGER,
   SQL_CREATE_KEY_VALUE,
   ALL_CREATE_TABLES,
 } from "./schema.js";

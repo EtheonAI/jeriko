@@ -11,7 +11,7 @@
 //   - Model-aware behavior from capability registry
 //   - Session persistence across daemon restarts (restored from DB)
 
-import type { ChannelRegistry, MessageMetadata } from "./index.js";
+import type { ChannelRegistry, MessageMetadata, KeyboardLayout } from "./index.js";
 import { getLogger } from "../../../shared/logger.js";
 import { runAgent, type AgentRunConfig } from "../../agent/agent.js";
 import {
@@ -26,7 +26,7 @@ import {
 import { addMessage, getMessages, clearMessages } from "../../agent/session/message.js";
 import type { DriverMessage } from "../../agent/drivers/index.js";
 import { listDrivers, getDriver } from "../../agent/drivers/index.js";
-import { resolveModel, getCapabilities } from "../../agent/drivers/models.js";
+import { resolveModel, getCapabilities, parseModelSpec } from "../../agent/drivers/models.js";
 import { existsSync } from "node:fs";
 
 const log = getLogger();
@@ -64,16 +64,18 @@ export interface ChannelRouterOptions {
 // ---------------------------------------------------------------------------
 
 function getProviderName(alias: string): string {
+  const { backend } = parseModelSpec(alias);
   try {
-    return getDriver(alias).name;
+    return getDriver(backend).name;
   } catch {
-    return alias;
+    return backend;
   }
 }
 
 function describeModel(alias: string): string {
-  const provider = getProviderName(alias);
-  const resolvedId = resolveModel(provider, alias);
+  const { backend, model } = parseModelSpec(alias);
+  const provider = getProviderName(backend);
+  const resolvedId = resolveModel(provider, model);
   const caps = getCapabilities(provider, resolvedId);
   const cost =
     caps.costInput === 0
@@ -213,14 +215,15 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         content: m.content,
       }));
 
-      const provider = getProviderName(state.model);
-      const resolvedId = resolveModel(provider, state.model);
+      const { backend: modelBackend, model: modelId } = parseModelSpec(state.model);
+      const provider = getProviderName(modelBackend);
+      const resolvedId = resolveModel(provider, modelId);
       const caps = getCapabilities(provider, resolvedId);
 
       const runConfig: AgentRunConfig = {
         sessionId: state.sessionId,
-        backend: state.model,
-        model: state.model,
+        backend: modelBackend,
+        model: modelId,
         systemPrompt: opts.systemPrompt,
         maxTokens: opts.maxTokens,
         temperature: opts.temperature,
@@ -384,38 +387,26 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       case "start":
       case "help":
       case "commands":
-        await safeSend(
+        await safeKeyboard(
           metadata,
+          "Jeriko — tap a button or type a command:",
           [
-            "Jeriko commands:",
-            "",
-            "Session:",
-            "  /new — Start fresh session",
-            "  /stop — Stop current processing",
-            "  /clear — Clear session history",
-            "  /kill — Delete session and start fresh",
-            "  /session — Session info",
-            "  /sessions — List recent sessions",
-            "  /switch <id> — Resume a session",
-            "  /archive — Archive current session",
-            "",
-            "Model:",
-            "  /model — Show current model",
-            "  /model <name> — Switch model",
-            "",
-            "Integrations:",
-            "  /connectors — Show all connectors",
-            "  /connect <name> — OAuth login (GitHub, X, etc.)",
-            "  /disconnect <name> — Remove OAuth token",
-            "  /auth <name> — Configure API keys",
-            "  /health <name> — Test connectivity",
-            "",
-            "System:",
-            "  /status — Daemon status",
-            "  /sys — System info",
-            "",
-            `Models: ${listDrivers().join(", ")}`,
-          ].join("\n"),
+            [
+              { label: "New Session", data: "/new" },
+              { label: "Sessions", data: "/sessions" },
+              { label: "Model", data: "/model" },
+            ],
+            [
+              { label: "Connect", data: "/connect" },
+              { label: "Connectors", data: "/connectors" },
+              { label: "Health", data: "/health" },
+            ],
+            [
+              { label: "Status", data: "/status" },
+              { label: "System", data: "/sys" },
+              { label: "Stop", data: "/stop" },
+            ],
+          ],
         );
         return;
 
@@ -486,12 +477,28 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeSend(metadata, "No sessions.");
           return;
         }
-        const lines = recent.map((s) => {
-          const active = s.id === state.sessionId ? " (active)" : "";
+
+        const buttons: KeyboardLayout = [];
+        const lines: string[] = [];
+        for (const s of recent) {
+          const active = s.id === state.sessionId;
           const age = formatAge(s.updated_at);
-          return `${s.slug}${active} — ${s.model ?? "?"} — ${age}`;
-        });
-        await safeSend(metadata, ["Recent sessions:", ...lines].join("\n"));
+          const label = active ? `${s.slug} ●` : s.slug;
+          lines.push(`${active ? "●" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
+          if (!active) {
+            buttons.push([{ label, data: `/switch ${s.slug}` }]);
+          }
+        }
+
+        if (buttons.length > 0) {
+          await safeKeyboard(
+            metadata,
+            ["Recent sessions:", ...lines].join("\n") + "\n\nTap to switch:",
+            buttons,
+          );
+        } else {
+          await safeSend(metadata, ["Recent sessions:", ...lines].join("\n"));
+        }
         return;
       }
 
@@ -530,20 +537,32 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       case "model":
       case "models": {
         if (!arg) {
-          await safeSend(
+          const drivers = listDrivers();
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
+          for (const driver of drivers) {
+            const isCurrent = state.model === driver;
+            const label = isCurrent ? `${driver} ●` : driver;
+            row.push({ label, data: `/model ${driver}` });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
+            }
+          }
+          if (row.length > 0) buttons.push(row);
+
+          await safeKeyboard(
             metadata,
-            [
-              describeModel(state.model),
-              "",
-              "Switch: /model <name>",
-              `Available: ${listDrivers().join(", ")}`,
-            ].join("\n"),
+            `Current: ${describeModel(state.model)}\n\nTap to switch:`,
+            buttons,
           );
           return;
         }
 
+        // Validate that the driver/provider exists
+        const { backend: argBackend } = parseModelSpec(arg);
         try {
-          getDriver(arg);
+          getDriver(argBackend);
         } catch {
           await safeSend(
             metadata,
@@ -582,24 +601,44 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         const connectorName = rest[0]?.toLowerCase();
 
-        // No args — show all connectors with connect/auth guidance
+        // No args — show all OAuth providers as buttons
         if (!connectorName) {
-          const lines = ["Connectors:"];
-          for (const def of CONNECTOR_DEFS) {
-            const ready = isConnectorConfigured(def.name);
-            const oauth = isOAuthCapable(def.name);
-            if (ready) {
-              lines.push(`  \u25CF ${def.label} \u2014 connected`);
-            } else if (oauth) {
-              lines.push(`  \u25CB ${def.label} \u2014 /connect ${def.name}`);
-            } else {
-              lines.push(`  \u25CB ${def.label} \u2014 /auth ${def.name}`);
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
+
+          for (const p of OAUTH_PROVIDERS) {
+            const ready = isConnectorConfigured(p.name);
+            const hasCredentials = !!process.env[p.clientIdVar];
+            const label = ready ? `${p.label} ✓` : p.label;
+            const data = ready ? `/disconnect ${p.name}` : `/connect ${p.name}`;
+
+            if (hasCredentials || ready) {
+              row.push({ label, data });
+              if (row.length === 3) {
+                buttons.push(row);
+                row = [];
+              }
             }
           }
-          lines.push("");
-          lines.push(`OAuth: ${OAUTH_PROVIDERS.map((p) => p.name).join(", ")}`);
-          lines.push(`API key: /auth <name> <key>`);
-          await safeSend(metadata, lines.join("\n"));
+          if (row.length > 0) buttons.push(row);
+
+          // Add API-key connectors that aren't OAuth-capable
+          const apiKeyRow: Array<{ label: string; data: string }> = [];
+          for (const def of CONNECTOR_DEFS) {
+            if (!isOAuthCapable(def.name)) {
+              const ready = isConnectorConfigured(def.name);
+              const label = ready ? `${def.label} ✓` : def.label;
+              apiKeyRow.push({ label, data: `/auth ${def.name}` });
+            }
+          }
+          if (apiKeyRow.length > 0) buttons.push(apiKeyRow);
+
+          const connectedCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+          await safeKeyboard(
+            metadata,
+            `Connectors (${connectedCount}/${CONNECTOR_DEFS.length} connected)\nTap to connect or disconnect:`,
+            buttons,
+          );
           return;
         }
 
@@ -662,7 +701,27 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         const connectorName = rest[0]?.toLowerCase();
 
         if (!connectorName) {
-          await safeSend(metadata, "Usage: /disconnect <name>\nExample: /disconnect github");
+          // Show connected connectors as buttons
+          const { CONNECTOR_DEFS } = await import("../../../shared/connector.js");
+          const connected = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
+
+          if (connected.length === 0) {
+            await safeSend(metadata, "No connectors are connected.");
+            return;
+          }
+
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
+          for (const d of connected) {
+            row.push({ label: d.label, data: `/disconnect ${d.name}` });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
+            }
+          }
+          if (row.length > 0) buttons.push(row);
+
+          await safeKeyboard(metadata, "Tap a connector to disconnect:", buttons);
           return;
         }
 
@@ -699,21 +758,35 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       case "connectors": {
         const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
         const { isOAuthCapable } = await import("../oauth/providers.js");
-        const lines = ["Connectors:"];
+
         let configuredCount = 0;
+        const buttons: KeyboardLayout = [];
+        let row: Array<{ label: string; data: string }> = [];
+
         for (const def of CONNECTOR_DEFS) {
           const ready = isConnectorConfigured(def.name);
           if (ready) configuredCount++;
           const oauth = isOAuthCapable(def.name);
-          const hint = ready ? "ready" : oauth ? `/connect ${def.name}` : `/auth ${def.name}`;
-          lines.push(`  ${ready ? "\u25CF" : "\u25CB"} ${def.label} \u2014 ${hint}`);
+          const label = ready ? `${def.label} ✓` : `${def.label}`;
+          const action = ready
+            ? `/health ${def.name}`
+            : oauth
+              ? `/connect ${def.name}`
+              : `/auth ${def.name}`;
+
+          row.push({ label, data: action });
+          if (row.length === 3) {
+            buttons.push(row);
+            row = [];
+          }
         }
-        lines.push("");
-        lines.push(`${configuredCount}/${CONNECTOR_DEFS.length} configured`);
-        if (configuredCount < CONNECTOR_DEFS.length) {
-          lines.push("Use /connect or /auth to set up a connector.");
-        }
-        await safeSend(metadata, lines.join("\n"));
+        if (row.length > 0) buttons.push(row);
+
+        await safeKeyboard(
+          metadata,
+          `Connectors: ${configuredCount}/${CONNECTOR_DEFS.length} connected\n✓ = connected (tap for health check)\nOthers: tap to connect`,
+          buttons,
+        );
         return;
       }
 
@@ -726,14 +799,26 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         const connectorName = rest[0]?.toLowerCase();
 
-        // No args — show all connectors with auth instructions
+        // No args — show all connectors as buttons
         if (!connectorName) {
-          const lines = ["Configure a connector:"];
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
           for (const def of CONNECTOR_DEFS) {
             const ready = isConnectorConfigured(def.name);
-            lines.push(`  ${ready ? "\u25CF" : "\u25CB"} /auth ${def.name} \u2014 ${def.description}`);
+            const label = ready ? `${def.label} ✓` : def.label;
+            row.push({ label, data: `/auth ${def.name}` });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
+            }
           }
-          await safeSend(metadata, lines.join("\n"));
+          if (row.length > 0) buttons.push(row);
+
+          await safeKeyboard(
+            metadata,
+            "Configure a connector — tap for details:",
+            buttons,
+          );
           return;
         }
 
@@ -808,20 +893,34 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         const connectorName = rest[0]?.toLowerCase();
 
-        // No args — health check all configured connectors
+        // No args — show configured connectors as buttons for individual health checks
         if (!connectorName) {
           const configured = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
           if (configured.length === 0) {
-            await safeSend(metadata, "No connectors configured. Use /auth <name> to set one up.");
+            await safeKeyboard(
+              metadata,
+              "No connectors configured.",
+              [[{ label: "Connect", data: "/connect" }, { label: "Auth", data: "/auth" }]],
+            );
             return;
           }
 
-          const lines = ["Health check:"];
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
           for (const def of configured) {
-            const result = await checkConnectorHealth(def.name);
-            lines.push(`  ${result.healthy ? "\u2705" : "\u274C"} ${def.label} \u2014 ${result.healthy ? `${result.latency}ms` : result.error}`);
+            row.push({ label: def.label, data: `/health ${def.name}` });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
+            }
           }
-          await safeSend(metadata, lines.join("\n"));
+          if (row.length > 0) buttons.push(row);
+
+          await safeKeyboard(
+            metadata,
+            `${configured.length} connector(s) ready — tap to health check:`,
+            buttons,
+          );
           return;
         }
 
@@ -883,6 +982,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     }
   }
 
+  async function safeKeyboard(
+    metadata: MessageMetadata,
+    text: string,
+    keyboard: KeyboardLayout,
+  ): Promise<void> {
+    try {
+      await opts.channels.sendKeyboard(metadata.channel, metadata.chat_id, text, keyboard);
+    } catch (err) {
+      // Fallback to plain text if keyboard fails
+      log.debug(`Keyboard send failed, falling back to text: ${String(err)}`);
+      await safeSend(metadata, text);
+    }
+  }
+
   async function editSafe(
     metadata: MessageMetadata,
     messageId: string | number,
@@ -902,32 +1015,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 }
 
 // ---------------------------------------------------------------------------
-// Connector health check — on-demand initialization + health call
+// Connector health check — uses shared registry (single source of truth)
 // ---------------------------------------------------------------------------
 
-type ConnectorFactory = () => Promise<{
-  new(): { init(): Promise<void>; health(): Promise<{ healthy: boolean; latency_ms: number; error?: string }> };
-}>;
-
-const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
-  stripe:   async () => (await import("../connectors/stripe/connector.js")).StripeConnector,
-  paypal:   async () => (await import("../connectors/paypal/connector.js")).PayPalConnector,
-  github:   async () => (await import("../connectors/github/connector.js")).GitHubConnector,
-  twilio:   async () => (await import("../connectors/twilio/connector.js")).TwilioConnector,
-  vercel:   async () => (await import("../connectors/vercel/connector.js")).VercelConnector,
-  x:        async () => (await import("../connectors/x/connector.js")).XConnector,
-  gdrive:   async () => (await import("../connectors/gdrive/connector.js")).GDriveConnector,
-  onedrive: async () => (await import("../connectors/onedrive/connector.js")).OneDriveConnector,
-};
-
 async function checkConnectorHealth(name: string): Promise<{ healthy: boolean; latency: number; error: string }> {
-  const loader = CONNECTOR_FACTORIES[name];
-  if (!loader) return { healthy: false, latency: 0, error: "Unknown connector" };
-
   try {
-    const ConnectorClass = await loader();
-    const connector = new ConnectorClass();
-    await connector.init();
+    const { loadConnector } = await import("../connectors/registry.js");
+    const connector = await loadConnector(name);
     const result = await connector.health();
     return {
       healthy: result.healthy,

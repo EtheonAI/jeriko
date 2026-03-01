@@ -27,8 +27,10 @@ describe("database", () => {
     expect(tables).toContain("message");
     expect(tables).toContain("part");
     expect(tables).toContain("audit_log");
-    expect(tables).toContain("trigger_def");
     expect(tables).toContain("key_value");
+    // trigger_def was dropped by 0003_trigger_consolidate.sql
+    // (replaced by trigger_config, managed by TriggerStore)
+    expect(tables).not.toContain("trigger_def");
   });
 
   it("can insert and query a session", () => {

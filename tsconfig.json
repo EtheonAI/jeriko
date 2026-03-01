@@ -6,6 +6,9 @@
     "moduleDetection": "force",
     "lib": ["ESNext"],
     "types": ["@types/bun", "@types/node"],
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
+    "customConditions": ["browser"],
     "allowJs": true,
     "allowImportingTsExtensions": true,
     "strict": true,
@@ -30,6 +33,6 @@
       "@jeriko/protocol": ["./packages/protocol/src/index.ts"]
     }
   },
-  "include": ["src/**/*.ts", "packages/**/*.ts"],
+  "include": ["src/**/*.ts", "src/**/*.tsx", "packages/**/*.ts"],
   "exclude": ["node_modules", "dist", "native"]
 }

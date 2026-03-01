@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 5 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(5);
+  it("defines exactly 8 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(8);
   });
 
   it("has all required fields on every provider", () => {
@@ -35,8 +35,8 @@ describe("OAuth providers", () => {
       expect(p.authUrl).toMatch(/^https:\/\//);
       expect(p.tokenUrl).toMatch(/^https:\/\//);
       expect(Array.isArray(p.scopes)).toBe(true);
-      expect(p.clientIdVar).toMatch(/_CLIENT_ID$/);
-      expect(p.clientSecretVar).toMatch(/_CLIENT_SECRET$/);
+      expect(p.clientIdVar).toBeTruthy();
+      expect(p.clientSecretVar).toBeTruthy();
       expect(p.tokenEnvVar).toBeTruthy();
     }
   });
@@ -49,19 +49,30 @@ describe("OAuth providers", () => {
   });
 
   it("getOAuthProvider returns undefined for unknown", () => {
-    expect(getOAuthProvider("stripe")).toBeUndefined();
     expect(getOAuthProvider("nonexistent")).toBeUndefined();
+  });
+
+  it("getOAuthProvider returns Stripe with Basic auth exchange", () => {
+    const stripe = getOAuthProvider("stripe");
+    expect(stripe).toBeDefined();
+    expect(stripe!.label).toBe("Stripe");
+    expect(stripe!.tokenExchangeAuth).toBe("basic");
+    expect(stripe!.clientSecretVar).toBe("STRIPE_SECRET_KEY");
+    expect(stripe!.tokenEnvVar).toBe("STRIPE_ACCESS_TOKEN");
+    expect(stripe!.refreshTokenEnvVar).toBe("STRIPE_REFRESH_TOKEN");
   });
 
   it("isOAuthCapable correctly identifies OAuth vs API-key connectors", () => {
     // OAuth-capable
+    expect(isOAuthCapable("stripe")).toBe(true);
     expect(isOAuthCapable("github")).toBe(true);
     expect(isOAuthCapable("x")).toBe(true);
     expect(isOAuthCapable("gdrive")).toBe(true);
     expect(isOAuthCapable("onedrive")).toBe(true);
     expect(isOAuthCapable("vercel")).toBe(true);
+    expect(isOAuthCapable("gmail")).toBe(true);
+    expect(isOAuthCapable("outlook")).toBe(true);
     // API-key only
-    expect(isOAuthCapable("stripe")).toBe(false);
     expect(isOAuthCapable("paypal")).toBe(false);
     expect(isOAuthCapable("twilio")).toBe(false);
   });
@@ -69,6 +80,17 @@ describe("OAuth providers", () => {
   it("X/Twitter requires PKCE", () => {
     const x = getOAuthProvider("x");
     expect(x!.usePKCE).toBe(true);
+  });
+
+  it("Vercel uses Sign in with Vercel endpoints and requires PKCE", () => {
+    const v = getOAuthProvider("vercel");
+    expect(v).toBeDefined();
+    expect(v!.authUrl).toBe("https://vercel.com/oauth/authorize");
+    expect(v!.tokenUrl).toBe("https://api.vercel.com/login/oauth/token");
+    expect(v!.usePKCE).toBe(true);
+    expect(v!.scopes).toContain("openid");
+    expect(v!.scopes).toContain("offline_access");
+    expect(v!.refreshTokenEnvVar).toBe("VERCEL_REFRESH_TOKEN");
   });
 
   it("Google Drive has refresh token + extra params", () => {
@@ -209,7 +231,7 @@ describe("PKCE", () => {
 
 describe("ConnectorDef OAuth metadata", () => {
   it("OAuth-capable connectors have oauth field", () => {
-    const oauthNames = ["github", "x", "gdrive", "onedrive", "vercel"];
+    const oauthNames = ["github", "x", "gdrive", "onedrive", "vercel", "gmail", "outlook"];
     for (const name of oauthNames) {
       const def = getConnectorDef(name);
       expect(def!.oauth).toBeDefined();
@@ -219,11 +241,19 @@ describe("ConnectorDef OAuth metadata", () => {
   });
 
   it("API-key-only connectors have no oauth field", () => {
-    const apiKeyNames = ["stripe", "paypal", "twilio"];
+    const apiKeyNames = ["paypal", "twilio"];
     for (const name of apiKeyNames) {
       const def = getConnectorDef(name);
       expect(def!.oauth).toBeUndefined();
     }
+  });
+
+  it("Stripe has both API key and OAuth support", () => {
+    const def = getConnectorDef("stripe");
+    expect(def!.oauth).toBeDefined();
+    expect(def!.oauth!.clientIdVar).toBe("STRIPE_OAUTH_CLIENT_ID");
+    expect(def!.oauth!.clientSecretVar).toBe("STRIPE_SECRET_KEY");
+    expect(def!.required).toEqual(["STRIPE_SECRET_KEY"]);
   });
 
   it("ConnectorDef.oauth matches OAuthProvider vars", () => {
@@ -234,8 +264,8 @@ describe("ConnectorDef OAuth metadata", () => {
     }
   });
 
-  it("total connector count is unchanged at 8", () => {
-    expect(CONNECTOR_DEFS.length).toBe(8);
+  it("total connector count is 10", () => {
+    expect(CONNECTOR_DEFS.length).toBe(10);
   });
 });
 
@@ -271,13 +301,13 @@ describe("OAuth routes", () => {
     expect(text).toContain("Missing state");
   });
 
-  it("GET /oauth/github/start without client ID configured returns 500", async () => {
+  it("GET /oauth/github/start without client ID configured returns 503", async () => {
     // Ensure no client ID is set
     const origId = process.env.GITHUB_OAUTH_CLIENT_ID;
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
     try {
       const res = await app.request("/oauth/github/start?state=test123");
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
       const text = await res.text();
       expect(text).toContain("not configured");
     } finally {
@@ -327,6 +357,29 @@ describe("OAuth routes", () => {
         process.env.X_OAUTH_CLIENT_ID = origId;
       } else {
         delete process.env.X_OAUTH_CLIENT_ID;
+      }
+    }
+  });
+
+  it("GET /oauth/vercel/start includes PKCE challenge and scopes", async () => {
+    const origId = process.env.VERCEL_OAUTH_CLIENT_ID;
+    process.env.VERCEL_OAUTH_CLIENT_ID = "vercel-client-id-123";
+
+    try {
+      const token = generateState("vercel", "chat1", "telegram");
+      const res = await app.request(`/oauth/vercel/start?state=${token}`, { redirect: "manual" });
+
+      expect(res.status).toBe(302);
+      const location = res.headers.get("Location")!;
+      expect(location).toContain("vercel.com/oauth/authorize");
+      expect(location).toContain("code_challenge=");
+      expect(location).toContain("code_challenge_method=S256");
+      expect(location).toContain("scope=openid");
+    } finally {
+      if (origId) {
+        process.env.VERCEL_OAUTH_CLIENT_ID = origId;
+      } else {
+        delete process.env.VERCEL_OAUTH_CLIENT_ID;
       }
     }
   });
@@ -389,7 +442,7 @@ describe("OAuth routes", () => {
     expect(text).toContain("mismatch");
   });
 
-  it("GET /oauth/github/callback with valid state but no client secret returns 500", async () => {
+  it("GET /oauth/github/callback with valid state but no client secret returns 503", async () => {
     const origId = process.env.GITHUB_OAUTH_CLIENT_ID;
     const origSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
     process.env.GITHUB_OAUTH_CLIENT_ID = "test-id";
@@ -398,7 +451,7 @@ describe("OAuth routes", () => {
     try {
       const token = generateState("github", "chat1", "telegram");
       const res = await app.request(`/oauth/github/callback?code=test-code&state=${token}`);
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(503);
       const text = await res.text();
       expect(text).toContain("not configured");
     } finally {

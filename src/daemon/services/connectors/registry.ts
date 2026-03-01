@@ -1,133 +1,63 @@
 /**
- * ConnectorRegistry — singleton that discovers, initialises, and manages
- * the lifecycle of every registered connector.
+ * Connector registry — single source of truth for connector instantiation.
+ *
+ * Both the CLI unified gateway and the channel router import from here.
+ * Adding a new connector requires ONE entry in this map.
+ *
+ * Factory pattern: lazy dynamic imports so we only load connector code
+ * when it's actually used (e.g. health check, call dispatch).
  */
 
-import type {
-  ConnectorInterface,
-  HealthResult,
-} from "./interface.js";
+import type { ConnectorInterface } from "./interface.js";
 
 // ---------------------------------------------------------------------------
-// Types
+// Factory types
 // ---------------------------------------------------------------------------
 
-export type ConnectorFactory = () => ConnectorInterface;
-
-interface RegistryEntry {
-  factory: ConnectorFactory;
-  instance: ConnectorInterface | null;
-}
+type ConnectorClass = { new (): ConnectorInterface };
+type ConnectorFactory = () => Promise<ConnectorClass>;
 
 // ---------------------------------------------------------------------------
-// Registry
+// Registry — one entry per connector, dynamic imports for tree-shaking
 // ---------------------------------------------------------------------------
 
-export class ConnectorRegistry {
-  private entries = new Map<string, RegistryEntry>();
+export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
+  stripe: async () =>
+    (await import("./stripe/connector.js")).StripeConnector,
+  paypal: async () =>
+    (await import("./paypal/connector.js")).PayPalConnector,
+  github: async () =>
+    (await import("./github/connector.js")).GitHubConnector,
+  twilio: async () =>
+    (await import("./twilio/connector.js")).TwilioConnector,
+  vercel: async () =>
+    (await import("./vercel/connector.js")).VercelConnector,
+  x: async () =>
+    (await import("./x/connector.js")).XConnector,
+  gdrive: async () =>
+    (await import("./gdrive/connector.js")).GDriveConnector,
+  onedrive: async () =>
+    (await import("./onedrive/connector.js")).OneDriveConnector,
+  gmail: async () =>
+    (await import("./gmail/connector.js")).GmailConnector,
+  outlook: async () =>
+    (await import("./outlook/connector.js")).OutlookConnector,
+};
 
-  /**
-   * Register a connector factory under `name`.
-   * The factory is lazily invoked — the connector is only instantiated
-   * when `get()` or `initAll()` is called.
-   */
-  register(name: string, factory: ConnectorFactory): void {
-    if (this.entries.has(name)) {
-      throw new Error(`Connector "${name}" is already registered`);
-    }
-    this.entries.set(name, { factory, instance: null });
-  }
+// ---------------------------------------------------------------------------
+// Factory helper — instantiate and initialize a connector by name
+// ---------------------------------------------------------------------------
 
-  /**
-   * Get an initialised connector by name.
-   * Returns `undefined` if the name is not registered or if the connector
-   * has not been initialised yet.
-   */
-  get(name: string): ConnectorInterface | undefined {
-    return this.entries.get(name)?.instance ?? undefined;
-  }
-
-  /**
-   * Return the names of all registered connectors (initialised or not).
-   */
-  list(): string[] {
-    return Array.from(this.entries.keys());
-  }
-
-  /**
-   * Instantiate (if needed) and `init()` every registered connector.
-   * Connectors that throw during init are logged and skipped — they will
-   * not appear in `get()` results.
-   */
-  async initAll(): Promise<void> {
-    const results = await Promise.allSettled(
-      Array.from(this.entries.entries()).map(async ([name, entry]) => {
-        try {
-          if (!entry.instance) {
-            entry.instance = entry.factory();
-          }
-          await entry.instance.init();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[connector:${name}] init failed: ${message}`);
-          // Null out so `get()` doesn't return a half-initialised connector.
-          entry.instance = null;
-          throw err;
-        }
-      }),
-    );
-
-    const failed = results.filter((r) => r.status === "rejected");
-    if (failed.length > 0) {
-      console.warn(
-        `[connector-registry] ${failed.length}/${results.length} connectors failed to init`,
-      );
-    }
-  }
-
-  /**
-   * Run a health check on every initialised connector.
-   * Connectors that are registered but not yet initialised are reported
-   * as unhealthy with an appropriate error message.
-   */
-  async healthAll(): Promise<Record<string, HealthResult>> {
-    const out: Record<string, HealthResult> = {};
-
-    await Promise.allSettled(
-      Array.from(this.entries.entries()).map(async ([name, entry]) => {
-        if (!entry.instance) {
-          out[name] = { healthy: false, latency_ms: 0, error: "not initialised" };
-          return;
-        }
-        try {
-          out[name] = await entry.instance.health();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          out[name] = { healthy: false, latency_ms: 0, error: message };
-        }
-      }),
-    );
-
-    return out;
-  }
-
-  /**
-   * Gracefully shut down every initialised connector.
-   * Errors are logged but never propagated.
-   */
-  async shutdownAll(): Promise<void> {
-    await Promise.allSettled(
-      Array.from(this.entries.entries()).map(async ([name, entry]) => {
-        if (!entry.instance) return;
-        try {
-          await entry.instance.shutdown();
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          console.error(`[connector:${name}] shutdown error: ${message}`);
-        } finally {
-          entry.instance = null;
-        }
-      }),
-    );
-  }
+/**
+ * Load a connector by name: resolve factory, instantiate, call init().
+ *
+ * @throws If the connector name is unknown or init() fails.
+ */
+export async function loadConnector(name: string): Promise<ConnectorInterface> {
+  const loader = CONNECTOR_FACTORIES[name];
+  if (!loader) throw new Error(`Unknown connector: ${name}`);
+  const Ctor = await loader();
+  const connector = new Ctor();
+  await connector.init();
+  return connector;
 }

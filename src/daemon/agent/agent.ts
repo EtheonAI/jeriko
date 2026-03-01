@@ -18,6 +18,7 @@ import { addMessage, addPart } from "./session/message.js";
 import { touchSession } from "./session/session.js";
 import { estimateTokens } from "../../shared/tokens.js";
 import { ExecutionGuard } from "./guard.js";
+import { setActiveContext, clearActiveContext } from "./orchestrator-context.js";
 import { getLogger } from "../../shared/logger.js";
 
 const log = getLogger();
@@ -48,6 +49,8 @@ export interface AgentRunConfig {
   maxRounds?: number;
   /** Optional AbortSignal for cancellation/timeout. Forwarded to the LLM driver. */
   signal?: AbortSignal;
+  /** Nesting depth for sub-agent orchestration (0 = top-level). */
+  depth?: number;
 }
 
 /** A yielded event from the agent loop. */
@@ -145,6 +148,18 @@ export async function* runAgent(
   const messages: DriverMessage[] = [...conversationHistory];
   let totalTokensIn = 0;
   let totalTokensOut = 0;
+
+  // Set active context so orchestrator tools (delegate, parallel) can access
+  // the parent's system prompt, conversation, depth, and model during tool execution.
+  setActiveContext({
+    systemPrompt: config.systemPrompt,
+    messages,
+    depth: config.depth ?? 0,
+    backend: config.backend,
+    model: config.model,
+  });
+
+  try {
 
   for (let round = 0; round < maxRounds; round++) {
     // ── Guard: pre-round check (duration limit) ───────────────────────
@@ -293,6 +308,12 @@ export async function* runAgent(
   // Max rounds exceeded
   yield { type: "error", message: `Agent loop exceeded maximum rounds (${maxRounds})` };
   yield { type: "turn_complete", tokensIn: totalTokensIn, tokensOut: totalTokensOut };
+
+  } finally {
+    // Always clear active context when the agent loop exits,
+    // regardless of whether it completed normally or threw.
+    clearActiveContext();
+  }
 }
 
 // ---------------------------------------------------------------------------
