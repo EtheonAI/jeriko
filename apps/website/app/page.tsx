@@ -30,6 +30,14 @@ export default function Home() {
           <p>Built with Bun + TypeScript, targeting macOS, Linux, and Windows.</p>
         </article>
       </section>
+
+      <footer className="footer">
+        <p>&copy; {new Date().getFullYear()} Jeriko. All rights reserved.</p>
+        <nav>
+          <a href="/privacy-policy">Privacy Policy</a>
+          <a href="/terms-and-conditions">Terms &amp; Conditions</a>
+        </nav>
+      </footer>
     </main>
   );
 }
