@@ -115,6 +115,7 @@ export class TriggerEngine {
   private connectorManager: ConnectorManager | null = null;
   private channelRegistry: ChannelRegistry | null = null;
   private notifyTargets: NotifyTarget[] = [];
+  private systemPrompt: string | undefined;
 
   readonly bus = new Bus<TriggerEvents>();
   private store: TriggerStore;
@@ -144,6 +145,16 @@ export class TriggerEngine {
   setChannelRegistry(registry: ChannelRegistry, targets: NotifyTarget[]): void {
     this.channelRegistry = registry;
     this.notifyTargets = targets;
+  }
+
+  /**
+   * Inject the system prompt (AGENT.md) so agent actions have full knowledge
+   * of Jeriko commands, connectors, and capabilities.
+   *
+   * Called by kernel.ts during boot, after the system prompt is loaded.
+   */
+  setSystemPrompt(prompt: string): void {
+    this.systemPrompt = prompt;
   }
 
   // -----------------------------------------------------------------------
@@ -657,6 +668,10 @@ export class TriggerEngine {
    * Execute an agent action: create a session, build a contextual prompt
    * that includes the trigger event payload, and run the agent loop.
    *
+   * The agent has full access to Jeriko CLI commands (via Bash) so it can
+   * use `jeriko gmail messages send`, `jeriko email send`, etc. to perform
+   * actions like sending replies. No hardcoded post-processing needed.
+   *
    * Follows the same pattern as kernel.ts "ask" IPC handler and
    * channel router agent invocations.
    */
@@ -697,6 +712,7 @@ export class TriggerEngine {
       sessionId: session.id,
       backend,
       model,
+      systemPrompt: this.systemPrompt,
       maxTokens: config.agent.maxTokens,
       temperature: config.agent.temperature,
       extendedThinking: config.agent.extendedThinking,

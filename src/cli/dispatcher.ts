@@ -102,6 +102,8 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: memory } = await import("./commands/agent/memory.js");
   const { command: discover } = await import("./commands/agent/discover.js");
   const { command: prompt } = await import("./commands/agent/prompt.js");
+  const { command: skill } = await import("./commands/agent/skill.js");
+  const { command: share } = await import("./commands/agent/share.js");
 
   // Automation
   const { command: init } = await import("./commands/automation/init.js");
@@ -123,7 +125,7 @@ async function loadBuiltinCommands(): Promise<void> {
     notes, remind, calendar, contacts, music, clipboard, window, camera, open, location,
     stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, connectors,
     code, create, dev, parallel,
-    ask, memory, discover, prompt,
+    ask, memory, discover, prompt, skill, share,
     init, server, task, job, setup,
     install, trust, uninstall,
   ];
@@ -279,10 +281,10 @@ export async function dispatcher(argv: string[]): Promise<void> {
     process.exit(0);
   }
 
-  // No command → interactive TUI (with fallback to plain REPL)
+  // No command → interactive chat REPL
   if (parsed.positional.length === 0) {
-    const { startTUI } = await import("./tui/render.js");
-    await startTUI();
+    const { startChat } = await import("./chat.js");
+    await startChat();
     return;
   }
 

@@ -2,14 +2,16 @@
 //
 // Provides a single "browser" tool with an action parameter for navigate,
 // screenshot, click, type, scroll, evaluate, text/markdown extraction,
-// and element indexing. Uses the system Chrome with persistent profile
-// so the agent inherits real user sessions (cookies, logins).
+// element indexing, select_option, and CAPTCHA detection. Uses the system
+// Chrome with persistent profile so the agent inherits real user sessions.
 //
 // Architecture:
 //   - playwright-core (no bundled browsers) connects to system Chrome
 //   - Persistent context preserves cookies/sessions across invocations
 //   - Element indexing (Manus-parity) assigns numbered IDs to clickable elements
 //   - Markdown extraction converts page to LLM-friendly text
+//   - Anti-detection stealth injected automatically on browser launch
+//   - Injectable JS lives in browser/scripts.ts (no inline strings)
 //
 // Gracefully degrades if Playwright is not installed.
 
@@ -19,7 +21,17 @@ import { join } from "node:path";
 import { tmpdir, homedir, platform } from "node:os";
 import { mkdirSync, existsSync, copyFileSync, writeFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+
+import {
+  COLLECT_ELEMENTS_JS,
+  FIND_ELEMENT_JS,
+  EXTRACT_MARKDOWN_JS,
+  NESTED_SCROLL_JS,
+  SELECT_OPTION_JS,
+  SCROLL_STATUS_JS,
+} from "./browser/scripts.js";
+import { applyStealthScripts } from "./browser/stealth.js";
+import { detectCaptcha } from "./browser/captcha.js";
 
 // ---------------------------------------------------------------------------
 // Lazy Playwright import — avoids crash if not installed
@@ -161,6 +173,9 @@ async function ensureBrowser(): Promise<Page> {
     ],
   });
 
+  // Inject anti-detection stealth scripts before any page JS runs
+  await applyStealthScripts(context);
+
   page = context.pages()[0] ?? (await context.newPage());
   return page;
 }
@@ -177,178 +192,6 @@ async function closeBrowser(): Promise<string> {
   }
   return JSON.stringify({ ok: true, message: "Browser closed" });
 }
-
-// ---------------------------------------------------------------------------
-// Element indexing — Manus-parity JS (assigns data-jeriko-id to clickables)
-// ---------------------------------------------------------------------------
-
-const COLLECT_ELEMENTS_JS = `(args) => {
-  const startIndex = args.startIndex || 1;
-  const attr = args.clickIdAttr || 'data-jeriko-id';
-  const elements = [];
-  let index = startIndex;
-  const interactiveTags = new Set(['a','button','input','select','textarea','summary','option']);
-  const interactiveRoles = new Set(['button','tab','link','checkbox','menuitem','menuitemcheckbox','menuitemradio','radio']);
-
-  const normalize = (v, lim = 120) => {
-    if (!v) return '';
-    const t = v.replace(/\\s+/g,' ').trim();
-    return t.length > lim ? t.slice(0,lim)+'...' : t;
-  };
-
-  const desc = (el, tag, text, inputType) => {
-    const h = [];
-    const id = normalize(el.id, 60);
-    if (id) h.push('id:"'+id+'"');
-    const aria = normalize(el.getAttribute('aria-label')||el.title||'', 80);
-    if (aria) h.push('hint:"'+aria+'"');
-    const ph = normalize(el.getAttribute('placeholder')||'', 80);
-    if (ph) h.push('placeholder:"'+ph+'"');
-    const role = normalize(el.getAttribute('role')||'', 40);
-    if (role) h.push('role:"'+role+'"');
-    if (inputType) h.push('type:"'+inputType+'"');
-    const hText = h.length ? '{'+h.join(',')+'}' : '{}';
-    return text ? tag+' '+hText+' '+text : tag+' '+hText;
-  };
-
-  const getText = (el, tag, inputType) => {
-    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
-      if (el.value) return normalize(el.value);
-      if (el.placeholder) return normalize(el.placeholder);
-    }
-    if (tag === 'select' && el instanceof HTMLSelectElement) {
-      return Array.from(el.options).slice(0,5).map((o,i) => {
-        const v = normalize(o.textContent||'');
-        return v ? 'option#'+i+':'+v : null;
-      }).filter(Boolean).join(', ');
-    }
-    const t = normalize(el.innerText || el.textContent || '');
-    if (t) return t;
-    if (inputType==='submit'||inputType==='button') return normalize(el.value||'submit');
-    return '';
-  };
-
-  const isClickable = (el, tag) => {
-    if (interactiveTags.has(tag)) return true;
-    const roles = (el.getAttribute('role')||'').split(' ').map(r=>r.trim().toLowerCase());
-    if (roles.some(r=>interactiveRoles.has(r))) return true;
-    const ce = el.getAttribute('contenteditable');
-    if (ce && ce.toLowerCase()!=='false') return true;
-    return false;
-  };
-
-  const isVisible = (el, rect) => {
-    if (!rect || rect.width<=1 || rect.height<=1) return false;
-    const s = window.getComputedStyle(el);
-    if (s.display==='none'||s.visibility==='hidden'||s.pointerEvents==='none') return false;
-    const op = parseFloat(s.opacity||'1');
-    if (!isNaN(op) && op<=0) return false;
-    return true;
-  };
-
-  const seen = new Set();
-  const traverse = (root) => {
-    const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    let n = w.nextNode();
-    while (n) {
-      if (n instanceof HTMLElement && !seen.has(n)) {
-        seen.add(n);
-        const tag = n.tagName.toLowerCase();
-        if (isClickable(n, tag)) {
-          const rect = n.getBoundingClientRect();
-          if (isVisible(n, rect)) {
-            const iType = tag==='input' ? (n.getAttribute('type')||'text').toLowerCase() : null;
-            const text = getText(n, tag, iType);
-            n.setAttribute(attr, String(index));
-            elements.push({
-              index, x:rect.x, y:rect.y, width:rect.width, height:rect.height,
-              tag, inputType:iType, description:desc(n,tag,text,iType)
-            });
-            index++;
-          }
-        }
-        if (n.shadowRoot) traverse(n.shadowRoot);
-      }
-      n = w.nextNode();
-    }
-  };
-  traverse(document);
-
-  return {
-    elements,
-    nextIndex: index,
-    viewport: {
-      width: window.innerWidth,
-      height: window.innerHeight,
-      devicePixelRatio: window.devicePixelRatio || 1
-    }
-  };
-}`;
-
-const FIND_ELEMENT_JS = `(index) => {
-  const attr = 'data-jeriko-id';
-  const target = String(index);
-  const walk = (root, depth) => {
-    if (!root || depth > 10) return null;
-    const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
-    let n = w.nextNode();
-    while (n) {
-      if (n instanceof Element && n.getAttribute(attr) === target) {
-        const r = n.getBoundingClientRect();
-        return { x: r.x + r.width/2, y: r.y + r.height/2, tag: n.tagName.toLowerCase() };
-      }
-      if (n instanceof Element && n.shadowRoot) {
-        const f = walk(n.shadowRoot, depth+1);
-        if (f) return f;
-      }
-      n = w.nextNode();
-    }
-    return null;
-  };
-  return walk(document, 0);
-}`;
-
-const EXTRACT_MARKDOWN_JS = `(() => {
-  const body = document.body;
-  if (!body) return '';
-  const walk = (node) => {
-    if (!node) return '';
-    if (node.nodeType === Node.TEXT_NODE) return node.textContent.replace(/\\s+/g, ' ');
-    if (node.nodeType !== Node.ELEMENT_NODE) return '';
-    const tag = node.tagName.toLowerCase();
-    const style = window.getComputedStyle(node);
-    if (style.display==='none'||style.visibility==='hidden') return '';
-    if (['script','style','noscript','svg','path'].includes(tag)) return '';
-    let children = '';
-    for (const c of node.childNodes) children += walk(c);
-    children = children.trim();
-    if (!children && !['img','br','hr','input'].includes(tag)) return '';
-    switch (tag) {
-      case 'h1': return '\\n# '+children+'\\n';
-      case 'h2': return '\\n## '+children+'\\n';
-      case 'h3': return '\\n### '+children+'\\n';
-      case 'h4': return '\\n#### '+children+'\\n';
-      case 'p': return '\\n'+children+'\\n';
-      case 'br': return '\\n';
-      case 'hr': return '\\n---\\n';
-      case 'a': {
-        const href = node.getAttribute('href')||'';
-        return href && !href.startsWith('javascript:') ? '['+children+']('+href+')' : children;
-      }
-      case 'strong': case 'b': return '**'+children+'**';
-      case 'em': case 'i': return '*'+children+'*';
-      case 'code': return '\\x60'+children+'\\x60';
-      case 'pre': return '\\n\\x60\\x60\\x60\\n'+children+'\\n\\x60\\x60\\x60\\n';
-      case 'li': return '- '+children+'\\n';
-      case 'ul': case 'ol': return '\\n'+children;
-      case 'div': case 'section': case 'article': case 'main': return '\\n'+children+'\\n';
-      default: return children;
-    }
-  };
-  let md = walk(body);
-  md = md.replace(/\\n{3,}/g, '\\n\\n').trim();
-  return md.length > 15000 ? md.slice(0,15000)+'\\n...(truncated)' : md;
-})()`;
 
 // ---------------------------------------------------------------------------
 // Action handlers
@@ -406,7 +249,7 @@ async function actionClick(args: Record<string, unknown>): Promise<string> {
 
   try {
     if (index !== undefined) {
-      // Resolve element index to coordinates
+      // Resolve element index to coordinates (searches iframes + shadow DOM)
       const found = await p.evaluate(`(${FIND_ELEMENT_JS})(${index})`);
       if (!found) {
         return JSON.stringify({ ok: false, error: `Element [${index}] not found` });
@@ -481,8 +324,27 @@ async function actionScroll(args: Record<string, unknown>): Promise<string> {
   const p = await ensureBrowser();
   const direction = (args.direction as string) ?? "down";
   const amount = (args.amount as number) ?? 3;
+  const targetPoint = args.target_point as [number, number] | undefined;
+  const toEdge = args.to_edge as boolean | undefined;
 
   try {
+    // When target_point is provided, use nested scroll to find the scrollable
+    // container at that coordinate (or the largest scrollable container)
+    if (targetPoint) {
+      const scrollArgs = JSON.stringify({
+        direction,
+        amount,
+        targetPoint,
+        toEdge: toEdge ?? false,
+      });
+      const result = await p.evaluate(`(${NESTED_SCROLL_JS})(${scrollArgs})`);
+      await new Promise((r) => setTimeout(r, 300));
+
+      const snapshot = JSON.parse(await buildPageSnapshot(p));
+      return JSON.stringify({ ...snapshot, scroll_info: result });
+    }
+
+    // Default: page-level scroll (backward compatible)
     const px = amount * 300;
     if (direction === "up") {
       await p.evaluate(`window.scrollBy(0, -${px})`);
@@ -495,6 +357,63 @@ async function actionScroll(args: Record<string, unknown>): Promise<string> {
     return JSON.stringify({
       ok: false,
       error: `Scroll failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+}
+
+async function actionSelectOption(args: Record<string, unknown>): Promise<string> {
+  const p = await ensureBrowser();
+  const index = args.index as number | undefined;
+  const optionIndex = args.option_index as number | undefined;
+
+  if (index === undefined) {
+    return JSON.stringify({ ok: false, error: "index is required (element data-jeriko-id)" });
+  }
+  if (optionIndex === undefined) {
+    return JSON.stringify({ ok: false, error: "option_index is required" });
+  }
+
+  try {
+    const selectArgs = JSON.stringify({ elementIndex: index, optionIndex });
+    const result = await p.evaluate(`(${SELECT_OPTION_JS})(${selectArgs})`) as {
+      success: boolean;
+      selectedValue?: string;
+      selectedText?: string;
+      availableOptions?: Array<{ index: number; value: string; text: string }>;
+      error?: string;
+    };
+
+    if (result.success) {
+      return JSON.stringify({
+        ok: true,
+        selectedValue: result.selectedValue,
+        selectedText: result.selectedText,
+        availableOptions: result.availableOptions,
+      });
+    }
+
+    return JSON.stringify({
+      ok: false,
+      error: result.error,
+      availableOptions: result.availableOptions,
+    });
+  } catch (err) {
+    return JSON.stringify({
+      ok: false,
+      error: `Select option failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+  }
+}
+
+async function actionDetectCaptcha(): Promise<string> {
+  const p = await ensureBrowser();
+  try {
+    const result = await detectCaptcha(p);
+    return JSON.stringify({ ok: true, ...result });
+  } catch (err) {
+    return JSON.stringify({
+      ok: false,
+      error: `Captcha detection failed: ${err instanceof Error ? err.message : String(err)}`,
     });
   }
 }
@@ -599,7 +518,7 @@ async function actionForward(): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
-// Page snapshot — elements + markdown + metadata
+// Page snapshot — elements + markdown + metadata + captcha + scroll status
 // ---------------------------------------------------------------------------
 
 async function buildPageSnapshot(p: Page): Promise<string> {
@@ -632,6 +551,12 @@ async function buildPageSnapshot(p: Page): Promise<string> {
     }
   }
 
+  // Collect scroll status and captcha detection in parallel
+  const [scrollStatus, captchaResult] = await Promise.all([
+    p.evaluate(SCROLL_STATUS_JS).catch(() => null),
+    detectCaptcha(p),
+  ]);
+
   // Take screenshot
   mkdirSync(SCREENSHOTS_DIR, { recursive: true });
   const filepath = join(SCREENSHOTS_DIR, `page-${Date.now()}.png`);
@@ -647,7 +572,7 @@ async function buildPageSnapshot(p: Page): Promise<string> {
     .map((e) => `[${e.index}] ${e.description}`)
     .join("\n");
 
-  return JSON.stringify({
+  const snapshot: Record<string, unknown> = {
     ok: true,
     title,
     url,
@@ -655,7 +580,19 @@ async function buildPageSnapshot(p: Page): Promise<string> {
     element_count: elements.length,
     elements: elementList || "(no interactive elements found)",
     content: markdown.slice(0, 10_000),
-  });
+  };
+
+  // Add scroll status if available
+  if (scrollStatus) {
+    snapshot.scroll_status = scrollStatus;
+  }
+
+  // Only include captcha field when detected (avoid noise in normal pages)
+  if (captchaResult.detected) {
+    snapshot.captcha = captchaResult;
+  }
+
+  return JSON.stringify(snapshot);
 }
 
 // ---------------------------------------------------------------------------
@@ -669,7 +606,7 @@ async function execute(args: Record<string, unknown>): Promise<string> {
     return JSON.stringify({
       ok: false,
       error:
-        "action is required. Supported: navigate, view, screenshot, click, type, scroll, evaluate, get_text, get_links, key_press, back, forward, close",
+        "action is required. Supported: navigate, view, screenshot, click, type, scroll, evaluate, get_text, get_links, key_press, back, forward, select_option, detect_captcha, close",
     });
   }
 
@@ -691,6 +628,10 @@ async function execute(args: Record<string, unknown>): Promise<string> {
       if (action === "scroll_up") args.direction = "up";
       if (action === "scroll_down") args.direction = "down";
       return actionScroll(args);
+    case "select_option":
+      return actionSelectOption(args);
+    case "detect_captcha":
+      return actionDetectCaptcha();
     case "evaluate":
     case "console_exec":
       return actionEvaluate(args);
@@ -721,31 +662,35 @@ export const browserTool: ToolDefinition = {
   id: "browser",
   name: "browser",
   aliases: ["browse", "web_browser", "open_browser"],
-  description: `Control a real Chrome browser via Playwright. Navigate web pages, interact with elements, take screenshots, and extract content.
+  description: `Control a real Chrome browser via Playwright. Navigate web pages, interact with elements, take screenshots, and extract content. Anti-detection stealth is applied automatically.
 
 Actions:
-  navigate  — Go to a URL. Returns page content, clickable elements with [index] numbers, and a screenshot.
-  view      — Get current page state (elements, content, screenshot) without navigating.
-  screenshot — Take a screenshot of the current page.
-  click     — Click an element by index (from navigate/view) or CSS selector.
-  type      — Type text into a field. Use index or selector to target. Set press_enter:true to submit.
-  scroll    — Scroll the page. direction: "up" or "down", amount: number of screens.
-  evaluate  — Execute JavaScript on the page and return the result.
-  get_text  — Extract page content as markdown.
-  get_links — Get all links on the page (up to 50).
-  key_press — Press a keyboard key (e.g. "Enter", "Escape", "Tab").
-  back      — Go back in browser history.
-  forward   — Go forward in browser history.
-  close     — Close the browser.
+  navigate       — Go to a URL. Returns page content, clickable elements with [index] numbers, and a screenshot.
+  view           — Get current page state (elements, content, screenshot) without navigating.
+  screenshot     — Take a screenshot of the current page.
+  click          — Click an element by index (from navigate/view) or CSS selector.
+  type           — Type text into a field. Use index or selector to target. Set press_enter:true to submit.
+  scroll         — Scroll the page. direction: "up"/"down"/"left"/"right", amount: screens. Use target_point to scroll a specific container. Use to_edge:true to jump to boundary.
+  select_option  — Select an option in a <select> element by index + option_index.
+  detect_captcha — Check if the current page has a CAPTCHA or anti-bot challenge.
+  evaluate       — Execute JavaScript on the page and return the result.
+  get_text       — Extract page content as markdown.
+  get_links      — Get all links on the page (up to 50).
+  key_press      — Press a keyboard key (e.g. "Enter", "Escape", "Tab").
+  back           — Go back in browser history.
+  forward        — Go forward in browser history.
+  close          — Close the browser.
 
-Element indexing: navigate and view return numbered elements like [1] button "Submit", [2] input {placeholder:"Search"}. Use these indices with click and type to interact with specific elements.`,
+Element indexing: navigate and view return numbered elements like [1] button "Submit", [2] input {placeholder:"Search"}. Use these indices with click, type, and select_option.
+
+Page snapshots include scroll_status (canScrollX/Y) and auto-detect CAPTCHAs (Cloudflare, reCAPTCHA, hCaptcha, etc.). When a CAPTCHA is detected, a captcha field appears in the snapshot.`,
   parameters: {
     type: "object",
     properties: {
       action: {
         type: "string",
         description:
-          "The browser action to perform: navigate, view, screenshot, click, type, scroll, evaluate, get_text, get_links, key_press, back, forward, close",
+          "The browser action to perform",
         enum: [
           "navigate",
           "view",
@@ -753,6 +698,8 @@ Element indexing: navigate and view return numbered elements like [1] button "Su
           "click",
           "type",
           "scroll",
+          "select_option",
+          "detect_captcha",
           "evaluate",
           "get_text",
           "get_links",
@@ -769,7 +716,7 @@ Element indexing: navigate and view return numbered elements like [1] button "Su
       index: {
         type: "number",
         description:
-          "Element index from page snapshot (for click/type actions)",
+          "Element index from page snapshot (for click/type/select_option actions)",
       },
       selector: {
         type: "string",
@@ -785,12 +732,25 @@ Element indexing: navigate and view return numbered elements like [1] button "Su
       },
       direction: {
         type: "string",
-        description: "Scroll direction: 'up' or 'down' (for scroll action)",
-        enum: ["up", "down"],
+        description: "Scroll direction (for scroll action)",
+        enum: ["up", "down", "left", "right"],
       },
       amount: {
         type: "number",
         description: "Number of screens to scroll (for scroll action, default: 3)",
+      },
+      target_point: {
+        type: "array",
+        items: { type: "number" },
+        description: "Viewport coordinates [x, y] to find scrollable container at (for scroll action). Without this, scrolls the whole page.",
+      },
+      to_edge: {
+        type: "boolean",
+        description: "Jump to the scroll boundary instead of incremental scroll (for scroll action)",
+      },
+      option_index: {
+        type: "number",
+        description: "Index of the option to select within the <select> element (for select_option action)",
       },
       script: {
         type: "string",

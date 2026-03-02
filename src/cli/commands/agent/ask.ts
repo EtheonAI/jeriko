@@ -103,7 +103,8 @@ export const command: CommandHandler = {
         const { getDatabase } = await import("../../../daemon/storage/db.js");
         getDatabase();
 
-        // Register tools by importing them (they self-register)
+        // Register tools by importing them (they self-register).
+        // Must match the kernel's tool set (kernel.ts step 6).
         await Promise.all([
           import("../../../daemon/agent/tools/bash.js"),
           import("../../../daemon/agent/tools/read.js"),
@@ -112,9 +113,13 @@ export const command: CommandHandler = {
           import("../../../daemon/agent/tools/list.js"),
           import("../../../daemon/agent/tools/search.js"),
           import("../../../daemon/agent/tools/web.js"),
+          import("../../../daemon/agent/tools/screenshot.js"),
+          import("../../../daemon/agent/tools/camera.js"),
           import("../../../daemon/agent/tools/browse.js"),
           import("../../../daemon/agent/tools/parallel.js"),
           import("../../../daemon/agent/tools/delegate.js"),
+          import("../../../daemon/agent/tools/connector.js"),
+          import("../../../daemon/agent/tools/skill.js"),
         ]);
 
         const { loadConfig } = await import("../../../shared/config.js");

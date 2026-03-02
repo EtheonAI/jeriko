@@ -22,8 +22,8 @@
     "apps/*"
   ],
   "scripts": {
-    "dev": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts --conditions=browser --watch src/index.ts",
-    "start": "bun --preload ./node_modules/@opentui/solid/scripts/preload.ts --conditions=browser src/index.ts server start --foreground",
+    "dev": "bun --watch src/index.ts",
+    "start": "bun src/index.ts server start --foreground",
     "build": "bun run scripts/build.ts",
     "build:darwin-arm64": "bun run scripts/build.ts --target darwin-arm64",
     "build:darwin-x64": "bun run scripts/build.ts --target darwin-x64",
@@ -74,22 +74,23 @@
   "homepage": "https://jeriko.ai",
   "license": "MIT",
   "dependencies": {
-    "@opentui/core": "^0.1.84",
-    "@opentui/core-darwin-x64": "0.1.84",
-    "@opentui/solid": "^0.1.84",
     "@whiskeysockets/baileys": "^6.7.16",
+    "chalk": "^5.4.0",
+    "ink": "^5.1.0",
+    "react": "^18.3.1",
     "croner": "^10.0.1",
     "drizzle-orm": "^0.39.0",
     "grammy": "^1.35.0",
     "hono": "^4.7.0",
     "playwright-core": "^1.58.2",
-    "solid-js": "^1.9.11",
     "ws": "^8.18.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@types/node": "^25.3.2",
+    "@types/react": "^18.3.18",
+    "ink-testing-library": "^4.0.0",
     "@types/ws": "^8.5.0",
     "drizzle-kit": "^0.30.0",
     "typescript": "^5.7.0"

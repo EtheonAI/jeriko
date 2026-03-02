@@ -14,6 +14,7 @@ import { connectorRoutes } from "./routes/connector.js";
 import { schedulerRoutes } from "./routes/scheduler.js";
 import { triggerRoutes } from "./routes/trigger.js";
 import { oauthRoutes } from "./routes/oauth.js";
+import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { createWebSocketHandlers } from "./websocket.js";
 import type { ChannelRegistry } from "../services/channels/index.js";
 import type { TriggerEngine } from "../services/triggers/engine.js";
@@ -59,8 +60,8 @@ export function createApp(ctx: AppContext): Hono {
   // Auth — skip for health check and webhook endpoints
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
-    // Health and webhook endpoints are unauthenticated
-    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/")) {
+    // Health, webhook, OAuth, and public share endpoints are unauthenticated
+    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/")) {
       return next();
     }
     return authMiddleware()(c, next);
@@ -89,6 +90,8 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/scheduler", schedulerRoutes());
   app.route("/triggers", triggerRoutes());
   app.route("/oauth", oauthRoutes());
+  app.route("/share", shareRoutes());
+  app.route("/s", publicShareRoutes());
 
   // -----------------------------------------------------------------------
   // 404 fallback

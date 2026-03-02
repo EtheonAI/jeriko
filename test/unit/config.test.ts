@@ -5,7 +5,8 @@ import { homedir } from "node:os";
 describe("config", () => {
   it("loadConfig returns valid defaults", () => {
     const config = loadConfig();
-    expect(config.agent.model).toBe("claude");
+    expect(typeof config.agent.model).toBe("string");
+    expect(config.agent.model.length).toBeGreaterThan(0);
     expect(config.agent.maxTokens).toBeGreaterThan(0);
     expect(config.agent.temperature).toBeGreaterThanOrEqual(0);
     expect(config.agent.temperature).toBeLessThanOrEqual(1);

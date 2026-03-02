@@ -32,7 +32,33 @@ const log = getLogger();
 /** An IPC request from the CLI to the daemon. */
 export interface IpcRequest {
   id: string;
-  method: "ask" | "status" | "sessions" | "stop";
+  method:
+    | "ask"
+    | "status"
+    | "sessions"
+    | "new_session"
+    | "resume_session"
+    | "stop"
+    | "channels"
+    | "channel_connect"
+    | "channel_disconnect"
+    | "history"
+    | "clear_history"
+    | "compact"
+    | "models"
+    | "connectors"
+    | "connector_connect"
+    | "connector_disconnect"
+    | "connector_health"
+    | "triggers"
+    | "trigger_enable"
+    | "trigger_disable"
+    | "skills"
+    | "skill_detail"
+    | "config"
+    | "share"
+    | "share_revoke"
+    | "shares";
   params?: Record<string, unknown>;
 }
 

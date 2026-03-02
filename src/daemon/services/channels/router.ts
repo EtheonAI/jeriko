@@ -402,8 +402,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               { label: "Health", data: "/health" },
             ],
             [
+              { label: "Skills", data: "/skill" },
               { label: "Status", data: "/status" },
               { label: "System", data: "/sys" },
+            ],
+            [
+              { label: "Share", data: "/share" },
               { label: "Stop", data: "/stop" },
             ],
           ],
@@ -958,6 +962,217 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             `memory: ${mem}MB (heap: ${heap}MB)`,
             `pid: ${process.pid}`,
           ].join("\n"),
+        );
+        return;
+      }
+
+      case "skill":
+      case "skills": {
+        const {
+          listSkills,
+          loadSkill,
+          scaffoldSkill,
+          removeSkill,
+        } = await import("../../../shared/skill-loader.js");
+
+        const subCommand = rest[0]?.toLowerCase();
+
+        // /skill or /skill list — show installed skills
+        if (!subCommand || subCommand === "list") {
+          const skills = await listSkills();
+          if (skills.length === 0) {
+            await safeSend(
+              metadata,
+              "No skills installed.\nCreate one: /skill create <name> <description>",
+            );
+            return;
+          }
+
+          const buttons: KeyboardLayout = [];
+          let row: Array<{ label: string; data: string }> = [];
+          for (const skill of skills) {
+            const indicator = skill.userInvocable ? "\u25CF" : "";
+            const label = indicator ? `${skill.name} ${indicator}` : skill.name;
+            row.push({ label, data: `/skill ${skill.name}` });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
+            }
+          }
+          if (row.length > 0) buttons.push(row);
+
+          const header = `Skills (${skills.length} installed)\n\u25CF = user-invocable\nTap for details:`;
+          await safeKeyboard(metadata, header, buttons);
+          return;
+        }
+
+        // /skill create <name> <description>
+        if (subCommand === "create") {
+          const skillName = rest[1];
+          const skillDescription = rest.slice(2).join(" ").trim();
+
+          if (!skillName || !skillDescription) {
+            await safeSend(
+              metadata,
+              "Usage: /skill create <name> <description>\n\nName: lowercase alphanumeric + hyphens, 2-50 chars\nDescription: minimum 10 characters",
+            );
+            return;
+          }
+
+          try {
+            const skillDir = await scaffoldSkill(skillName, skillDescription);
+            await safeSend(
+              metadata,
+              `Skill created: ${skillName}\nPath: ${skillDir}\n\nEdit SKILL.md to add instructions, then validate:\n/skill ${skillName}`,
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to create skill: ${msg}`);
+          }
+          return;
+        }
+
+        // /skill remove <name>
+        if (subCommand === "remove" || subCommand === "delete") {
+          const skillName = rest[1];
+          if (!skillName) {
+            await safeSend(metadata, "Usage: /skill remove <name>");
+            return;
+          }
+
+          try {
+            await removeSkill(skillName);
+            await safeSend(metadata, `Skill removed: ${skillName}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to remove skill: ${msg}`);
+          }
+          return;
+        }
+
+        // /skill <name> — show skill details
+        try {
+          const manifest = await loadSkill(subCommand);
+          const lines = [
+            `${manifest.meta.name}`,
+            manifest.meta.description,
+            "",
+            `user-invocable: ${manifest.meta.userInvocable ?? false}`,
+          ];
+          if (manifest.meta.allowedTools?.length) {
+            lines.push(`allowed-tools: ${manifest.meta.allowedTools.join(", ")}`);
+          }
+          if (manifest.meta.license) {
+            lines.push(`license: ${manifest.meta.license}`);
+          }
+          lines.push(`scripts: ${manifest.hasScripts ? "yes" : "no"}`);
+          lines.push(`references: ${manifest.hasReferences ? "yes" : "no"}`);
+          lines.push(`templates: ${manifest.hasTemplates ? "yes" : "no"}`);
+
+          if (manifest.body) {
+            lines.push("");
+            // Truncate body for Telegram's 4096 char limit (leave room for header)
+            const maxBodyLen = 2000;
+            const body = manifest.body.length > maxBodyLen
+              ? manifest.body.slice(0, maxBodyLen) + "\n\n... (truncated)"
+              : manifest.body;
+            lines.push(body);
+          }
+
+          await safeSend(metadata, lines.join("\n"));
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await safeSend(metadata, `Skill not found: ${subCommand}\n${msg}`);
+        }
+        return;
+      }
+
+      case "share": {
+        const {
+          createShare,
+          listSharesBySession,
+          revokeShare,
+        } = await import("../../storage/share.js");
+        const { buildShareLink } = await import("../../../shared/urls.js");
+
+        const subCommand = rest[0]?.toLowerCase();
+
+        // /share revoke <share-id>
+        if (subCommand === "revoke") {
+          const shareId = rest[1];
+          if (!shareId) {
+            await safeSend(metadata, "Usage: /share revoke <share-id>");
+            return;
+          }
+          const revoked = revokeShare(shareId);
+          if (!revoked) {
+            await safeSend(metadata, "Share not found or already revoked.");
+            return;
+          }
+          await safeSend(metadata, `Share revoked: ${shareId}`);
+          return;
+        }
+
+        // /share list — show active shares for the current session
+        if (subCommand === "list") {
+          const shares = listSharesBySession(state.sessionId);
+          if (shares.length === 0) {
+            await safeSend(metadata, "No active shares for this session.");
+            return;
+          }
+
+          const buttons: KeyboardLayout = [];
+          const lines: string[] = [];
+          for (const s of shares) {
+            const url = buildShareLink(s.share_id);
+            const age = formatAge(s.created_at);
+            lines.push(`${s.share_id} — ${age}`);
+            lines.push(url);
+            buttons.push([
+              { label: `Revoke ${s.share_id}`, data: `/share revoke ${s.share_id}` },
+            ]);
+          }
+
+          await safeKeyboard(
+            metadata,
+            [`Active shares (${shares.length}):`, ...lines].join("\n"),
+            buttons,
+          );
+          return;
+        }
+
+        // /share — create a share of the current session
+        const currentMessages = getMessages(state.sessionId);
+        if (currentMessages.length === 0) {
+          await safeSend(metadata, "No messages in the current session to share.");
+          return;
+        }
+
+        const currentSession = getSession(state.sessionId);
+        const snapshot = currentMessages.map((m) => ({
+          role: m.role,
+          content: m.content,
+          created_at: m.created_at,
+        }));
+
+        const share = createShare({
+          sessionId: state.sessionId,
+          title: currentSession?.title ?? `Channel ${chatId}`,
+          model: state.model,
+          messages: JSON.stringify(snapshot),
+        });
+
+        const shareUrl = buildShareLink(share.share_id);
+
+        await safeKeyboard(
+          metadata,
+          `Shared (${snapshot.length} messages):\n${shareUrl}\n\nExpires in 30 days.`,
+          [
+            [
+              { label: "Revoke", data: `/share revoke ${share.share_id}` },
+              { label: "List Shares", data: "/share list" },
+            ],
+          ],
         );
         return;
       }

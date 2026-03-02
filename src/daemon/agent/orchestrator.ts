@@ -36,17 +36,17 @@ export const AGENT_TYPES = {
   /** Full access — can do anything. */
   general: null,
 
-  /** Research only — web search, browser, read files, list files. No mutations. */
-  research: ["web_search", "browser", "read_file", "list_files", "search_files"],
+  /** Research only — web search, browser, read files, list files, skills. No mutations. */
+  research: ["web_search", "browser", "read_file", "list_files", "search_files", "use_skill"],
 
-  /** Task agent — can read, write, edit, run bash, browse, capture. No web search. */
-  task: ["bash", "browser", "read_file", "write_file", "edit_file", "list_files", "search_files", "camera", "screenshot"],
+  /** Task agent — can read, write, edit, run bash, browse, capture, connectors, skills. No web search. */
+  task: ["bash", "browser", "read_file", "write_file", "edit_file", "list_files", "search_files", "camera", "screenshot", "connector", "use_skill"],
 
   /** Explorer — fast codebase navigation. Read-only, no bash. */
   explore: ["read_file", "list_files", "search_files"],
 
-  /** Planner — can read, search, and browse for research. No mutations. */
-  plan: ["read_file", "list_files", "search_files", "web_search", "browser"],
+  /** Planner — can read, search, browse, and load skill knowledge. No mutations. */
+  plan: ["read_file", "list_files", "search_files", "web_search", "browser", "use_skill"],
 } as const;
 
 export type AgentType = keyof typeof AGENT_TYPES;

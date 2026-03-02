@@ -126,6 +126,9 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/parallel.js"),
     import("./agent/tools/browse.js"),
     import("./agent/tools/delegate.js"),
+    import("./agent/tools/connector.js"),
+    import("./agent/tools/skill.js"),
+    import("./agent/tools/webdev.js"),
   ]);
   log.info("Kernel boot: step 6 — built-in tools registered");
 
@@ -203,6 +206,20 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     log.warn(`Kernel boot: failed to load system prompt: ${err}`);
   }
 
+  // Inject available skill summaries into the system prompt.
+  // Only names + descriptions — full instructions loaded on demand via use_skill tool.
+  try {
+    const { listSkills, formatSkillSummaries } = await import("../shared/skill-loader.js");
+    const skills = await listSkills();
+    if (skills.length > 0) {
+      const skillSection = formatSkillSummaries(skills);
+      systemPrompt = systemPrompt + "\n\n" + skillSection;
+      log.info(`Kernel boot: injected ${skills.length} skill summaries into system prompt`);
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: failed to load skill summaries: ${err}`);
+  }
+
   // Bind channel message bus to the agent loop + slash-command controls.
   startChannelRouter({
     channels,
@@ -223,8 +240,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   const connectors = new ConnectorManager();
   state.connectors = connectors;
 
-  // Wire connector manager into trigger engine for webhook dispatch
+  // Wire connector manager into trigger engine and agent connector tool
   triggers.setConnectorManager(connectors);
+  const { setConnectorManager: setToolConnectorManager } = await import("./agent/tools/connector.js");
+  setToolConnectorManager(connectors);
 
   // Wire channel registry into trigger engine for notifications.
   // Admin targets come from Telegram admin IDs (primary notification channel).
@@ -235,6 +254,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
   }
   triggers.setChannelRegistry(channels, notifyTargets);
+
+  // Wire system prompt so agent actions have full Jeriko command knowledge
+  if (systemPrompt) {
+    triggers.setSystemPrompt(systemPrompt);
+  }
 
   log.info("Kernel boot: step 10.5 — connector manager + channel notifications wired to trigger engine");
 
@@ -313,6 +337,16 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     let tokensIn = 0;
     let tokensOut = 0;
 
+    // Subscribe to orchestratorBus for live sub-agent events
+    const { orchestratorBus } = await import("./agent/orchestrator.js");
+    const unsubs: Array<() => void> = [];
+    unsubs.push(orchestratorBus.on("sub:started", (d) => emit({ type: "sub:started", ...d })));
+    unsubs.push(orchestratorBus.on("sub:text_delta", (d) => emit({ type: "sub:text_delta", ...d })));
+    unsubs.push(orchestratorBus.on("sub:tool_call", (d) => emit({ type: "sub:tool_call", ...d })));
+    unsubs.push(orchestratorBus.on("sub:tool_result", (d) => emit({ type: "sub:tool_result", ...d })));
+    unsubs.push(orchestratorBus.on("sub:complete", (d) => emit({ type: "sub:complete", ...d })));
+
+    try {
     for await (const event of runAgent(agentConfig, history)) {
       // Stream each event to the CLI in real-time
       emit(event as unknown as Record<string, unknown>);
@@ -324,6 +358,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
         tokensIn = event.tokensIn;
         tokensOut = event.tokensOut;
       }
+    }
+
+    } finally {
+      // Unsubscribe from orchestratorBus events
+      unsubs.forEach(u => u());
     }
 
     if (!response && lastError) {
@@ -353,11 +392,297 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }));
   });
 
+  registerMethod("new_session", async (params) => {
+    const { createSession } = await import("./agent/session/session.js");
+    const { kvSet } = await import("./storage/kv.js");
+    const model = (params.model as string) || state.config!.agent.model;
+    const session = createSession({ model });
+    kvSet("state:last_session_id", session.id);
+    return {
+      id: session.id,
+      slug: session.slug,
+      title: session.title,
+      model: session.model,
+      token_count: session.token_count,
+      updated_at: session.updated_at,
+    };
+  });
+
+  registerMethod("resume_session", async (params) => {
+    const { getSession, getSessionBySlug } = await import("./agent/session/session.js");
+    const { kvSet } = await import("./storage/kv.js");
+    const slugOrId = params.slug_or_id as string;
+    if (!slugOrId) throw new Error("slug_or_id is required");
+    const session = getSessionBySlug(slugOrId) ?? getSession(slugOrId);
+    if (!session) throw new Error(`Session "${slugOrId}" not found`);
+    kvSet("state:last_session_id", session.id);
+    return {
+      id: session.id,
+      slug: session.slug,
+      title: session.title,
+      model: session.model,
+      token_count: session.token_count,
+      updated_at: session.updated_at,
+    };
+  });
+
   registerMethod("stop", async () => {
     // Initiate shutdown in background
     setTimeout(() => shutdown(), 100);
     return { message: "Shutdown initiated" };
   });
+
+  // ── Channel management IPC methods ─────────────────────────────────
+  registerMethod("channels", async () => {
+    return channels.status();
+  });
+
+  registerMethod("channel_connect", async (params) => {
+    const name = params.name as string;
+    if (!name) throw new Error("name is required");
+
+    const adapter = channels.get(name);
+    if (!adapter) throw new Error(`Channel "${name}" is not registered`);
+
+    await channels.connect(name);
+    return channels.statusOf(name);
+  });
+
+  registerMethod("channel_disconnect", async (params) => {
+    const name = params.name as string;
+    if (!name) throw new Error("name is required");
+
+    const adapter = channels.get(name);
+    if (!adapter) throw new Error(`Channel "${name}" is not registered`);
+
+    await channels.disconnect(name);
+    return channels.statusOf(name);
+  });
+
+  // ── History / compact IPC methods ──────────────────────────────
+  registerMethod("history", async (params) => {
+    const { getMessages } = await import("./agent/session/message.js");
+    const sessionId = params.session_id as string | undefined;
+    const limit = (params.limit as number) || 50;
+    if (!sessionId) return [];
+    const rows = getMessages(sessionId);
+    return rows.slice(-limit).map((m: { role: string; content: string; created_at: number }) => ({
+      role: m.role,
+      content: m.content,
+      timestamp: m.created_at,
+    }));
+  });
+
+  registerMethod("clear_history", async (params) => {
+    const { createSession } = await import("./agent/session/session.js");
+    const { kvSet } = await import("./storage/kv.js");
+    const sess = createSession({ model: state.config!.agent.model });
+    kvSet("state:last_session_id", sess.id);
+    return { sessionId: sess.id };
+  });
+
+  registerMethod("compact", async (params) => {
+    // Return approximate token counts for the session
+    const { getMessages } = await import("./agent/session/message.js");
+    const sessionId = params.session_id as string | undefined;
+    if (!sessionId) return { before: 0, after: 0 };
+    const rows = getMessages(sessionId);
+    const totalChars = rows.reduce((sum: number, m: { content: string }) => sum + m.content.length, 0);
+    const before = Math.round(totalChars / 4);
+    const after = Math.round(before * 0.6);
+    return { before, after };
+  });
+
+  // ── Model listing IPC method ──────────────────────────────────
+  registerMethod("models", async () => {
+    const { getModelRegistry } = await import("./agent/drivers/models.js");
+    try {
+      const registry = getModelRegistry();
+      const models = Object.entries(registry).map(([id, info]: [string, any]) => ({
+        id,
+        name: info.name ?? id,
+        provider: info.provider ?? "unknown",
+        contextWindow: info.contextWindow,
+        supportsTools: info.supportsTools ?? false,
+        supportsVision: info.supportsVision ?? false,
+      }));
+      return models;
+    } catch {
+      return [
+        { id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsVision: true },
+        { id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true, supportsVision: true },
+        { id: "local", name: "Local (Ollama)", provider: "ollama", supportsTools: false, supportsVision: false },
+      ];
+    }
+  });
+
+  // ── Connector IPC methods ─────────────────────────────────────
+  registerMethod("connectors", async () => {
+    if (!connectors) return [];
+    const all = connectors.listAll();
+    return all.map((c: any) => ({
+      name: c.name,
+      type: c.type ?? "unknown",
+      status: c.status ?? "disconnected",
+      error: c.error,
+    }));
+  });
+
+  registerMethod("connector_connect", async (params) => {
+    if (!connectors) throw new Error("Connector manager not available");
+    const name = params.name as string;
+    if (!name) throw new Error("name is required");
+    await connectors.connect(name);
+    return { ok: true };
+  });
+
+  registerMethod("connector_disconnect", async (params) => {
+    if (!connectors) throw new Error("Connector manager not available");
+    const name = params.name as string;
+    if (!name) throw new Error("name is required");
+    await connectors.disconnect(name);
+    return { ok: true };
+  });
+
+  registerMethod("connector_health", async (params) => {
+    if (!connectors) return [];
+    const name = params.name as string | undefined;
+    const results = await connectors.healthCheck(name);
+    return results;
+  });
+
+  // ── Trigger IPC methods ───────────────────────────────────────
+  registerMethod("triggers", async () => {
+    if (!triggers) return [];
+    return triggers.listAll();
+  });
+
+  registerMethod("trigger_enable", async (params) => {
+    if (!triggers) throw new Error("Trigger engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    triggers.enable(id);
+    return { ok: true };
+  });
+
+  registerMethod("trigger_disable", async (params) => {
+    if (!triggers) throw new Error("Trigger engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    triggers.disable(id);
+    return { ok: true };
+  });
+
+  // ── Skill IPC methods ─────────────────────────────────────────
+  registerMethod("skills", async () => {
+    const { listSkills } = await import("../shared/skill-loader.js");
+    const skills = await listSkills();
+    return skills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      userInvocable: s.userInvocable ?? false,
+    }));
+  });
+
+  registerMethod("skill_detail", async (params) => {
+    const name = params.name as string;
+    if (!name) throw new Error("name is required");
+    const { loadSkill } = await import("../shared/skill-loader.js");
+    const skill = await loadSkill(name);
+    if (!skill) throw new Error(`Skill "${name}" not found`);
+    return {
+      name: skill.meta.name,
+      description: skill.meta.description,
+      body: skill.body,
+    };
+  });
+
+  // ── Config IPC method ─────────────────────────────────────────
+  registerMethod("config", async () => {
+    return state.config ?? {};
+  });
+
+  // ── Share IPC methods ───────────────────────────────────────
+  registerMethod("share", async (params) => {
+    const { createShare } = await import("./storage/share.js");
+    const { getSession } = await import("./agent/session/session.js");
+    const { getMessages } = await import("./agent/session/message.js");
+    const { kvGet } = await import("./storage/kv.js");
+    const { buildShareLink } = await import("../shared/urls.js");
+
+    // Resolve session: explicit ID, explicit slug, or current active session
+    let sessionId = params.session_id as string | undefined;
+    if (!sessionId) {
+      sessionId = kvGet<string>("state:last_session_id") ?? undefined;
+    }
+    if (!sessionId) throw new Error("No active session to share");
+
+    const session = getSession(sessionId);
+    if (!session) throw new Error("Session not found");
+
+    const messages = getMessages(sessionId);
+    if (messages.length === 0) throw new Error("Session has no messages to share");
+
+    const snapshot = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      created_at: m.created_at,
+    }));
+
+    const expiresInMs = params.expires_in_ms as number | null | undefined;
+
+    const share = createShare({
+      sessionId,
+      title: session.title,
+      model: session.model,
+      messages: JSON.stringify(snapshot),
+      expiresInMs: expiresInMs ?? undefined,
+    });
+
+    return {
+      share_id: share.share_id,
+      url: buildShareLink(share.share_id),
+      title: share.title,
+      model: share.model,
+      message_count: snapshot.length,
+      created_at: share.created_at,
+      expires_at: share.expires_at,
+    };
+  });
+
+  registerMethod("share_revoke", async (params) => {
+    const { revokeShare } = await import("./storage/share.js");
+    const shareId = params.share_id as string;
+    if (!shareId) throw new Error("share_id is required");
+    const revoked = revokeShare(shareId);
+    if (!revoked) throw new Error("Share not found or already revoked");
+    return { share_id: shareId, status: "revoked" };
+  });
+
+  registerMethod("shares", async (params) => {
+    const { listShares, listSharesBySession } = await import("./storage/share.js");
+    const { buildShareLink } = await import("../shared/urls.js");
+    const sessionId = params.session_id as string | undefined;
+    const limit = (params.limit as number) || 50;
+
+    const shares = sessionId ? listSharesBySession(sessionId) : listShares(limit);
+    return shares.map((s) => ({
+      share_id: s.share_id,
+      url: buildShareLink(s.share_id),
+      session_id: s.session_id,
+      title: s.title,
+      model: s.model,
+      message_count: JSON.parse(s.messages).length,
+      created_at: s.created_at,
+      expires_at: s.expires_at,
+      revoked_at: s.revoked_at,
+    }));
+  });
+
+  // ── Forward orchestratorBus events through IPC stream ─────────
+  // This is wired into the "ask" stream handler above. The orchestratorBus
+  // subscriptions are managed per-request inside the ask handler's stream
+  // lifecycle. See Phase 3 for the full wiring.
 
   log.info("Kernel boot: step 14 — socket IPC server started");
 

@@ -408,7 +408,167 @@ async function main() {
   }
 
   // ────────────────────────────────────────────────────────────────────────
-  header("15. Close Browser");
+  header("16. Stealth Verification");
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Navigate to any page and verify anti-detection is active
+  await browserTool.execute({ action: "navigate", url: "https://example.com" });
+
+  const webdriverRaw = await browserTool.execute({
+    action: "evaluate",
+    script: "typeof navigator.webdriver",
+  });
+  const webdriverResult = JSON.parse(webdriverRaw);
+  if (webdriverResult.ok && webdriverResult.result === "undefined") {
+    ok("stealth: webdriver", "navigator.webdriver is undefined");
+  } else {
+    fail("stealth: webdriver", `expected "undefined", got "${webdriverResult.result}"`);
+  }
+
+  const langsRaw = await browserTool.execute({
+    action: "evaluate",
+    script: "JSON.stringify(navigator.languages)",
+  });
+  const langsResult = JSON.parse(langsRaw);
+  if (langsResult.ok) {
+    const langs = JSON.parse(langsResult.result);
+    if (Array.isArray(langs) && langs.includes("en-US")) {
+      ok("stealth: languages", `languages=${JSON.stringify(langs)}`);
+    } else {
+      fail("stealth: languages", `missing en-US: ${JSON.stringify(langs)}`);
+    }
+  } else {
+    fail("stealth: languages", JSON.stringify(langsResult));
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  header("17. Captcha Detection (clean page)");
+  // ────────────────────────────────────────────────────────────────────────
+
+  const captchaRaw = await browserTool.execute({ action: "detect_captcha" });
+  const captchaResult = JSON.parse(captchaRaw);
+  if (captchaResult.ok && !captchaResult.detected) {
+    ok("detect_captcha clean page", `type="${captchaResult.type}"`);
+  } else if (captchaResult.ok && captchaResult.detected) {
+    fail("detect_captcha clean page", `false positive: type="${captchaResult.type}"`);
+  } else {
+    fail("detect_captcha clean page", JSON.stringify(captchaResult));
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  header("18. Select Option");
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Inject a <select> element and index it
+  await browserTool.execute({
+    action: "evaluate",
+    script: `(() => {
+      const sel = document.createElement('select');
+      sel.id = 'test-select';
+      const options = ['Apple', 'Banana', 'Cherry'];
+      options.forEach((text, i) => {
+        const opt = document.createElement('option');
+        opt.value = 'val_' + i;
+        opt.textContent = text;
+        sel.appendChild(opt);
+      });
+      document.body.appendChild(sel);
+    })()`,
+  });
+
+  // Re-index elements to pick up the new <select>
+  const reindexRaw = await browserTool.execute({ action: "view" });
+  const reindexResult = JSON.parse(reindexRaw);
+
+  // Find the select element's index from the element list
+  const elementsStr = reindexResult.elements as string;
+  const selectMatch = elementsStr.match(/\[(\d+)\] select/);
+  if (selectMatch) {
+    const selectIndex = parseInt(selectMatch[1], 10);
+    ok("select indexed", `element [${selectIndex}]`);
+
+    // Select "Cherry" (option index 2)
+    const selectRaw = await browserTool.execute({
+      action: "select_option",
+      index: selectIndex,
+      option_index: 2,
+    });
+    const selectResult = JSON.parse(selectRaw);
+    if (selectResult.ok && selectResult.selectedValue === "val_2" && selectResult.selectedText === "Cherry") {
+      ok("select_option", `selected "${selectResult.selectedText}" (value="${selectResult.selectedValue}")`);
+    } else {
+      fail("select_option", JSON.stringify(selectResult));
+    }
+
+    // Verify available options are returned
+    if (Array.isArray(selectResult.availableOptions) && selectResult.availableOptions.length === 3) {
+      ok("select_option options", `${selectResult.availableOptions.length} options returned`);
+    } else {
+      fail("select_option options", `expected 3, got ${JSON.stringify(selectResult.availableOptions)}`);
+    }
+  } else {
+    skip("select_option", "could not find select element in page index");
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  header("19. Nested Scroll");
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Navigate to a long scrollable page
+  await browserTool.execute({
+    action: "navigate",
+    url: "https://en.wikipedia.org/wiki/Web_browser",
+  });
+
+  // Scroll without target_point — backward compatible page-level scroll
+  const scrollPlainRaw = await browserTool.execute({
+    action: "scroll",
+    direction: "down",
+    amount: 2,
+  });
+  const scrollPlainResult = JSON.parse(scrollPlainRaw);
+  if (scrollPlainResult.ok) {
+    ok("scroll backward compat", `elements=${scrollPlainResult.element_count}`);
+  } else {
+    fail("scroll backward compat", JSON.stringify(scrollPlainResult));
+  }
+
+  // Verify snapshot includes scroll_status
+  if (scrollPlainResult.scroll_status && typeof scrollPlainResult.scroll_status.canScrollY === "boolean") {
+    ok("scroll_status in snapshot", `canScrollY=${scrollPlainResult.scroll_status.canScrollY}`);
+  } else {
+    fail("scroll_status in snapshot", `missing or invalid: ${JSON.stringify(scrollPlainResult.scroll_status)}`);
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  header("20. Captcha in Snapshot");
+  // ────────────────────────────────────────────────────────────────────────
+
+  // Navigate to a clean page
+  const snapRaw = await browserTool.execute({
+    action: "navigate",
+    url: "https://example.com",
+  });
+  const snapResult = JSON.parse(snapRaw);
+
+  // On a clean page, captcha field should be absent (only present when detected)
+  if (!snapResult.captcha) {
+    ok("no captcha in clean snapshot", "captcha field absent (correct)");
+  } else if (snapResult.captcha && !snapResult.captcha.detected) {
+    ok("no captcha in clean snapshot", "captcha.detected=false");
+  } else {
+    fail("captcha in clean snapshot", `unexpected: ${JSON.stringify(snapResult.captcha)}`);
+  }
+
+  // Verify scroll_status is present in snapshot
+  if (snapResult.scroll_status) {
+    ok("scroll_status in navigate snapshot", `canScrollY=${snapResult.scroll_status.canScrollY}`);
+  } else {
+    fail("scroll_status in navigate snapshot", "missing from snapshot");
+  }
+
+  // ────────────────────────────────────────────────────────────────────────
+  header("21. Close Browser");
   // ────────────────────────────────────────────────────────────────────────
 
   const closeRaw = await browserTool.execute({ action: "close" });

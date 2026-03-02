@@ -67,6 +67,20 @@ export interface KeyValue {
   updated_at: number;
 }
 
+/** A publicly shared snapshot of a conversation session. */
+export interface SharedSession {
+  id: string;
+  share_id: string;
+  session_id: string;
+  title: string;
+  model: string;
+  /** JSON-encoded array of message snapshots taken at share time. */
+  messages: string;
+  created_at: number;
+  expires_at: number | null;
+  revoked_at: number | null;
+}
+
 /** Structured context artifact from a sub-agent execution. */
 export interface AgentContext {
   id: string;
