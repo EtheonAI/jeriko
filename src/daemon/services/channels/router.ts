@@ -27,6 +27,13 @@ import { addMessage, getMessages, clearMessages } from "../../agent/session/mess
 import type { DriverMessage } from "../../agent/drivers/index.js";
 import { listDrivers, getDriver } from "../../agent/drivers/index.js";
 import { resolveModel, getCapabilities, parseModelSpec } from "../../agent/drivers/models.js";
+import {
+  bindSession,
+  getBinding,
+  updateBindingModel,
+  unbindSession,
+  restoreBindings,
+} from "./binding.js";
 import { existsSync } from "node:fs";
 
 const log = getLogger();
@@ -109,26 +116,23 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
   /** Per-chat message queue — ensures sequential processing within each chat. */
   const chatQueues = new Map<string, Promise<void>>();
 
-  // ── Restore sessions from DB on boot ────────────────────────────────
+  // ── Restore sessions from KV-persisted bindings on boot ─────────────
   try {
-    const sessions = listSessions(200);
-    for (const s of sessions) {
-      const match = s.title.match(/^Channel (.+)$/);
-      if (match) {
-        const chatId = match[1]!;
-        if (!sessionsByChat.has(chatId)) {
-          sessionsByChat.set(chatId, {
-            sessionId: s.id,
-            model: s.model ?? opts.defaultModel,
-          });
-        }
+    const channelNames = opts.channels.list();
+    for (const channel of channelNames) {
+      const bindings = restoreBindings(channel, (b) => !!getSession(b.sessionId));
+      for (const b of bindings) {
+        sessionsByChat.set(b.chatId, {
+          sessionId: b.sessionId,
+          model: b.model,
+        });
       }
     }
     if (sessionsByChat.size > 0) {
-      log.info(`Router: restored ${sessionsByChat.size} chat sessions from DB`);
+      log.info(`Router: restored ${sessionsByChat.size} chat bindings from KV store`);
     }
   } catch (err) {
-    log.warn(`Router: failed to restore sessions: ${err}`);
+    log.warn(`Router: failed to restore bindings: ${err}`);
   }
 
   // ── Message handler ─────────────────────────────────────────────────
@@ -207,7 +211,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         augmentedText = fileParts.join("\n") + "\n\n" + text;
       }
 
-      const state = getOrCreateState(chatId);
+      const state = getOrCreateState(chatId, metadata.channel);
       addMessage(state.sessionId, "user", augmentedText);
 
       const history = getMessages(state.sessionId).map<DriverMessage>((m) => ({
@@ -355,9 +359,21 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
   // ── Session state ───────────────────────────────────────────────────
 
-  function getOrCreateState(chatId: string): ChatState {
+  function getOrCreateState(chatId: string, channel: string): ChatState {
     const existing = sessionsByChat.get(chatId);
     if (existing) return existing;
+
+    // Check KV store for a persisted binding (e.g. from a prior daemon run
+    // with a channel that wasn't registered at boot time)
+    const persisted = getBinding(channel, chatId);
+    if (persisted && getSession(persisted.sessionId)) {
+      const state: ChatState = {
+        sessionId: persisted.sessionId,
+        model: persisted.model,
+      };
+      sessionsByChat.set(chatId, state);
+      return state;
+    }
 
     const session = createSession({
       title: `Channel ${chatId}`,
@@ -368,6 +384,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       model: opts.defaultModel,
     };
     sessionsByChat.set(chatId, state);
+    bindSession(channel, chatId, session.id, opts.defaultModel);
     return state;
   }
 
@@ -381,7 +398,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     const [raw, ...rest] = text.slice(1).split(" ");
     const command = (raw || "").toLowerCase();
     const arg = rest.join(" ").trim();
-    const state = getOrCreateState(chatId);
+    const state = getOrCreateState(chatId, metadata.channel);
 
     switch (command) {
       case "start":
@@ -423,6 +440,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           sessionId: session.id,
           model: state.model,
         });
+        bindSession(metadata.channel, chatId, session.id, state.model);
         await safeSend(metadata, `New session: ${session.id}`);
         return;
       }
@@ -455,6 +473,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           run.controller.abort();
           activeRuns.delete(chatId);
         }
+        unbindSession(metadata.channel, chatId);
         deleteSession(state.sessionId);
         const session = createSession({
           title: `Channel ${chatId}`,
@@ -464,6 +483,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           sessionId: session.id,
           model: state.model,
         });
+        bindSession(metadata.channel, chatId, session.id, state.model);
         await safeSend(metadata, `Session destroyed. New session: ${session.id}`);
         return;
       }
@@ -516,15 +536,18 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeSend(metadata, `Session not found: ${arg}`);
           return;
         }
+        const switchModel = target.model ?? opts.defaultModel;
         sessionsByChat.set(chatId, {
           sessionId: target.id,
-          model: target.model ?? opts.defaultModel,
+          model: switchModel,
         });
+        bindSession(metadata.channel, chatId, target.id, switchModel);
         await safeSend(metadata, `Switched to session: ${target.slug} (${target.id})`);
         return;
       }
 
       case "archive": {
+        unbindSession(metadata.channel, chatId);
         archiveSession(state.sessionId);
         const session = createSession({
           title: `Channel ${chatId}`,
@@ -534,6 +557,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           sessionId: session.id,
           model: state.model,
         });
+        bindSession(metadata.channel, chatId, session.id, state.model);
         await safeSend(metadata, `Archived. New session: ${session.id}`);
         return;
       }
@@ -577,6 +601,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         state.model = arg;
         sessionsByChat.set(chatId, state);
+        updateBindingModel(metadata.channel, chatId, arg);
         updateSession(state.sessionId, { model: arg });
         await safeSend(metadata, `Switched to:\n${describeModel(arg)}`);
         return;
@@ -1141,15 +1166,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /share — create a share of the current session
-        const currentMessages = getMessages(state.sessionId);
-        if (currentMessages.length === 0) {
-          await safeSend(metadata, "No messages in the current session to share.");
+        // /share — create a share of the current session.
+        // Session binding is persisted in KV store, so the correct session
+        // is always resolved — even across daemon restarts.
+        const messages = getMessages(state.sessionId);
+        if (messages.length === 0) {
+          await safeSend(metadata, "No messages in this session. Have a conversation first, then use /share.");
           return;
         }
 
         const currentSession = getSession(state.sessionId);
-        const snapshot = currentMessages.map((m) => ({
+        const snapshot = messages.map((m) => ({
           role: m.role,
           content: m.content,
           created_at: m.created_at,
