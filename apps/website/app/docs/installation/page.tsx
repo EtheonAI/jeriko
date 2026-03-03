@@ -54,19 +54,29 @@ jeriko server start`,
         ]}
       />
 
-      <h2>Build from Source</h2>
+      <h2>Manual Install</h2>
       <p>
-        Requires <a href="https://bun.sh" target="_blank" rel="noreferrer">Bun</a> v1.1+.
+        You can also download the binary directly from the{" "}
+        <a href="https://github.com/EtheonAI/jerikoai/releases" target="_blank" rel="noreferrer">
+          GitHub releases page
+        </a>.
       </p>
       <CodeBlock
         tabs={[
           {
-            label: "Shell",
-            code: `git clone https://github.com/khaleel737/jeriko.git
-cd jeriko
-bun install
-bun run build
-./jeriko install`,
+            label: "macOS / Linux",
+            code: `# Download the latest release for your platform
+curl -fsSL https://jeriko.ai/install.sh | bash
+
+# Or download manually and move to PATH
+chmod +x jeriko
+mv jeriko /usr/local/bin/`,
+          },
+          {
+            label: "Windows",
+            code: `# Download from releases, then add to PATH
+# Or use the PowerShell installer:
+irm https://jeriko.ai/install.ps1 | iex`,
           },
         ]}
       />

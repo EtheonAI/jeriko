@@ -83,7 +83,7 @@ jeriko health --format text`,
         <li><a href="/docs">API Reference</a> — full HTTP and WebSocket documentation</li>
         <li><a href="/docs/authentication">Authentication</a> — securing your daemon</li>
         <li>
-          <a href="https://github.com/khaleel737/jeriko" target="_blank" rel="noreferrer">
+          <a href="https://github.com/EtheonAI/jerikoai" target="_blank" rel="noreferrer">
             GitHub
           </a>{" "}
           — source code and issue tracker
