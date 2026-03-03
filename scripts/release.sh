@@ -8,7 +8,7 @@
 #
 # Output: dist/ directory with binaries + manifest.json
 #
-set -e
+set -euo pipefail
 
 VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
 DIST_DIR="dist"
@@ -89,6 +89,14 @@ if [ -d "templates" ]; then
     ok "Templates archive created (${tmpl_size})"
 else
     err "templates/ directory not found — templates will not be included in release"
+fi
+
+# Copy agent system prompt for release
+if [ -f "AGENT.md" ]; then
+    cp "AGENT.md" "$DIST_DIR/agent.md"
+    ok "Agent prompt copied to dist/"
+else
+    err "AGENT.md not found — agent system prompt will not be in release"
 fi
 
 # Generate manifest.json with checksums

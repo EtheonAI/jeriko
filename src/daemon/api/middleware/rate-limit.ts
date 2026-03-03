@@ -17,6 +17,10 @@ export interface RateLimitOptions {
   windowMs?: number;
   /** If true, include rate limit headers in response. Default: true */
   includeHeaders?: boolean;
+  /** Maximum number of tracked client buckets. Default: 10000 */
+  maxBuckets?: number;
+  /** If true, trust X-Forwarded-For / X-Real-IP headers for client IP. Default: false */
+  trustProxy?: boolean;
 }
 
 /** Internal bucket state for a single client. */
@@ -54,12 +58,14 @@ function ensureCleanupTimer(windowMs: number): void {
 // Extract client IP
 // ---------------------------------------------------------------------------
 
-function getClientIp(c: Context): string {
-  const forwarded = c.req.header("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]?.trim() ?? "127.0.0.1";
+function getClientIp(c: Context, trustProxy: boolean): string {
+  if (trustProxy) {
+    const forwarded = c.req.header("x-forwarded-for");
+    if (forwarded) return forwarded.split(",")[0]?.trim() ?? "127.0.0.1";
 
-  const realIp = c.req.header("x-real-ip");
-  if (realIp) return realIp.trim();
+    const realIp = c.req.header("x-real-ip");
+    if (realIp) return realIp.trim();
+  }
 
   return "127.0.0.1";
 }
@@ -80,15 +86,26 @@ export function rateLimitMiddleware(
   const maxRequests = opts.maxRequests ?? 100;
   const windowMs = opts.windowMs ?? 60_000;
   const includeHeaders = opts.includeHeaders ?? true;
+  const maxBuckets = opts.maxBuckets ?? 10_000;
+  const trustProxy = opts.trustProxy ?? false;
 
   ensureCleanupTimer(windowMs);
 
   return async (c: Context, next: Next): Promise<Response | void> => {
-    const clientIp = getClientIp(c);
+    const clientIp = getClientIp(c, trustProxy);
     const now = Date.now();
 
     let bucket = buckets.get(clientIp);
-    if (!bucket) {
+    if (bucket) {
+      // LRU: delete and re-insert to move to end of iteration order
+      buckets.delete(clientIp);
+      buckets.set(clientIp, bucket);
+    } else {
+      // Evict oldest bucket if at capacity
+      if (buckets.size >= maxBuckets) {
+        const oldest = buckets.keys().next().value;
+        if (oldest !== undefined) buckets.delete(oldest);
+      }
       bucket = { tokens: maxRequests, lastRefill: now };
       buckets.set(clientIp, bucket);
     }

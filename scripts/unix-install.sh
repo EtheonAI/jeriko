@@ -7,7 +7,7 @@
 #   ./scripts/unix-install.sh           # install to ~/.local
 #   ./scripts/unix-install.sh /usr/local # install system-wide (needs sudo)
 #
-set -e
+set -euo pipefail
 
 # ── Config ──────────────────────────────────────────────────────
 PREFIX="${1:-$HOME/.local}"
@@ -21,19 +21,35 @@ COMPLETION_DIR="$PREFIX/share/bash-completion/completions"
 ZSH_COMP_DIR="$PREFIX/share/zsh/site-functions"
 MAN_DIR="$PREFIX/share/man/man1"
 
-# ── Colors ──────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+# ── Colors (only when stdout is a terminal) ─────────────────────
+RED=''; GREEN=''; YELLOW=''; BLUE=''; BOLD=''; NC=''
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'; BOLD='\033[1m'; NC='\033[0m'
+fi
 
 info()  { echo -e "${BLUE}→${NC} $1"; }
 ok()    { echo -e "${GREEN}✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}!${NC} $1"; }
 err()   { echo -e "${RED}✗${NC} $1" >&2; exit 1; }
 
+# Replace $HOME prefix with ~ for clean display paths.
+tildify() {
+    if [[ "$1" == "$HOME"/* ]]; then
+        echo "~${1#"$HOME"}"
+    else
+        echo "$1"
+    fi
+}
+
+# ── Detect OS ──────────────────────────────────────────────────
+OS="$(uname -s)"
+
 # ── Preflight ───────────────────────────────────────────────────
 echo -e "\n${BOLD}Jeriko Unix Install (from source)${NC}"
 echo "Source:  $JERIKO_ROOT"
 echo "Prefix:  $PREFIX"
+echo "OS:      $OS"
 echo ""
 
 # Check Bun runtime
@@ -46,52 +62,21 @@ if [ "$BUN_MAJOR" -lt 1 ] || { [ "$BUN_MAJOR" -eq 1 ] && [ "$BUN_MINOR" -lt 1 ];
 fi
 info "Bun $BUN_VER"
 
-# ── Detect platform ────────────────────────────────────────────
-OS="$(uname -s)"
-ARCH="$(uname -m)"
-
-case "$OS" in
-  Darwin) PLATFORM_OS="darwin" ;;
-  Linux)  PLATFORM_OS="linux" ;;
-  *)      err "Unsupported OS: $OS" ;;
-esac
-
-case "$ARCH" in
-  x86_64|amd64) PLATFORM_ARCH="x64" ;;
-  arm64|aarch64) PLATFORM_ARCH="arm64" ;;
-  *)             err "Unsupported architecture: $ARCH" ;;
-esac
-
-# Detect Rosetta 2 on macOS
-if [ "$PLATFORM_OS" = "darwin" ] && [ "$PLATFORM_ARCH" = "x64" ]; then
-  if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
-    PLATFORM_ARCH="arm64"
-    info "Rosetta 2 detected — building native arm64 binary"
-  fi
-fi
-
-BUILD_TARGET="bun-${PLATFORM_OS}-${PLATFORM_ARCH}"
-info "Target: $BUILD_TARGET"
-
 # ── Install dependencies ───────────────────────────────────────
 info "Installing dependencies..."
 cd "$JERIKO_ROOT" && bun install --frozen-lockfile 2>/dev/null || bun install
 ok "Dependencies ready"
 
 # ── Build binary ───────────────────────────────────────────────
-BINARY="$JERIKO_ROOT/jeriko"
-
+# Use build.ts — handles externals, plugins, codesigning, and all build config
+# in a single source of truth. Output goes to project root (default target).
 info "Building Jeriko binary..."
-bun build src/index.ts \
-  --compile --minify --bytecode \
-  --external qrcode-terminal \
-  --external link-preview-js \
-  --external jimp \
-  --external sharp \
-  --target="$BUILD_TARGET" \
-  --outfile="$BINARY"
+bun run scripts/build.ts
 
-chmod +x "$BINARY"
+BINARY="$JERIKO_ROOT/jeriko"
+if [ ! -f "$BINARY" ]; then
+  err "Build failed — binary not found at $BINARY"
+fi
 
 # Verify the binary runs
 if ! "$BINARY" --version >/dev/null 2>&1; then
@@ -104,7 +89,11 @@ fi
 # ── Create directories ──────────────────────────────────────────
 info "Creating directories..."
 mkdir -p "$BIN_DIR" "$LIB_DIR" "$CONF_DIR" \
-         "$DATA_DIR/data" "$DATA_DIR/data/logs" \
+         "$DATA_DIR/data" "$DATA_DIR/data/logs" "$DATA_DIR/data/files" \
+         "$DATA_DIR/projects" "$DATA_DIR/memory" \
+         "$DATA_DIR/plugins" "$DATA_DIR/prompts" \
+         "$DATA_DIR/skills" "$DATA_DIR/data/tasks" "$DATA_DIR/data/jobs" \
+         "$DATA_DIR/downloads" \
          "$COMPLETION_DIR" "$ZSH_COMP_DIR" "$MAN_DIR"
 
 # ── Install binary ──────────────────────────────────────────────
@@ -116,10 +105,15 @@ ok "Binary → $BIN_DIR/jeriko"
 # ── Install support files ───────────────────────────────────────
 info "Installing support files..."
 
-# AGENT.md — system prompt for AI models
-cp "$JERIKO_ROOT/AGENT.md" "$DATA_DIR/" 2>/dev/null || true
+# AGENT.md — system prompt for AI models (canonical location: config dir)
+if [ -f "$JERIKO_ROOT/AGENT.md" ]; then
+  cp "$JERIKO_ROOT/AGENT.md" "$CONF_DIR/agent.md"
+  ok "Agent prompt → $CONF_DIR/agent.md"
+else
+  warn "AGENT.md not found in source — agent will have no system prompt"
+fi
 
-# Templates — for `jeriko create` (web-static, web-db-user)
+# Templates — for `jeriko create` (web-static, web-db-user, deploy)
 if [ -d "$JERIKO_ROOT/templates" ]; then
   cp -r "$JERIKO_ROOT/templates" "$LIB_DIR/"
   ok "Templates → $LIB_DIR/templates"
@@ -169,9 +163,10 @@ _jeriko() {
   local cur="${COMP_WORDS[COMP_CWORD]}"
   local cmds="sys exec proc net fs doc browse search screenshot email msg notify
     audio notes remind calendar contacts music clipboard window camera open
-    location stripe github paypal vercel twilio x gdrive onedrive code create
-    dev parallel ask memory discover prompt init server task job install trust
-    uninstall"
+    location stripe github paypal vercel twilio x gdrive onedrive gmail outlook
+    connectors code create dev parallel ask memory discover prompt skill share
+    init server task job install trust uninstall setup update
+    plan upgrade billing"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
     COMPREPLY=($(compgen -W "$cmds --help --format --version" -- "$cur"))
@@ -180,26 +175,28 @@ _jeriko() {
 
   local cmd="${COMP_WORDS[1]}"
   case "$cmd" in
-    fs)       COMPREPLY=($(compgen -W "ls cat write append find grep info mkdir rm cp mv" -- "$cur")) ;;
-    stripe)   COMPREPLY=($(compgen -W "customers products prices payments invoices subscriptions balance payouts refunds events webhooks checkout links init hook" -- "$cur")) ;;
-    paypal)   COMPREPLY=($(compgen -W "orders payments subscriptions plans products invoices payouts disputes webhooks init hook" -- "$cur")) ;;
-    github)   COMPREPLY=($(compgen -W "repos issues prs actions releases search clone gists" -- "$cur")) ;;
-    x)        COMPREPLY=($(compgen -W "post search timeline like retweet bookmark follow dm lists mute" -- "$cur")) ;;
-    twilio)   COMPREPLY=($(compgen -W "call sms recordings account hook" -- "$cur")) ;;
-    vercel)   COMPREPLY=($(compgen -W "projects deploy deployments domains env team" -- "$cur")) ;;
-    proc)     COMPREPLY=($(compgen -W "list find kill" -- "$cur")) ;;
-    net)      COMPREPLY=($(compgen -W "ping dns ports curl download ip" -- "$cur")) ;;
-    notes)    COMPREPLY=($(compgen -W "create list search read" -- "$cur")) ;;
-    remind)   COMPREPLY=($(compgen -W "create list complete" -- "$cur")) ;;
-    calendar) COMPREPLY=($(compgen -W "today list create" -- "$cur")) ;;
-    contacts) COMPREPLY=($(compgen -W "search list get" -- "$cur")) ;;
-    music)    COMPREPLY=($(compgen -W "play pause next prev status search" -- "$cur")) ;;
-    window)   COMPREPLY=($(compgen -W "list focus minimize fullscreen" -- "$cur")) ;;
-    msg)      COMPREPLY=($(compgen -W "send recent" -- "$cur")) ;;
-    server)   COMPREPLY=($(compgen -W "start stop restart status logs" -- "$cur")) ;;
-    dev)      COMPREPLY=($(compgen -W "--start --stop --status --logs --preview" -- "$cur")) ;;
-    memory)   COMPREPLY=($(compgen -W "--get --set --delete --list --context --conversations --resume --stats" -- "$cur")) ;;
-    *)        COMPREPLY=($(compgen -W "--help --format" -- "$cur")) ;;
+    fs)         COMPREPLY=($(compgen -W "ls cat write append find grep info mkdir rm cp mv" -- "$cur")) ;;
+    stripe)     COMPREPLY=($(compgen -W "customers products prices payments invoices subscriptions balance payouts refunds events webhooks checkout links init hook" -- "$cur")) ;;
+    paypal)     COMPREPLY=($(compgen -W "orders payments subscriptions plans products invoices payouts disputes webhooks init hook" -- "$cur")) ;;
+    github)     COMPREPLY=($(compgen -W "repos issues prs actions releases search clone gists" -- "$cur")) ;;
+    x)          COMPREPLY=($(compgen -W "post search timeline like retweet bookmark follow dm lists mute" -- "$cur")) ;;
+    twilio)     COMPREPLY=($(compgen -W "call sms recordings account hook" -- "$cur")) ;;
+    vercel)     COMPREPLY=($(compgen -W "projects deploy deployments domains env team" -- "$cur")) ;;
+    connectors) COMPREPLY=($(compgen -W "list status connect disconnect" -- "$cur")) ;;
+    proc)       COMPREPLY=($(compgen -W "list find kill" -- "$cur")) ;;
+    net)        COMPREPLY=($(compgen -W "ping dns ports curl download ip" -- "$cur")) ;;
+    notes)      COMPREPLY=($(compgen -W "create list search read" -- "$cur")) ;;
+    remind)     COMPREPLY=($(compgen -W "create list complete" -- "$cur")) ;;
+    calendar)   COMPREPLY=($(compgen -W "today list create" -- "$cur")) ;;
+    contacts)   COMPREPLY=($(compgen -W "search list get" -- "$cur")) ;;
+    music)      COMPREPLY=($(compgen -W "play pause next prev status search" -- "$cur")) ;;
+    window)     COMPREPLY=($(compgen -W "list focus minimize fullscreen" -- "$cur")) ;;
+    msg)        COMPREPLY=($(compgen -W "send recent" -- "$cur")) ;;
+    server)     COMPREPLY=($(compgen -W "start stop restart status logs" -- "$cur")) ;;
+    skill)      COMPREPLY=($(compgen -W "list info create validate remove install edit" -- "$cur")) ;;
+    dev)        COMPREPLY=($(compgen -W "--start --stop --status --logs --preview" -- "$cur")) ;;
+    memory)     COMPREPLY=($(compgen -W "--get --set --delete --list --context --conversations --resume --stats" -- "$cur")) ;;
+    *)          COMPREPLY=($(compgen -W "--help --format" -- "$cur")) ;;
   esac
 }
 complete -F _jeriko jeriko
@@ -242,6 +239,9 @@ _jeriko() {
     'vercel:Vercel API'
     'gdrive:Google Drive'
     'onedrive:OneDrive'
+    'gmail:Gmail API'
+    'outlook:Outlook API'
+    'connectors:Manage OAuth and API connectors'
     'code:Execute Python/Node/Bash'
     'create:Project scaffolding'
     'dev:Dev server management'
@@ -250,6 +250,8 @@ _jeriko() {
     'memory:Session persistence'
     'discover:Auto-generate prompts'
     'prompt:Prompt management'
+    'skill:Manage reusable agent skills'
+    'share:Share agent sessions'
     'server:Daemon lifecycle'
     'task:Task management'
     'job:Scheduled jobs'
@@ -257,6 +259,11 @@ _jeriko() {
     'install:Install plugins'
     'trust:Plugin trust'
     'uninstall:Remove plugins'
+    'setup:Post-install shell integration'
+    'update:Update to latest version'
+    'plan:Show current billing plan and usage'
+    'upgrade:Upgrade to Pro plan'
+    'billing:Manage billing and subscription'
   )
 
   if (( CURRENT == 2 )); then
@@ -276,7 +283,7 @@ ok "Zsh completions  → $ZSH_COMP_DIR/_jeriko"
 info "Installing man page..."
 
 cat > "$MAN_DIR/jeriko.1" << 'MANPAGE'
-.TH JERIKO 1 "February 2026" "2.0.0" "Jeriko Manual"
+.TH JERIKO 1 "March 2026" "2.0.0" "Jeriko Manual"
 .SH NAME
 jeriko \- Unix-first CLI toolkit for AI agents
 .SH SYNOPSIS
@@ -292,6 +299,7 @@ Model-agnostic: any AI with exec() can use it.
 The binary is self-contained \(em compiled from TypeScript via Bun.
 No runtime dependencies required.
 .SH COMMANDS
+.SS System
 .TP
 .B sys
 System info (CPU, RAM, disk, battery, network, processes)
@@ -299,11 +307,19 @@ System info (CPU, RAM, disk, battery, network, processes)
 .B exec
 Run shell commands with timeout
 .TP
+.B proc
+Process management (list, find, kill)
+.TP
+.B net
+Network utilities (ping, DNS, ports, curl, download, IP)
+.SS Files
+.TP
 .B fs
 Filesystem operations (ls, cat, write, find, grep)
 .TP
 .B doc
 Read PDF, Excel, Word, CSV documents
+.SS Browser
 .TP
 .B browse
 Browser automation (screenshot, click, navigate)
@@ -313,6 +329,51 @@ Web search via DuckDuckGo
 .TP
 .B screenshot
 Screen capture
+.SS Communication
+.TP
+.B email
+IMAP email (read, search, send, reply)
+.TP
+.B msg
+iMessage (send, read)
+.TP
+.B notify
+Send OS or Telegram notifications
+.TP
+.B audio
+TTS, microphone recording, volume control
+.SS macOS / Desktop
+.TP
+.B notes
+Apple Notes (list, search, read, create)
+.TP
+.B remind
+Apple Reminders (list, create, complete)
+.TP
+.B calendar
+Apple Calendar (view, create events)
+.TP
+.B contacts
+Contacts (search, list, get)
+.TP
+.B music
+Music playback control (play, pause, skip, status)
+.TP
+.B clipboard
+System clipboard (get, set, clear)
+.TP
+.B window
+Window management (list, focus, resize)
+.TP
+.B camera
+Webcam capture
+.TP
+.B open
+Open files, apps, and URLs
+.TP
+.B location
+IP geolocation
+.SS Integrations
 .TP
 .B stripe
 Full Stripe API (customers, payments, invoices, subscriptions)
@@ -332,53 +393,91 @@ Twilio API (call, SMS, recordings)
 .B vercel
 Vercel API (deploy, domains, env)
 .TP
-.B notify
-Send OS or Telegram notifications
+.B gdrive
+Google Drive API
 .TP
-.B email
-IMAP email (read, search, send, reply)
+.B onedrive
+OneDrive API
 .TP
-.B msg
-iMessage (send, read)
+.B gmail
+Gmail API (OAuth-based email)
 .TP
-.B notes
-Apple Notes (list, search, read, create)
+.B outlook
+Outlook API (OAuth-based email)
 .TP
-.B remind
-Apple Reminders (list, create, complete)
+.B connectors
+Manage OAuth and API connectors
+.SS Development
 .TP
-.B calendar
-Apple Calendar (view, create events)
+.B code
+Execute Python, Node, or Bash code
 .TP
-.B contacts
-Contacts (search, list, get)
+.B create
+Project scaffolding from templates
 .TP
-.B music
-Music playback control (play, pause, skip, status)
+.B dev
+Dev server management (start, stop, status, logs)
 .TP
-.B audio
-TTS, microphone recording, volume
+.B parallel
+Concurrent AI task execution
+.SS Agent
 .TP
-.B clipboard
-System clipboard (get, set, clear)
-.TP
-.B window
-Window management (list, focus, resize)
-.TP
-.B open
-Open files, apps, and URLs
-.TP
-.B camera
-Webcam capture
-.TP
-.B server
-Daemon lifecycle (start, stop, restart, status, logs)
+.B ask
+Ask the AI agent a question
 .TP
 .B memory
 Session persistence and KV store
 .TP
+.B discover
+Auto-generate system prompts
+.TP
+.B prompt
+Manage custom prompts
+.TP
+.B skill
+Manage reusable agent skills
+.TP
+.B share
+Share agent sessions
+.SS Automation
+.TP
+.B init
+Setup wizard (API keys, configuration)
+.TP
+.B server
+Daemon lifecycle (start, stop, restart, status, logs)
+.TP
 .B task
 Trigger management (cron, webhook, email, HTTP, file)
+.TP
+.B job
+Scheduled jobs
+.TP
+.B setup
+Post-install shell integration
+.TP
+.B update
+Update to the latest version
+.SS Plugin Management
+.TP
+.B install
+Install plugins or self-install
+.TP
+.B trust
+Trust a plugin
+.TP
+.B uninstall
+Remove plugins
+.SS Billing
+.TP
+.B plan
+Show current billing plan, limits, and usage
+.TP
+.B upgrade
+Upgrade to Pro plan
+.TP
+.B billing
+Manage billing and subscription
 .SH EXIT CODES
 .TP
 .B 0
@@ -414,8 +513,11 @@ Structured key=value pairs
 .I ~/.config/jeriko/config.json
 User configuration (JSON, merged with defaults)
 .TP
+.I ~/.config/jeriko/agent.md
+Agent system prompt (loaded at boot)
+.TP
 .I ~/.jeriko/
-Operational data (database, logs, agent prompts)
+Operational data (database, logs, projects, skills)
 .TP
 .I ./jeriko.json
 Project-level configuration override
@@ -557,9 +659,10 @@ fi
 # ── Done ────────────────────────────────────────────────────────
 echo -e "\n${GREEN}${BOLD}Jeriko installed from source.${NC}\n"
 echo "  Layout:"
-echo "    $BIN_DIR/jeriko              ← compiled binary"
-echo "    $CONF_DIR/config.json        ← configuration"
-echo "    $DATA_DIR/                   ← operational data"
+echo "    $(tildify "$BIN_DIR/jeriko")              ← compiled binary"
+echo "    $(tildify "$CONF_DIR/config.json")        ← configuration"
+echo "    $(tildify "$CONF_DIR/agent.md")           ← agent system prompt"
+echo "    $(tildify "$DATA_DIR/")                   ← operational data"
 echo ""
 echo "  Usage:"
 echo "    jeriko sys                   # system info"

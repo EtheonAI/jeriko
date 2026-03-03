@@ -10,7 +10,7 @@
 # For private repos, requires `gh` CLI (authenticated):
 #   bash scripts/install.sh
 #
-set -e
+set -euo pipefail
 
 # ── Parse arguments ──────────────────────────────────────────────
 
@@ -29,16 +29,35 @@ RELEASES_URL="https://github.com/$GITHUB_REPO/releases"
 CDN_URL="${JERIKO_CDN_URL:-https://releases.jeriko.ai}"
 DOWNLOAD_DIR="$HOME/.jeriko/downloads"
 
-# ── Colors ───────────────────────────────────────────────────────
+# ── Colors (only when stdout is a terminal) ──────────────────────
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+RED=''; GREEN=''; YELLOW=''; BLUE=''; BOLD=''; DIM=''; NC=''
+if [[ -t 1 ]]; then
+    RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; NC='\033[0m'
+fi
 
 info()  { echo -e "${BLUE}→${NC} $1"; }
 ok()    { echo -e "${GREEN}✓${NC} $1"; }
 warn()  { echo -e "${YELLOW}!${NC} $1"; }
 err()   { echo -e "${RED}✗${NC} $1" >&2; }
 die()   { err "$1"; exit 1; }
+
+# Replace $HOME prefix with ~ for clean display paths.
+tildify() {
+    if [[ "$1" == "$HOME"/* ]]; then
+        echo "~${1#"$HOME"}"
+    else
+        echo "$1"
+    fi
+}
+
+# ── Cleanup trap ────────────────────────────────────────────────
+
+cleanup() {
+    rm -f "${BINARY_PATH:-}" "${MANIFEST_PATH:-}" "${AGENT_MD_PATH:-}"
+}
+trap cleanup EXIT
 
 # ── Dependencies ─────────────────────────────────────────────────
 
@@ -63,7 +82,7 @@ fi
 
 # Download function — tries CDN first, falls back to GitHub.
 download() {
-    local url="$1" output="$2"
+    local url="$1" output="${2:-}"
 
     # For GitHub URLs, prefer gh CLI (handles auth for private repos)
     if [ "$HAS_GH" = true ] && [[ "$url" == *"github.com"* || "$url" == *"api.github.com"* ]]; then
@@ -127,7 +146,7 @@ download_asset() {
 
 get_checksum_from_manifest() {
     local json="$1" platform="$2"
-    json=$(echo "$json" | tr -d '\n\r\t' | sed 's/ \+/ /g')
+    json=$(echo "$json" | tr -d '\n\r\t' | sed 's/  */ /g')
     if [[ $json =~ \"$platform\"[^}]*\"checksum\"[[:space:]]*:[[:space:]]*\"([a-f0-9]{64})\" ]]; then
         echo "${BASH_REMATCH[1]}"
         return 0
@@ -183,6 +202,13 @@ echo -e "${BOLD}  ╩╚═╝╩╚═╩╩ ╩╚═╝${NC}"
 echo -e "  ${DIM}Unix-first CLI toolkit for AI agents${NC}"
 echo ""
 
+# ── Check for existing installation ─────────────────────────────
+
+EXISTING_VERSION=""
+if command -v jeriko >/dev/null 2>&1; then
+    EXISTING_VERSION=$(jeriko --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(-[^\s]+)?' || true)
+fi
+
 # ── Resolve version ──────────────────────────────────────────────
 
 info "Platform: ${platform}"
@@ -191,15 +217,15 @@ if [ "$TARGET" = "latest" ] || [ "$TARGET" = "stable" ]; then
     info "Fetching ${TARGET} version..."
 
     # Try CDN version file first
-    VERSION=$(download "${CDN_URL}/releases/${TARGET}" "" 2>/dev/null | tr -d '[:space:]')
+    VERSION=$(download "${CDN_URL}/releases/${TARGET}" "" 2>/dev/null | tr -d '[:space:]') || true
 
     # Fallback to gh CLI
-    if [ -z "$VERSION" ] && [ "$HAS_GH" = true ]; then
-        VERSION=$(gh release list --repo "$GITHUB_REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//')
+    if [ -z "${VERSION:-}" ] && [ "$HAS_GH" = true ]; then
+        VERSION=$(gh release list --repo "$GITHUB_REPO" --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null | sed 's/^v//') || true
     fi
 
     # Fallback to GitHub API
-    if [ -z "$VERSION" ]; then
+    if [ -z "${VERSION:-}" ]; then
         RELEASE_JSON=$(download "https://api.github.com/repos/$GITHUB_REPO/releases/latest" "" 2>/dev/null || echo "")
 
         if [ -n "$RELEASE_JSON" ] && [ "$HAS_JQ" = true ]; then
@@ -209,7 +235,7 @@ if [ "$TARGET" = "latest" ] || [ "$TARGET" = "stable" ]; then
         fi
     fi
 
-    if [ -z "$VERSION" ]; then
+    if [ -z "${VERSION:-}" ]; then
         die "Could not detect latest version. Check: $RELEASES_URL"
     fi
 else
@@ -217,6 +243,14 @@ else
 fi
 
 info "Version: ${VERSION}"
+
+# Check if already up-to-date
+if [ -n "$EXISTING_VERSION" ] && [ "$EXISTING_VERSION" = "$VERSION" ]; then
+    ok "Already up-to-date (${VERSION})"
+    exit 0
+elif [ -n "$EXISTING_VERSION" ]; then
+    info "Upgrading ${EXISTING_VERSION} → ${VERSION}"
+fi
 
 # ── Download ─────────────────────────────────────────────────────
 
@@ -235,7 +269,6 @@ info "Verifying checksum..."
 
 if download_asset "$VERSION" "manifest.json" "$MANIFEST_PATH" 2>/dev/null; then
     MANIFEST_JSON=$(cat "$MANIFEST_PATH" 2>/dev/null)
-    rm -f "$MANIFEST_PATH"
 else
     MANIFEST_JSON=""
 fi
@@ -247,8 +280,7 @@ if [ -n "$MANIFEST_JSON" ]; then
         expected=$(get_checksum_from_manifest "$MANIFEST_JSON" "$platform")
     fi
 
-    if [ -z "$expected" ] || [[ ! "$expected" =~ ^[a-f0-9]{64}$ ]]; then
-        rm -f "$BINARY_PATH"
+    if [ -z "${expected:-}" ] || [[ ! "$expected" =~ ^[a-f0-9]{64}$ ]]; then
         die "Platform $platform not found in manifest"
     fi
 
@@ -259,28 +291,42 @@ if [ -n "$MANIFEST_JSON" ]; then
     fi
 
     if [ "$actual" != "$expected" ]; then
-        rm -f "$BINARY_PATH"
         die "Checksum verification failed (expected $expected, got $actual)"
     fi
     ok "Checksum verified"
 else
-    rm -f "$BINARY_PATH"
     die "No manifest found — cannot verify binary integrity"
 fi
 
 chmod +x "$BINARY_PATH"
+
+# ── Download agent system prompt ─────────────────────────────────
+
+AGENT_MD_PATH="$DOWNLOAD_DIR/agent.md"
+info "Downloading agent system prompt..."
+if download_asset "$VERSION" "agent.md" "$AGENT_MD_PATH" 2>/dev/null; then
+    CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/jeriko"
+    mkdir -p "$CONF_DIR"
+    cp "$AGENT_MD_PATH" "$CONF_DIR/agent.md"
+    ok "Agent prompt → $(tildify "$CONF_DIR/agent.md")"
+else
+    warn "Could not download agent.md — run 'jeriko init' to configure"
+fi
 
 # ── Self-install via binary ──────────────────────────────────────
 
 info "Running self-install..."
 "$BINARY_PATH" install "$VERSION"
 
-# ── Cleanup ──────────────────────────────────────────────────────
-
-rm -f "$BINARY_PATH"
+# Cleanup handled by trap
 
 echo ""
 echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
 echo ""
+if [ -n "$EXISTING_VERSION" ]; then
+    echo -e "  ${DIM}Upgraded:${NC} ${EXISTING_VERSION} → ${VERSION}"
+else
+    echo -e "  ${DIM}Installed:${NC} ${VERSION}"
+fi
 echo -e "  ${DIM}Documentation:${NC} ${BLUE}https://jeriko.ai/docs${NC}"
 echo ""

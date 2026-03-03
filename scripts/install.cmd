@@ -214,6 +214,33 @@ if "%HAS_CERTUTIL%"=="1" (
     echo   [WARN] Skipping checksum verification (certutil not available)
 )
 
+REM ── Download agent system prompt ─────────────────────────────────
+
+set "AGENT_MD_PATH=%DOWNLOAD_DIR%\agent.md"
+echo   [*] Downloading agent system prompt...
+
+set "AGENT_OK=0"
+curl -fsSL -o "%AGENT_MD_PATH%" "%CDN_URL%/releases/%VERSION%/agent.md" 2>nul
+if not errorlevel 1 set "AGENT_OK=1"
+
+if "%AGENT_OK%"=="0" (
+    curl -fsSL -o "%AGENT_MD_PATH%" "%RELEASES_URL%/download/v%VERSION%/agent.md" 2>nul
+    if not errorlevel 1 set "AGENT_OK=1"
+)
+
+if "%AGENT_OK%"=="1" (
+    if defined XDG_CONFIG_HOME (
+        set "CONF_DIR=%XDG_CONFIG_HOME%\jeriko"
+    ) else (
+        set "CONF_DIR=%USERPROFILE%\.config\jeriko"
+    )
+    if not exist "!CONF_DIR!" mkdir "!CONF_DIR!"
+    copy /y "%AGENT_MD_PATH%" "!CONF_DIR!\agent.md" >nul 2>&1
+    echo   [OK] Agent prompt installed
+) else (
+    echo   [WARN] Could not download agent.md — run 'jeriko init' to configure
+)
+
 REM ── Self-install via binary ────────────────────────────────────
 
 echo   [*] Running self-install...
@@ -223,6 +250,7 @@ set "INSTALL_EXIT=%ERRORLEVEL%"
 REM ── Cleanup ────────────────────────────────────────────────────
 
 del "%BINARY_PATH%" >nul 2>&1
+del "%AGENT_MD_PATH%" >nul 2>&1
 
 if not "%INSTALL_EXIT%"=="0" (
     echo   [ERROR] Self-install failed (exit code %INSTALL_EXIT%) >&2

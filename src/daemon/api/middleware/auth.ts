@@ -26,12 +26,12 @@ export interface AuthMiddlewareOptions {
 /**
  * Compare two strings in constant time to prevent timing attacks.
  */
-function safeCompare(a: string, b: string): boolean {
+export function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) {
     // Perform a dummy comparison so timing does not leak length info
-    const padded = a.padEnd(b.length, "\0");
-    const bufA = Buffer.from(padded, "utf-8");
-    const bufB = Buffer.from(b, "utf-8");
+    const maxLen = Math.max(a.length, b.length);
+    const bufA = Buffer.from(a.padEnd(maxLen, "\0"), "utf-8");
+    const bufB = Buffer.from(b.padEnd(maxLen, "\0"), "utf-8");
     timingSafeEqual(bufA, bufB);
     return false;
   }

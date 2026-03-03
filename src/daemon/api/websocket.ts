@@ -4,6 +4,7 @@
 import { randomUUID } from "node:crypto";
 import { getLogger } from "../../shared/logger.js";
 import { Bus } from "../../shared/bus.js";
+import { safeCompare } from "./middleware/auth.js";
 
 const log = getLogger();
 
@@ -14,6 +15,9 @@ const log = getLogger();
 /** Bun ServerWebSocket type alias. */
 type BunWS = import("bun").ServerWebSocket<unknown>;
 
+/** Maximum failed auth attempts before closing the connection. */
+const MAX_AUTH_FAILURES = 3;
+
 /** A connected remote agent. */
 export interface RemoteAgent {
   id: string;
@@ -22,6 +26,8 @@ export interface RemoteAgent {
   connectedAt: string;
   lastPing: string;
   authenticated: boolean;
+  /** Number of consecutive failed auth attempts on this connection. */
+  failedAuthAttempts: number;
 }
 
 /** Inbound message from a remote agent. */
@@ -147,6 +153,7 @@ export function createWebSocketHandlers(): {
         connectedAt: new Date().toISOString(),
         lastPing: new Date().toISOString(),
         authenticated: false,
+        failedAuthAttempts: 0,
       };
 
       agents.set(agentId, agent);
@@ -177,9 +184,15 @@ export function createWebSocketHandlers(): {
             sendToAgent(agentId, { type: "auth_fail", error: "Server auth not configured" });
             return;
           }
-          if (parsed.token !== secret) {
+          if (!safeCompare(parsed.token, secret)) {
+            agent.failedAuthAttempts += 1;
             sendToAgent(agentId, { type: "auth_fail", error: "Invalid token" });
-            log.audit("WebSocket auth failed", { agentId });
+            log.audit("WebSocket auth failed", { agentId, attempts: agent.failedAuthAttempts });
+            if (agent.failedAuthAttempts >= MAX_AUTH_FAILURES) {
+              agents.delete(agentId);
+              bus.emit("ws:disconnected", { agentId });
+              ws.close(1008, "Too many failed auth attempts");
+            }
             return;
           }
           agent.authenticated = true;

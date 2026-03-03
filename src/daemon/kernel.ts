@@ -111,6 +111,23 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     blockedCommands: config.security.blockedCommands.length,
   });
 
+  // Step 5.5: Initialize billing subsystem
+  // Load license from SQLite, verify against Stripe if stale (>7 days).
+  // Non-fatal — billing is optional (free tier works without any Stripe config).
+  try {
+    const { isBillingConfigured } = await import("./billing/stripe.js");
+    const { isLicenseStale, refreshFromStripe } = await import("./billing/license.js");
+
+    if (isBillingConfigured() && isLicenseStale()) {
+      await refreshFromStripe();
+      log.info("Kernel boot: step 5.5 — billing license refreshed from Stripe");
+    } else {
+      log.info("Kernel boot: step 5.5 — billing initialized (using cached license)");
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: step 5.5 — billing init failed (non-fatal): ${err}`);
+  }
+
   // Step 6: Register built-in tools
   // Tools self-register on import. We must import each tool file.
   await Promise.all([
@@ -714,6 +731,76 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       created_at: s.created_at,
       expires_at: s.expires_at,
       revoked_at: s.revoked_at,
+    }));
+  });
+
+  // ── Billing IPC methods ──────────────────────────────────────
+  registerMethod("billing.plan", async () => {
+    const { getLicenseState } = await import("./billing/license.js");
+    const state = getLicenseState();
+
+    // Get active connector/trigger counts
+    const connectorCount = connectors ? connectors.names.filter((n) => connectors!.has(n)).length : 0;
+    const triggerCount = triggers ? triggers.listActive().length : 0;
+
+    return {
+      tier: state.tier,
+      label: state.label,
+      status: state.status,
+      email: state.email,
+      connectors: {
+        used: connectorCount,
+        limit: state.connectorLimit,
+      },
+      triggers: {
+        used: triggerCount,
+        limit: state.triggerLimit === Infinity ? "unlimited" : state.triggerLimit,
+      },
+      pastDue: state.pastDue,
+      gracePeriod: state.gracePeriod,
+      validUntil: state.validUntil,
+    };
+  });
+
+  registerMethod("billing.checkout", async (params) => {
+    const email = params.email as string;
+    if (!email) throw new Error("email is required");
+    const termsAccepted = (params.terms_accepted as boolean) ?? false;
+
+    const { createCheckoutSession } = await import("./billing/stripe.js");
+    const result = await createCheckoutSession(email, termsAccepted);
+    return { url: result.url, session_id: result.sessionId };
+  });
+
+  registerMethod("billing.portal", async (params) => {
+    let customerId = params.customer_id as string | undefined;
+
+    if (!customerId) {
+      const { getSubscription } = await import("./billing/store.js");
+      const sub = getSubscription();
+      customerId = sub?.customer_id;
+    }
+
+    if (!customerId) {
+      throw new Error("No active subscription found. Use `jeriko upgrade` to subscribe first.");
+    }
+
+    const { createPortalSession } = await import("./billing/stripe.js");
+    const result = await createPortalSession(customerId);
+    return { url: result.url };
+  });
+
+  registerMethod("billing.events", async (params) => {
+    const { getRecentEvents, getEventsByType } = await import("./billing/store.js");
+    const limit = (params.limit as number) || 50;
+    const type = params.type as string | undefined;
+
+    const events = type ? getEventsByType(type, limit) : getRecentEvents(limit);
+    return events.map((e) => ({
+      id: e.id,
+      type: e.type,
+      subscription_id: e.subscription_id,
+      processed_at: e.processed_at,
     }));
   });
 

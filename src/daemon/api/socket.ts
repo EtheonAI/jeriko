@@ -58,7 +58,11 @@ export interface IpcRequest {
     | "config"
     | "share"
     | "share_revoke"
-    | "shares";
+    | "shares"
+    | "billing.plan"
+    | "billing.checkout"
+    | "billing.portal"
+    | "billing.events";
   params?: Record<string, unknown>;
 }
 

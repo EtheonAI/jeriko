@@ -59,7 +59,7 @@ function createTestProject(
   const pkg: Record<string, unknown> = {
     name,
     version: "1.0.0",
-    scripts: opts?.scripts ?? { dev: "vite" },
+    scripts: opts?.scripts ?? { dev: "vite --port 59999" },
   };
   fs.writeFileSync(path.join(projectDir, "package.json"), JSON.stringify(pkg, null, 2));
 

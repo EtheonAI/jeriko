@@ -83,6 +83,17 @@ export interface ProviderConfig {
   defaultModel?: string;
 }
 
+export interface BillingPlanConfig {
+  /** Stripe billing secret key (separate from user's Stripe connector). */
+  stripeSecretKey?: string;
+  /** Stripe webhook signing secret for billing webhooks. */
+  stripeWebhookSecret?: string;
+  /** Stripe Price ID for the Pro plan. */
+  stripePriceId?: string;
+  /** Stripe Customer Portal configuration ID. */
+  stripePortalConfigId?: string;
+}
+
 export interface JerikoConfig {
   agent: AgentConfig;
   channels: ChannelsConfig;
@@ -92,6 +103,8 @@ export interface JerikoConfig {
   logging: LoggingConfig;
   /** Custom LLM providers (OpenRouter, DeepInfra, Together, Groq, etc.). */
   providers?: ProviderConfig[];
+  /** Stripe billing configuration for subscription management. */
+  billing?: BillingPlanConfig;
 }
 
 // ---------------------------------------------------------------------------

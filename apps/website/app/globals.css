@@ -222,3 +222,468 @@ h1 {
   border-radius: 4px;
   font-size: 13px;
 }
+
+/* ===================================================================
+   Install box (homepage)
+   =================================================================== */
+
+.install {
+  margin-top: 28px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+  background: rgba(12, 24, 22, 0.6);
+}
+
+.install-tabs {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+
+.install-tab {
+  padding: 10px 16px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.install-tab:hover {
+  color: var(--text);
+}
+
+.install-tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+}
+
+.install-copy {
+  margin-left: auto;
+  padding: 6px 14px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.install-copy:hover {
+  color: var(--text);
+}
+
+.install pre {
+  margin: 0;
+  padding: 16px 20px;
+  overflow-x: auto;
+  font-size: 14px;
+  line-height: 1.6;
+  background: var(--bg);
+}
+
+.install code {
+  color: var(--brand);
+  font-family: "SF Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+/* ===================================================================
+   Docs — info callout & requirements grid
+   =================================================================== */
+
+.docs-info {
+  margin: 12px 0 16px;
+  padding: 12px 16px;
+  border-left: 3px solid var(--brand);
+  background: rgba(97, 240, 192, 0.04);
+  border-radius: 0 8px 8px 0;
+}
+
+.docs-info p {
+  margin: 0;
+}
+
+.docs-requirements {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 12px 0 16px;
+}
+
+.docs-requirement {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(12, 24, 22, 0.5);
+}
+
+.docs-requirement strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.docs-requirement span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ===================================================================
+   Documentation pages
+   =================================================================== */
+
+.docs-layout {
+  display: flex;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 32px 20px 80px;
+  gap: 40px;
+}
+
+/* Sidebar */
+
+.docs-sidebar {
+  position: sticky;
+  top: 32px;
+  align-self: flex-start;
+  width: 220px;
+  min-width: 220px;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding-right: 16px;
+  border-right: 1px solid var(--line);
+}
+
+.docs-nav-group {
+  margin-bottom: 20px;
+}
+
+.docs-nav-title {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.docs-nav-link {
+  display: block;
+  padding: 4px 10px;
+  margin: 1px 0;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 14px;
+  border-radius: 6px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.docs-nav-link:hover {
+  color: var(--text);
+  background: var(--bg-elev);
+}
+
+.docs-nav-link.active {
+  color: var(--brand);
+  background: rgba(97, 240, 192, 0.08);
+  font-weight: 600;
+}
+
+/* Content area */
+
+.docs-content {
+  flex: 1;
+  min-width: 0;
+  max-width: 780px;
+}
+
+.docs-content h1 {
+  font-size: clamp(24px, 4vw, 36px);
+  margin: 0 0 12px;
+  line-height: 1.1;
+}
+
+.docs-content h2 {
+  font-size: 20px;
+  margin: 32px 0 10px;
+}
+
+.docs-content h3 {
+  font-size: 15px;
+  margin: 20px 0 6px;
+  color: var(--brand);
+}
+
+.docs-content p {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 12px;
+}
+
+.docs-content ul,
+.docs-content ol {
+  color: var(--muted);
+  line-height: 1.6;
+  padding-left: 22px;
+  margin: 0 0 12px;
+}
+
+.docs-content li {
+  margin-bottom: 4px;
+}
+
+.docs-content a {
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.docs-content code {
+  background: var(--bg-elev);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.docs-content strong {
+  color: var(--text);
+}
+
+/* Endpoint block */
+
+.docs-endpoint {
+  margin: 24px 0 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(12, 24, 22, 0.5);
+}
+
+.docs-endpoint-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.docs-endpoint-path {
+  font-size: 15px;
+  font-weight: 600;
+  background: none;
+  padding: 0;
+}
+
+.docs-endpoint-desc {
+  margin: 6px 0 0;
+  font-size: 14px;
+}
+
+.docs-auth-badge {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+/* Method badges */
+
+.docs-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  font-family: monospace;
+}
+
+.docs-badge-get { background: rgba(74, 222, 128, 0.15); color: #4ade80; }
+.docs-badge-post { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+.docs-badge-put { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.docs-badge-delete { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+
+/* Code blocks */
+
+.docs-code {
+  margin: 12px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.docs-code-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-elev);
+}
+
+.docs-code-tab {
+  padding: 8px 14px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.docs-code-tab:hover {
+  color: var(--text);
+}
+
+.docs-code-tab.active {
+  color: var(--brand);
+  border-bottom-color: var(--brand);
+}
+
+.docs-code-copy {
+  margin-left: auto;
+  padding: 6px 12px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.docs-code-copy:hover {
+  color: var(--text);
+}
+
+.docs-code-pre {
+  margin: 0;
+  padding: 14px 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  background: var(--bg);
+}
+
+.docs-code-pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: inherit;
+  white-space: pre;
+}
+
+/* Parameter tables */
+
+.docs-table-wrap {
+  overflow-x: auto;
+  margin: 12px 0 16px;
+}
+
+.docs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+  margin: 12px 0 16px;
+}
+
+.docs-table th {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 2px solid var(--line);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.docs-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.docs-table code {
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+/* Response block */
+
+.docs-response {
+  margin: 12px 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.docs-response-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--line);
+}
+
+.docs-response-status {
+  font-weight: 700;
+  font-size: 13px;
+  font-family: monospace;
+}
+
+.docs-response-label {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Mobile responsive */
+
+@media (max-width: 768px) {
+  .docs-layout {
+    flex-direction: column;
+    gap: 24px;
+  }
+
+  .docs-sidebar {
+    position: static;
+    width: 100%;
+    min-width: 0;
+    max-height: none;
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+    padding-right: 0;
+    padding-bottom: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .docs-nav-group {
+    margin-bottom: 0;
+  }
+
+  .docs-nav-title {
+    width: 100%;
+    margin-top: 8px;
+  }
+
+  .docs-nav-link {
+    display: inline-block;
+  }
+
+  .docs-endpoint-header {
+    flex-wrap: wrap;
+  }
+
+  .docs-auth-badge {
+    margin-left: 0;
+  }
+}

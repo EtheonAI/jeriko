@@ -65,9 +65,12 @@ export class ConnectorManager {
    *
    * Returns null if the connector is unknown, not configured, or init fails.
    * The instance is cached — subsequent calls return the same object.
+   *
+   * License gate: new connector activations are checked against the billing
+   * tier's connector limit. Already-active connectors bypass the check.
    */
   async get(name: string): Promise<ConnectorInterface | null> {
-    // Return cached instance
+    // Return cached instance (already-active connectors are never gated)
     const existing = this.instances.get(name);
     if (existing) return existing;
 
@@ -81,6 +84,27 @@ export class ConnectorManager {
     if (!isConnectorConfigured(name)) {
       log.debug(`ConnectorManager: connector "${name}" is not configured (missing env vars)`);
       return null;
+    }
+
+    // License gate: check if the tier allows a new connector activation.
+    // Only active when billing is configured (STRIPE_BILLING_SECRET_KEY is set).
+    // When billing is not configured, the gate is a no-op — all tiers get unlimited connectors.
+    if (process.env.STRIPE_BILLING_SECRET_KEY) {
+      try {
+        const { canActivateConnector } = await import("../../billing/license.js");
+        const check = canActivateConnector(this.instances.size);
+        if (!check.allowed) {
+          log.info(`ConnectorManager: connector "${name}" blocked by license — ${check.reason}`);
+          throw new Error(check.reason);
+        }
+      } catch (err: unknown) {
+        // Re-throw license gate errors (they have user-facing messages)
+        if (err instanceof Error && err.message.includes("Connector limit reached")) {
+          throw err;
+        }
+        // Swallow import/init errors — billing module may not be initialized yet
+        log.debug(`ConnectorManager: license check skipped — ${err}`);
+      }
     }
 
     // Deduplicate concurrent init calls for the same connector
@@ -222,6 +246,57 @@ export class ConnectorManager {
     }
 
     return connector.webhook(headers, rawBody);
+  }
+
+  // -----------------------------------------------------------------------
+  // License enforcement
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enforce connector limits after a license downgrade.
+   *
+   * Evicts excess cached instances beyond the allowed limit. Evicted connectors
+   * are gracefully shut down. They are NOT deleted — they will simply re-gate
+   * through canActivateConnector() on the next get() call.
+   *
+   * @param maxConnectors  The new connector limit from the license
+   * @returns Names of connectors that were evicted
+   */
+  async enforceLimits(maxConnectors: number): Promise<string[]> {
+    const activeCount = this.instances.size;
+    if (activeCount <= maxConnectors) return [];
+
+    const excess = activeCount - maxConnectors;
+    const evicted: string[] = [];
+
+    // Evict the most recently added connectors first (LIFO) —
+    // the oldest/most-used connectors are more likely to be critical.
+    const entries = [...this.instances.entries()].reverse();
+
+    for (const [name, connector] of entries) {
+      if (evicted.length >= excess) break;
+
+      try {
+        await connector.shutdown();
+        log.info(`ConnectorManager: evicted "${name}" (license enforcement)`);
+      } catch (err) {
+        log.warn(`ConnectorManager: "${name}" shutdown error during enforcement: ${err}`);
+      }
+
+      this.instances.delete(name);
+      this.healthCache.delete(name);
+      evicted.push(name);
+    }
+
+    log.info(`ConnectorManager: enforced limit ${maxConnectors} — evicted ${evicted.length} connector(s): ${evicted.join(", ")}`);
+    return evicted;
+  }
+
+  /**
+   * Number of currently active (cached) connector instances.
+   */
+  get activeCount(): number {
+    return this.instances.size;
   }
 
   // -----------------------------------------------------------------------

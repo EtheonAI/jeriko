@@ -15,6 +15,7 @@ import { schedulerRoutes } from "./routes/scheduler.js";
 import { triggerRoutes } from "./routes/trigger.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
+import { billingRoutes, publicBillingRoutes } from "./routes/billing.js";
 import { createWebSocketHandlers } from "./websocket.js";
 import type { ChannelRegistry } from "../services/channels/index.js";
 import type { TriggerEngine } from "../services/triggers/engine.js";
@@ -47,7 +48,15 @@ export function createApp(ctx: AppContext): Hono {
   app.use(
     "*",
     cors({
-      origin: ["http://localhost:*", "tauri://localhost"],
+      origin: (origin) => {
+        if (!origin) return null;
+        if (origin === "tauri://localhost") return origin;
+        try {
+          const url = new URL(origin);
+          if (url.hostname === "localhost" && url.protocol === "http:") return origin;
+        } catch { return null; }
+        return null;
+      },
       allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
       allowHeaders: ["Content-Type", "Authorization"],
       maxAge: 86400,
@@ -60,8 +69,8 @@ export function createApp(ctx: AppContext): Hono {
   // Auth — skip for health check and webhook endpoints
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
-    // Health, webhook, OAuth, and public share endpoints are unauthenticated
-    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/")) {
+    // Health, webhook, OAuth, public share, and billing webhook endpoints are unauthenticated
+    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/") || path === "/billing/webhook") {
       return next();
     }
     return authMiddleware()(c, next);
@@ -92,6 +101,8 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/oauth", oauthRoutes());
   app.route("/share", shareRoutes());
   app.route("/s", publicShareRoutes());
+  app.route("/billing", billingRoutes());
+  app.route("/billing", publicBillingRoutes());
 
   // -----------------------------------------------------------------------
   // 404 fallback

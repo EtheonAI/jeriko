@@ -27,7 +27,7 @@ $ErrorActionPreference = "Stop"
 
 $GitHubRepo   = "khaleel737/jeriko"
 $ReleasesUrl  = "https://github.com/$GitHubRepo/releases"
-$CdnUrl       = if ($env:JERIKO_CDN_URL) { $env:JERIKO_CDN_URL } else { "https://releases.jeriko.ai" }
+if ($env:JERIKO_CDN_URL) { $CdnUrl = $env:JERIKO_CDN_URL } else { $CdnUrl = "https://releases.jeriko.ai" }
 $DownloadDir  = Join-Path $HOME ".jeriko" "downloads"
 
 # ── Helpers ──────────────────────────────────────────────────────
@@ -213,6 +213,33 @@ if ($ActualHash -ne $ExpectedHash) {
 
 Write-Ok "Checksum verified"
 
+# ── Download agent system prompt ──────────────────────────────────
+
+$AgentMdPath = Join-Path $DownloadDir "agent.md"
+Write-Info "Downloading agent system prompt..."
+
+$AgentDownloaded = $false
+try {
+    Invoke-WebRequest -Uri "$CdnUrl/releases/$Version/agent.md" -OutFile $AgentMdPath -UseBasicParsing -ErrorAction Stop
+    $AgentDownloaded = $true
+} catch {}
+
+if (-not $AgentDownloaded) {
+    try {
+        Invoke-WebRequest -Uri "$ReleasesUrl/download/v$Version/agent.md" -OutFile $AgentMdPath -UseBasicParsing -ErrorAction Stop
+        $AgentDownloaded = $true
+    } catch {}
+}
+
+if ($AgentDownloaded) {
+    if ($env:XDG_CONFIG_HOME) { $ConfDir = Join-Path $env:XDG_CONFIG_HOME "jeriko" } else { $ConfDir = Join-Path $HOME ".config" "jeriko" }
+    if (-not (Test-Path $ConfDir)) { New-Item -ItemType Directory -Path $ConfDir -Force | Out-Null }
+    Copy-Item $AgentMdPath (Join-Path $ConfDir "agent.md") -Force
+    Write-Ok "Agent prompt installed"
+} else {
+    Write-Warn "Could not download agent.md — run 'jeriko init' to configure"
+}
+
 # ── Self-install via binary ──────────────────────────────────────
 
 Write-Info "Running self-install..."
@@ -222,6 +249,7 @@ $InstallExit = $LASTEXITCODE
 # ── Cleanup ──────────────────────────────────────────────────────
 
 Remove-Item $BinaryPath -Force -ErrorAction SilentlyContinue
+Remove-Item $AgentMdPath -Force -ErrorAction SilentlyContinue
 
 if ($InstallExit -ne 0) {
     Write-Err "Self-install failed (exit code $InstallExit)"

@@ -13,7 +13,7 @@
 #   bash scripts/upload-release.sh --gh-only    Upload to GitHub Release only
 #   bash scripts/upload-release.sh --stable     Also update the stable channel
 #
-set -e
+set -euo pipefail
 
 # ── Config ───────────────────────────────────────────────────────
 
@@ -21,6 +21,7 @@ VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/
 DIST_DIR="dist"
 R2_BUCKET="${JERIKO_R2_BUCKET:-jeriko-releases}"
 GITHUB_REPO="khaleel737/jeriko"
+RELEASES_URL="https://github.com/$GITHUB_REPO/releases"
 
 # Cloudflare account — required for R2 uploads
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-fcbfb5e1eedee3ce3651c3b263e5c0dd}"
@@ -135,6 +136,15 @@ if [ "$DO_CDN" = true ]; then
         ok "  templates.tar.gz uploaded"
     fi
 
+    # Upload agent system prompt
+    if [ -f "$DIST_DIR/agent.md" ]; then
+        info "  Uploading agent.md"
+        $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/${VERSION}/agent.md" \
+            --file "$DIST_DIR/agent.md" \
+            --content-type "text/markdown"
+        ok "  agent.md uploaded"
+    fi
+
     # Update "latest" pointer
     echo -n "$VERSION" > "$DIST_DIR/latest"
     $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/latest" \
@@ -175,9 +185,10 @@ if [ "$DO_GH" = true ]; then
         [ -f "$local_path" ] && ASSETS="$ASSETS $local_path"
     done
 
-    # Include manifest and templates
+    # Include manifest, templates, and agent prompt
     ASSETS="$ASSETS $DIST_DIR/manifest.json"
     [ -f "$DIST_DIR/templates.tar.gz" ] && ASSETS="$ASSETS $DIST_DIR/templates.tar.gz"
+    [ -f "$DIST_DIR/agent.md" ] && ASSETS="$ASSETS $DIST_DIR/agent.md"
 
     # Determine if prerelease
     PRERELEASE_FLAG=""

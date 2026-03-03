@@ -27,7 +27,6 @@ export function healthRoutes(): Hono {
         runtime: typeof Bun !== "undefined" ? "bun" : "node",
         uptime_seconds: uptimeSeconds,
         uptime_human: formatUptime(uptimeSeconds),
-        pid: process.pid,
         memory: {
           rss_mb: Math.round(process.memoryUsage.rss() / 1024 / 1024),
           heap_mb: Math.round(

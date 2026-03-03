@@ -8,16 +8,18 @@
  *   1. Copy self to ~/.local/share/jeriko/versions/{VERSION}/jeriko
  *   2. Symlink ~/.local/bin/jeriko → versioned path
  *   3. Create data directories
- *   4. Install shell completions
- *   5. Add to PATH
- *   6. Install templates (if found)
- *   7. Verify installation
- *   8. Print success
+ *   4. Install agent system prompt (AGENT.md → ~/.config/jeriko/agent.md)
+ *   5. Install shell completions
+ *   6. Add to PATH
+ *   7. Install templates (if found)
+ *   8. Verify installation
+ *   9. Print success
  */
 
 import {
   installVersioned,
   setupDirectories,
+  setupAgentPrompt,
   setupCompletions,
   setupPath,
   setupTemplates,
@@ -75,16 +77,19 @@ export async function runSelfInstall(target: string): Promise<void> {
   // 2. Data directories
   setupDirectories();
 
-  // 3. Shell completions
+  // 3. Agent system prompt
+  setupAgentPrompt();
+
+  // 4. Shell completions
   setupCompletions();
 
-  // 4. PATH integration
+  // 5. PATH integration
   setupPath();
 
-  // 5. Templates
+  // 6. Templates
   setupTemplates();
 
-  // 6. Verify
+  // 7. Verify
   verifyInstallation();
 
   // Done

@@ -111,11 +111,15 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: task } = await import("./commands/automation/task.js");
   const { command: job } = await import("./commands/automation/job.js");
   const { command: setup } = await import("./commands/automation/setup.js");
+  const { command: update } = await import("./commands/automation/update.js");
 
   // Plugin
   const { command: install } = await import("./commands/plugin/install.js");
   const { command: trust } = await import("./commands/plugin/trust.js");
   const { command: uninstall } = await import("./commands/plugin/uninstall.js");
+
+  // Billing
+  const { planCommand, upgradeCommand, billingCommand } = await import("./commands/billing.js");
 
   const all = [
     sys, exec, proc, net,
@@ -126,8 +130,9 @@ async function loadBuiltinCommands(): Promise<void> {
     stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, connectors,
     code, create, dev, parallel,
     ask, memory, discover, prompt, skill, share,
-    init, server, task, job, setup,
+    init, server, task, job, setup, update,
     install, trust, uninstall,
+    planCommand, upgradeCommand, billingCommand,
   ];
 
   for (const cmd of all) {

@@ -210,8 +210,31 @@ export class TriggerEngine {
 
   /**
    * Add a new trigger. Generates an ID if none is provided.
+   *
+   * License gate: new trigger creation is checked against the billing
+   * tier's trigger limit. Existing triggers are never removed by the gate.
    */
   add(config: Omit<TriggerConfig, "id"> & { id?: string }): TriggerConfig {
+    // License gate: check if the tier allows a new trigger.
+    // Only active when billing is configured (STRIPE_BILLING_SECRET_KEY is set).
+    // When billing is not configured, the gate is a no-op — all tiers get unlimited triggers.
+    if (process.env.STRIPE_BILLING_SECRET_KEY) {
+      try {
+        const { canAddTrigger } = require("../../billing/license.js") as typeof import("../../billing/license.js");
+        const enabledCount = [...this.triggers.values()].filter((t) => t.enabled).length;
+        const check = canAddTrigger(enabledCount);
+        if (!check.allowed) {
+          throw new Error(check.reason);
+        }
+      } catch (err: unknown) {
+        // Re-throw license gate errors (they have user-facing messages)
+        if (err instanceof Error && err.message.includes("Trigger limit reached")) {
+          throw err;
+        }
+        // Swallow import/init errors — billing module may not be initialized yet
+      }
+    }
+
     const trigger: TriggerConfig = {
       ...config,
       id: config.id ?? randomUUID().slice(0, 8),
@@ -322,6 +345,59 @@ export class TriggerEngine {
     return true;
   }
 
+  // -----------------------------------------------------------------------
+  // License enforcement
+  // -----------------------------------------------------------------------
+
+  /**
+   * Enforce trigger limits after a license downgrade.
+   *
+   * Disables excess enabled triggers beyond the allowed limit. Disabled triggers
+   * are NOT deleted — their configuration is preserved and they can be re-enabled
+   * when the user upgrades again.
+   *
+   * Disables the most recently created triggers first (preserves oldest/most-used).
+   *
+   * @param maxTriggers  The new trigger limit from the license
+   * @returns IDs of triggers that were disabled
+   */
+  enforceLimits(maxTriggers: number): string[] {
+    const enabled = [...this.triggers.values()]
+      .filter((t) => t.enabled)
+      .sort((a, b) => {
+        // Sort by created_at ascending (oldest first) so that
+        // slice(maxTriggers) yields the newest (excess) triggers to disable.
+        const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return aTime - bTime;
+      });
+
+    if (enabled.length <= maxTriggers) return [];
+
+    const excess = enabled.slice(maxTriggers);
+    const disabled: string[] = [];
+
+    for (const trigger of excess) {
+      this.disable(trigger.id);
+      disabled.push(trigger.id);
+      log.info(`TriggerEngine: disabled trigger "${trigger.id}" (${trigger.label ?? trigger.type}) — license enforcement`);
+    }
+
+    log.info(`TriggerEngine: enforced limit ${maxTriggers} — disabled ${disabled.length} trigger(s)`);
+    return disabled;
+  }
+
+  /**
+   * Number of currently enabled triggers.
+   */
+  get enabledCount(): number {
+    return [...this.triggers.values()].filter((t) => t.enabled).length;
+  }
+
+  // -----------------------------------------------------------------------
+  // Query
+  // -----------------------------------------------------------------------
+
   /**
    * Get a trigger by ID.
    */
@@ -410,6 +486,8 @@ export class TriggerEngine {
         log.warn(`Webhook signature verification failed for trigger ${id}`);
         return false;
       }
+    } else {
+      log.warn(`Webhook trigger ${id} fired without signature verification (no secret configured)`);
     }
 
     await this.executeTriggerAction(trigger, payload);

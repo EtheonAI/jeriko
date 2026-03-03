@@ -36,8 +36,11 @@ const COMMANDS = [
   "email", "msg", "notify", "audio", "notes", "remind", "calendar", "contacts",
   "music", "clipboard", "window", "camera", "open", "location",
   "stripe", "github", "paypal", "vercel", "twilio", "x", "gdrive", "onedrive",
+  "gmail", "outlook", "connectors",
   "code", "create", "dev", "parallel", "ask", "memory", "discover", "prompt",
-  "init", "server", "task", "job", "install", "trust", "uninstall", "setup",
+  "skill", "share",
+  "init", "server", "task", "job", "install", "trust", "uninstall", "setup", "update",
+  "plan", "upgrade", "billing",
 ];
 
 const BASH_COMPLETION = `
@@ -84,6 +87,9 @@ _jeriko() {
         'x:X (Twitter) API'
         'gdrive:Google Drive API'
         'onedrive:OneDrive API'
+        'gmail:Gmail API'
+        'outlook:Outlook API'
+        'connectors:Manage OAuth and API connectors'
         'code:Code analysis'
         'create:Project scaffolding'
         'dev:Development tools'
@@ -92,11 +98,20 @@ _jeriko() {
         'memory:Session memory'
         'discover:Auto-generate system prompt'
         'prompt:Manage custom prompts'
+        'skill:Manage reusable agent skills'
+        'share:Share agent sessions'
         'init:Setup wizard'
         'server:Daemon management'
         'task:Task management'
         'job:Scheduled jobs'
+        'install:Install plugins or self-install'
+        'trust:Trust a plugin'
+        'uninstall:Remove plugins'
         'setup:Post-install shell integration'
+        'update:Update to latest version'
+        'plan:Show current billing plan and usage'
+        'upgrade:Upgrade to Pro plan'
+        'billing:Manage billing and subscription'
     )
     _describe 'command' commands
 }
@@ -139,13 +154,16 @@ export function setupDirectories(): void {
   const dirs = [
     DATA_DIR,
     join(DATA_DIR, "data"),
-    join(DATA_DIR, "logs"),
+    join(DATA_DIR, "data", "logs"),
+    join(DATA_DIR, "data", "files"),
+    join(DATA_DIR, "data", "tasks"),
+    join(DATA_DIR, "data", "jobs"),
     CONFIG_DIR,
-    join(DATA_DIR, "workspace"),
     join(DATA_DIR, "projects"),
     join(DATA_DIR, "memory"),
     join(DATA_DIR, "plugins"),
     join(DATA_DIR, "prompts"),
+    join(DATA_DIR, "skills"),
     join(DATA_DIR, "downloads"),
     INSTALL_DIR,
     VERSIONS_DIR,
@@ -266,20 +284,32 @@ function setupPathWindows(): void {
       return;
     }
 
-    // Use a PowerShell script block to safely build the path without shell interpolation
-    const script = [
-      `$dir = '${INSTALL_DIR.replace(/'/g, "''")}'`,
-      `$cur = [Environment]::GetEnvironmentVariable('PATH','User')`,
-      `[Environment]::SetEnvironmentVariable('PATH', "$dir;$cur", 'User')`,
-    ].join("; ");
+    // Write a temp .ps1 script to avoid all shell escaping issues.
+    // PowerShell here-strings and encoded commands are fragile with nested quotes;
+    // a temp file is the safest cross-platform approach (used by Bun, Rust installers).
+    const tmpScript = join(process.env.TEMP ?? process.env.TMP ?? "C:\\Windows\\Temp", "jeriko-path-setup.ps1");
+    const ps1 = [
+      `$dir = "${INSTALL_DIR.replace(/\\/g, "\\\\").replace(/"/g, '`"')}"`,
+      `$cur = [Environment]::GetEnvironmentVariable('PATH', 'User')`,
+      `if ($cur -and $cur.Length -gt 0) {`,
+      `  [Environment]::SetEnvironmentVariable('PATH', "$dir;$cur", 'User')`,
+      `} else {`,
+      `  [Environment]::SetEnvironmentVariable('PATH', $dir, 'User')`,
+      `}`,
+    ].join("\n");
 
-    execSync(`powershell -NoProfile -Command "${script}"`, {
-      encoding: "utf-8",
-      timeout: 10000,
-    });
+    writeFileSync(tmpScript, ps1, "utf-8");
 
-    success(`PATH updated (added ${INSTALL_DIR})`);
-    warn("Open a new terminal for PATH changes to take effect");
+    try {
+      execSync(
+        `powershell -NoProfile -ExecutionPolicy Bypass -File "${tmpScript}"`,
+        { encoding: "utf-8", timeout: 10000 },
+      );
+      success(`PATH updated (added ${INSTALL_DIR})`);
+      warn("Open a new terminal for PATH changes to take effect");
+    } finally {
+      try { unlinkSync(tmpScript); } catch { /* cleanup best-effort */ }
+    }
   } catch {
     warn("Could not update PATH automatically — add " + INSTALL_DIR + " to your PATH manually");
   }
@@ -326,6 +356,49 @@ export function setupTemplates(): void {
   }
 
   success(`${count} project templates installed`);
+}
+
+/**
+ * Install the agent system prompt (AGENT.md → ~/.config/jeriko/agent.md).
+ *
+ * Searches known locations where AGENT.md might exist:
+ *   1. Alongside the binary (binary installers place it in the download dir)
+ *   2. In the project root (source builds, unix-install.sh)
+ *   3. In the data dir (~/.jeriko/AGENT.md — legacy location)
+ *
+ * If found, copies to the canonical config location where the kernel reads it.
+ * If not found, warns — the agent will have no system prompt until configured.
+ */
+export function setupAgentPrompt(): void {
+  info("Installing agent system prompt...");
+
+  const target = join(CONFIG_DIR, "agent.md");
+
+  // If already installed, skip (user may have customized it)
+  if (existsSync(target)) {
+    success("Agent prompt exists → " + target);
+    return;
+  }
+
+  const candidates = [
+    // install.sh places agent.md next to the downloaded binary
+    join(dirname(process.execPath), "agent.md"),
+    // Source builds (running from cloned repo)
+    join(process.cwd(), "AGENT.md"),
+    // Legacy location (unix-install.sh copies here)
+    join(DATA_DIR, "AGENT.md"),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      mkdirSync(CONFIG_DIR, { recursive: true });
+      copyFileSync(candidate, target);
+      success(`Agent prompt installed → ${target}`);
+      return;
+    }
+  }
+
+  warn("AGENT.md not found — agent will have no system prompt until configured");
 }
 
 export function verifyInstallation(): void {

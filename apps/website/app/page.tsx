@@ -1,3 +1,7 @@
+"use client";
+
+import { InstallBox } from "./components/install-box";
+
 export default function Home() {
   return (
     <main className="page">
@@ -9,12 +13,15 @@ export default function Home() {
           instead of brittle tool abstractions.
         </p>
         <div className="actions">
+          <a href="/docs/installation">Install</a>
           <a href="https://github.com/khaleel737/jeriko" target="_blank" rel="noreferrer">
-            View GitHub
+            GitHub
           </a>
-          <a href="#features">See Features</a>
+          <a href="/docs">API Docs</a>
         </div>
       </section>
+
+      <InstallBox />
 
       <section id="features" className="grid">
         <article>
@@ -36,6 +43,7 @@ export default function Home() {
         <nav>
           <a href="/privacy-policy">Privacy Policy</a>
           <a href="/terms-and-conditions">Terms &amp; Conditions</a>
+          <a href="/docs">API Docs</a>
         </nav>
       </footer>
     </main>
