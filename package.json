@@ -80,7 +80,7 @@
     "drizzle-orm": "^0.39.0",
     "grammy": "^1.35.0",
     "hono": "^4.7.0",
-    "ink": "^5.1.0",
+    "ink": "6.8.0",
     "playwright-core": "^1.58.2",
     "react": "^19.0.0",
     "stripe": "^20.4.0",
@@ -91,9 +91,9 @@
     "@types/bun": "latest",
     "@types/node": "^25.3.2",
     "@types/react": "^19.0.2",
-    "ink-testing-library": "^4.0.0",
     "@types/ws": "^8.5.0",
     "drizzle-kit": "^0.30.0",
+    "ink-testing-library": "^4.0.0",
     "typescript": "^5.7.0"
   }
 }
