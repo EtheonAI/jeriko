@@ -682,6 +682,124 @@ h1 {
   font-size: 12px;
 }
 
+/* ===================================================================
+   Billing cancel page
+   =================================================================== */
+
+.cancel-page {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: calc(100vh - 70px);
+  padding: 40px 20px;
+}
+
+.cancel-card {
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+}
+
+.cancel-logo {
+  display: block;
+  margin: 0 auto 28px;
+  opacity: 0.85;
+}
+
+.cancel-title {
+  font-size: clamp(22px, 4vw, 32px);
+  line-height: 1.2;
+  margin: 0 0 12px;
+}
+
+.cancel-lead {
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 0 0 28px;
+  font-size: 15px;
+}
+
+.cancel-perks {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 32px;
+  text-align: left;
+}
+
+.cancel-perk {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px 16px;
+  background: rgba(24, 24, 27, 0.6);
+  transition: border-color 0.15s;
+}
+
+.cancel-perk:hover {
+  border-color: var(--muted);
+}
+
+.cancel-perk strong {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 14px;
+  color: var(--text);
+}
+
+.cancel-perk span {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.cancel-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.cancel-btn-primary,
+.cancel-btn-secondary {
+  display: inline-block;
+  padding: 10px 24px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 14px;
+  text-decoration: none;
+  transition: opacity 0.15s, border-color 0.15s;
+}
+
+.cancel-btn-primary {
+  background: var(--brand);
+  color: var(--bg);
+  border: 1px solid transparent;
+}
+
+.cancel-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.cancel-btn-secondary {
+  background: none;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.cancel-btn-secondary:hover {
+  border-color: var(--muted);
+}
+
+.cancel-note {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0;
+}
+
+.cancel-note a {
+  color: var(--brand);
+  text-decoration: none;
+}
+
 /* Mobile responsive */
 
 @media (max-width: 768px) {
