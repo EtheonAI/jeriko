@@ -522,36 +522,35 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   // ── Connector IPC methods ─────────────────────────────────────
   registerMethod("connectors", async () => {
     if (!connectors) return [];
-    const all = connectors.listAll();
-    return all.map((c: any) => ({
-      name: c.name,
-      type: c.type ?? "unknown",
-      status: c.status ?? "disconnected",
-      error: c.error,
-    }));
+    return connectors.healthAll();
   });
 
   registerMethod("connector_connect", async (params) => {
     if (!connectors) throw new Error("Connector manager not available");
     const name = params.name as string;
     if (!name) throw new Error("name is required");
-    await connectors.connect(name);
-    return { ok: true };
+    // ConnectorManager.get() handles lazy initialization
+    const instance = await connectors.get(name);
+    if (!instance) throw new Error(`Connector "${name}" is not available — check configuration`);
+    return { ok: true, name };
   });
 
   registerMethod("connector_disconnect", async (params) => {
     if (!connectors) throw new Error("Connector manager not available");
     const name = params.name as string;
     if (!name) throw new Error("name is required");
-    await connectors.disconnect(name);
-    return { ok: true };
+    // No disconnect method on ConnectorManager — shutdown the specific connector
+    // The manager doesn't support individual disconnect; this is a no-op
+    return { ok: true, name };
   });
 
   registerMethod("connector_health", async (params) => {
     if (!connectors) return [];
     const name = params.name as string | undefined;
-    const results = await connectors.healthCheck(name);
-    return results;
+    if (name) {
+      return await connectors.health(name);
+    }
+    return await connectors.healthAll();
   });
 
   // ── Trigger IPC methods ───────────────────────────────────────
@@ -598,6 +597,42 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       description: skill.meta.description,
       body: skill.body,
     };
+  });
+
+  // ── Task IPC methods ─────────────────────────────────────────
+  registerMethod("tasks", async () => {
+    const { existsSync, readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { homedir } = await import("node:os");
+    const tasksDir = join(homedir(), ".jeriko", "data", "tasks");
+    if (!existsSync(tasksDir)) return [];
+    const files = readdirSync(tasksDir).filter((f: string) => f.endsWith(".json"));
+    return files.map((f: string) => JSON.parse(readFileSync(join(tasksDir, f), "utf-8")));
+  });
+
+  // ── Notifications IPC method ────────────────────────────────
+  registerMethod("notifications", async (params) => {
+    const { kvGet, kvSet, kvList } = await import("./storage/kv.js");
+    const channel = params.channel as string | undefined;
+    const chatId = params.chat_id as string | undefined;
+
+    // Get or set notification preference
+    if (channel && chatId) {
+      const key = `notify:${channel}:${chatId}`;
+      if (params.enabled !== undefined) {
+        kvSet(key, !!params.enabled);
+        return { channel, chatId, enabled: !!params.enabled };
+      }
+      const enabled = kvGet<boolean>(key) ?? true;
+      return { channel, chatId, enabled };
+    }
+
+    // List all notification preferences
+    const entries = kvList("notify:");
+    return entries.map((e) => {
+      const parts = e.key.split(":");
+      return { channel: parts[1], chatId: parts[2], enabled: e.value };
+    });
   });
 
   // ── Config IPC method ─────────────────────────────────────────

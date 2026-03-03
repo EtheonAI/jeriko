@@ -151,9 +151,15 @@ describe("Channel router — command parsing", () => {
     expect(data).toContain("/connect");
     expect(data).toContain("/connectors");
     expect(data).toContain("/health");
+    expect(data).toContain("/skill");
+    expect(data).toContain("/triggers");
+    expect(data).toContain("/tasks");
+    expect(data).toContain("/channels");
+    expect(data).toContain("/notifications");
+    expect(data).toContain("/share");
+    expect(data).toContain("/history");
     expect(data).toContain("/status");
     expect(data).toContain("/sys");
-    expect(data).toContain("/stop");
   });
 
   it("/start is an alias for /help", async () => {

@@ -34,7 +34,10 @@ import {
   unbindSession,
   restoreBindings,
 } from "./binding.js";
-import { existsSync } from "node:fs";
+import { kvGet, kvSet } from "../../storage/kv.js";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 
 const log = getLogger();
 
@@ -445,12 +448,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             [
               { label: "Skills", data: "/skill" },
               { label: "Triggers", data: "/triggers" },
-              { label: "Status", data: "/status" },
+              { label: "Tasks", data: "/tasks" },
             ],
             [
+              { label: "Channels", data: "/channels" },
+              { label: "Notifications", data: "/notifications" },
               { label: "Share", data: "/share" },
+            ],
+            [
+              { label: "History", data: "/history" },
+              { label: "Status", data: "/status" },
               { label: "System", data: "/sys" },
-              { label: "Stop", data: "/stop" },
             ],
           ],
         );
@@ -1225,6 +1233,176 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               { label: "List Shares", data: "/share list" },
             ],
           ],
+        );
+        return;
+      }
+
+      case "notifications":
+      case "notify": {
+        const notifyKey = `notify:${metadata.channel}:${chatId}`;
+        const subCommand = rest[0]?.toLowerCase();
+
+        if (subCommand === "on" || subCommand === "enable") {
+          kvSet(notifyKey, true);
+          await safeSend(metadata, "Notifications enabled for this chat.");
+          return;
+        }
+        if (subCommand === "off" || subCommand === "disable") {
+          kvSet(notifyKey, false);
+          await safeSend(metadata, "Notifications disabled for this chat.");
+          return;
+        }
+
+        // Show current state + toggle button
+        const current = kvGet<boolean>(notifyKey) ?? true; // default: on
+        const toggleAction = current ? "off" : "on";
+        const toggleLabel = current ? "Disable" : "Enable";
+
+        await safeKeyboard(
+          metadata,
+          `Notifications: ${current ? "ON ●" : "OFF ○"}\n\nTrigger and system notifications for this chat.`,
+          [
+            [{ label: `${toggleLabel} Notifications`, data: `/notifications ${toggleAction}` }],
+          ],
+        );
+        return;
+      }
+
+      case "channels": {
+        const channelList = opts.channels.status();
+        if (channelList.length === 0) {
+          await safeSend(metadata, "No messaging channels registered.");
+          return;
+        }
+
+        const lines: string[] = [];
+        for (const ch of channelList) {
+          const icon = ch.status === "connected" ? "●" : ch.status === "failed" ? "✗" : "○";
+          const extra = ch.connected_at ? ` — since ${formatAge(new Date(ch.connected_at).getTime())}` : "";
+          const errMsg = ch.error ? ` (${ch.error})` : "";
+          lines.push(`${icon} ${ch.name} — ${ch.status}${extra}${errMsg}`);
+        }
+
+        const connected = channelList.filter((c) => c.status === "connected").length;
+        await safeSend(
+          metadata,
+          [`Channels: ${connected}/${channelList.length} connected`, `● = connected, ○ = disconnected, ✗ = failed`, "", ...lines].join("\n"),
+        );
+        return;
+      }
+
+      case "history": {
+        const limit = arg ? parseInt(arg, 10) || 10 : 10;
+        const msgs = getMessages(state.sessionId);
+        const recent = msgs.slice(-limit);
+        if (recent.length === 0) {
+          await safeSend(metadata, "No messages in this session.");
+          return;
+        }
+
+        const lines: string[] = [`Last ${recent.length} messages:`];
+        for (const m of recent) {
+          const role = m.role === "user" ? "You" : "AI";
+          const preview = m.content.length > 200
+            ? m.content.slice(0, 200) + "…"
+            : m.content;
+          lines.push(`\n${role}: ${preview}`);
+        }
+        await safeSend(metadata, lines.join("\n"));
+        return;
+      }
+
+      case "compact": {
+        const msgs = getMessages(state.sessionId);
+        if (msgs.length <= 10) {
+          await safeSend(metadata, `Session has ${msgs.length} messages — nothing to compact.`);
+          return;
+        }
+
+        // Keep only the last 10 messages — clear the rest.
+        // This is a simple compaction: drop old context to free up token space.
+        const keepCount = 10;
+        const oldCount = msgs.length - keepCount;
+        clearMessages(state.sessionId);
+        const recent = msgs.slice(-keepCount);
+        for (const m of recent) {
+          addMessage(state.sessionId, m.role as "user" | "assistant" | "system" | "tool", m.content);
+        }
+        await safeSend(
+          metadata,
+          `Compacted: removed ${oldCount} old messages, kept ${keepCount} recent.`,
+        );
+        return;
+      }
+
+      case "tasks":
+      case "task": {
+        const tasksDir = join(homedir(), ".jeriko", "data", "tasks");
+        const subCommand = rest[0]?.toLowerCase();
+
+        // Load tasks from file store
+        const loadTasks = (): Array<{
+          id: string; name: string; type: string;
+          schedule?: string; command: string; enabled: boolean;
+          created_at: string; last_run?: string;
+        }> => {
+          if (!existsSync(tasksDir)) return [];
+          const files = readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
+          return files.map((f) => JSON.parse(readFileSync(join(tasksDir, f), "utf-8")));
+        };
+
+        // /tasks enable <id>
+        if (subCommand === "enable") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks enable <task-id>"); return; }
+          const taskPath = join(tasksDir, `${taskId}.json`);
+          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          const taskDef = JSON.parse(readFileSync(taskPath, "utf-8"));
+          taskDef.enabled = true;
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(taskPath, JSON.stringify(taskDef, null, 2) + "\n");
+          await safeSend(metadata, `Task enabled: ${taskDef.name ?? taskId}`);
+          return;
+        }
+
+        // /tasks disable <id>
+        if (subCommand === "disable") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks disable <task-id>"); return; }
+          const taskPath = join(tasksDir, `${taskId}.json`);
+          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          const taskDef = JSON.parse(readFileSync(taskPath, "utf-8"));
+          taskDef.enabled = false;
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(taskPath, JSON.stringify(taskDef, null, 2) + "\n");
+          await safeSend(metadata, `Task disabled: ${taskDef.name ?? taskId}`);
+          return;
+        }
+
+        // /tasks or /tasks list — show all tasks
+        const tasks = loadTasks();
+        if (tasks.length === 0) {
+          await safeSend(metadata, "No tasks configured.\nCreate tasks via CLI: jeriko task create <name> --command <cmd>");
+          return;
+        }
+
+        const taskButtons: KeyboardLayout = [];
+        const taskLines: string[] = [];
+        for (const t of tasks) {
+          const enabled = t.enabled ? "●" : "○";
+          const lastRun = t.last_run ? formatAge(new Date(t.last_run).getTime()) : "never";
+          taskLines.push(`${enabled} ${t.name} (${t.id}) — ${t.type} — last: ${lastRun}`);
+
+          const action = t.enabled
+            ? { label: `Disable ${t.name}`, data: `/tasks disable ${t.id}` }
+            : { label: `Enable ${t.name}`, data: `/tasks enable ${t.id}` };
+          taskButtons.push([action]);
+        }
+
+        await safeKeyboard(
+          metadata,
+          [`Tasks (${tasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = disabled",
+          taskButtons,
         );
         return;
       }
