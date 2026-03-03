@@ -5,7 +5,7 @@ interface ResponseProps {
 
 export function Response({ status, body }: ResponseProps) {
   const color =
-    status < 300 ? "var(--brand)" : status < 400 ? "var(--muted)" : "#f06161";
+    status < 300 ? "var(--brand)" : status < 400 ? "var(--muted)" : "var(--error)";
 
   return (
     <div className="docs-response">

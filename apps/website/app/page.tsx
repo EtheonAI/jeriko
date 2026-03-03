@@ -6,6 +6,13 @@ export default function Home() {
   return (
     <main className="page">
       <section className="hero">
+        <img
+          src="/jeriko-logo-white.png"
+          alt="Jeriko"
+          className="hero-logo"
+          width={56}
+          height={56}
+        />
         <p className="eyebrow">Jeriko</p>
         <h1>Unix-first autonomous AI for your OS</h1>
         <p className="lead">

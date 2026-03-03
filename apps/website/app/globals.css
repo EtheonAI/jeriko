@@ -1,11 +1,12 @@
 :root {
   color-scheme: dark;
-  --bg: #0c1413;
-  --bg-elev: #112220;
-  --text: #eaf4f2;
-  --muted: #a6b9b4;
-  --line: #24413b;
-  --brand: #61f0c0;
+  --bg: #09090b;
+  --bg-elev: #18181b;
+  --text: #fafafa;
+  --muted: #a1a1aa;
+  --line: #27272a;
+  --brand: #818cf8;
+  --error: #f87171;
 }
 
 * {
@@ -17,8 +18,8 @@ body {
   margin: 0;
   padding: 0;
   background:
-    radial-gradient(900px 500px at 80% -10%, #1a4a3f 0%, transparent 60%),
-    radial-gradient(900px 600px at -20% 120%, #10322f 0%, transparent 60%),
+    radial-gradient(900px 500px at 80% -10%, rgba(129, 140, 248, 0.06) 0%, transparent 60%),
+    radial-gradient(900px 600px at -20% 120%, rgba(99, 102, 241, 0.05) 0%, transparent 60%),
     var(--bg);
   color: var(--text);
   font-family:
@@ -36,9 +37,16 @@ body {
 
 .hero {
   border: 1px solid var(--line);
-  border-radius: 20px;
+  border-radius: 16px;
   padding: 44px 28px;
-  background: linear-gradient(170deg, rgba(17, 34, 32, 0.9), rgba(12, 20, 19, 0.7));
+  background: linear-gradient(170deg, rgba(24, 24, 27, 0.9), rgba(9, 9, 11, 0.7));
+}
+
+.hero-logo {
+  display: block;
+  width: 56px;
+  height: auto;
+  margin-bottom: 16px;
 }
 
 .eyebrow {
@@ -77,12 +85,21 @@ h1 {
   border-radius: 999px;
   padding: 10px 16px;
   font-weight: 600;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.actions a:hover {
+  border-color: var(--muted);
 }
 
 .actions a:first-child {
   border-color: transparent;
   background: var(--brand);
-  color: #062118;
+  color: var(--bg);
+}
+
+.actions a:first-child:hover {
+  opacity: 0.9;
 }
 
 .grid {
@@ -94,9 +111,14 @@ h1 {
 
 .grid article {
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 18px;
-  background: rgba(12, 24, 22, 0.6);
+  background: rgba(24, 24, 27, 0.6);
+  transition: border-color 0.15s;
+}
+
+.grid article:hover {
+  border-color: var(--muted);
 }
 
 .grid h2 {
@@ -150,6 +172,7 @@ h1 {
   color: var(--muted);
   text-decoration: none;
   font-size: 13px;
+  transition: color 0.15s;
 }
 
 .footer a:hover {
@@ -230,9 +253,9 @@ h1 {
 .install {
   margin-top: 28px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 12px;
   overflow: hidden;
-  background: rgba(12, 24, 22, 0.6);
+  background: rgba(24, 24, 27, 0.6);
 }
 
 .install-tabs {
@@ -300,7 +323,7 @@ h1 {
   margin: 12px 0 16px;
   padding: 12px 16px;
   border-left: 3px solid var(--brand);
-  background: rgba(97, 240, 192, 0.04);
+  background: rgba(129, 140, 248, 0.04);
   border-radius: 0 8px 8px 0;
 }
 
@@ -319,7 +342,7 @@ h1 {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 14px 16px;
-  background: rgba(12, 24, 22, 0.5);
+  background: rgba(24, 24, 27, 0.5);
 }
 
 .docs-requirement strong {
@@ -391,7 +414,7 @@ h1 {
 
 .docs-nav-link.active {
   color: var(--brand);
-  background: rgba(97, 240, 192, 0.08);
+  background: rgba(129, 140, 248, 0.08);
   font-weight: 600;
 }
 
@@ -461,7 +484,7 @@ h1 {
   padding: 14px 16px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: rgba(12, 24, 22, 0.5);
+  background: rgba(24, 24, 27, 0.5);
 }
 
 .docs-endpoint-header {
