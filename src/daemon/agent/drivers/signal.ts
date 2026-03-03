@@ -13,39 +13,13 @@ export const LLM_REQUEST_TIMEOUT_MS = 120_000;
  *   - The user aborts (via /stop or controller.abort())
  *   - The timeout expires
  *
- * Uses AbortSignal.any() when available (Bun 1.1+), falls back to
- * manual wiring for older runtimes.
+ * If no user signal is provided, returns a pure timeout signal.
  */
 export function withTimeout(
   signal?: AbortSignal,
   timeoutMs: number = LLM_REQUEST_TIMEOUT_MS,
 ): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
-
   if (!signal) return timeoutSignal;
-
-  // AbortSignal.any() is available in modern runtimes (Bun 1.1+, Node 20+)
-  if ("any" in AbortSignal) {
-    return (AbortSignal as any).any([signal, timeoutSignal]);
-  }
-
-  // Fallback: manual composite for older runtimes
-  const controller = new AbortController();
-
-  const onAbort = () => controller.abort(signal.reason ?? "User aborted");
-  const onTimeout = () => controller.abort(timeoutSignal.reason ?? "Request timed out");
-
-  if (signal.aborted) {
-    controller.abort(signal.reason);
-    return controller.signal;
-  }
-  if (timeoutSignal.aborted) {
-    controller.abort(timeoutSignal.reason);
-    return controller.signal;
-  }
-
-  signal.addEventListener("abort", onAbort, { once: true });
-  timeoutSignal.addEventListener("abort", onTimeout, { once: true });
-
-  return controller.signal;
+  return AbortSignal.any([signal, timeoutSignal]);
 }

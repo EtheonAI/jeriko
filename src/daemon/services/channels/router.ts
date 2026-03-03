@@ -158,12 +158,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     // auto-aborts and doesn't block subsequent messages.
     const prev = chatQueues.get(chatId) ?? Promise.resolve();
     const next = prev.then(async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         await Promise.race([
           processMessage(chatId, text, metadata),
-          new Promise<void>((_, reject) =>
-            setTimeout(() => reject(new Error("Process timeout")), PROCESS_TIMEOUT_MS),
-          ),
+          new Promise<void>((_, reject) => {
+            timer = setTimeout(() => reject(new Error("Process timeout")), PROCESS_TIMEOUT_MS);
+          }),
         ]);
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -174,6 +175,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           stuckRun.controller.abort();
           activeRuns.delete(chatId);
         }
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
     });
     chatQueues.set(chatId, next);
