@@ -18,6 +18,7 @@ import type {
 import type { ProviderConfig } from "../../../shared/config.js";
 import { resolveEnvRef } from "../../../shared/env-ref.js";
 import { parseOpenAIStream } from "./openai-stream.js";
+import { withTimeout } from "./signal.js";
 
 // ---------------------------------------------------------------------------
 // Internal types (OpenAI API shapes)
@@ -170,13 +171,14 @@ export class OpenAICompatibleDriver implements LLMDriver {
       body.tool_choice = "auto";
     }
 
+    const signal = withTimeout(config.signal);
     let response: Response;
     try {
       response = await fetch(this.chatEndpoint, {
         method: "POST",
         headers,
         body: JSON.stringify(body),
-        signal: config.signal,
+        signal,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -199,6 +201,6 @@ export class OpenAICompatibleDriver implements LLMDriver {
     }
 
     // Delegate SSE parsing to the shared stream parser.
-    yield* parseOpenAIStream({ response, signal: config.signal });
+    yield* parseOpenAIStream({ response, signal });
   }
 }

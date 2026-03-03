@@ -221,6 +221,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   }
 
   // Bind channel message bus to the agent loop + slash-command controls.
+  // TriggerEngine is created after the router (step 10), so we pass a lazy
+  // accessor that reads from kernel state at call time.
   startChannelRouter({
     channels,
     defaultModel: config.agent.model,
@@ -228,6 +230,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     temperature: config.agent.temperature,
     extendedThinking: config.agent.extendedThinking,
     systemPrompt,
+    getTriggerEngine: () => state.triggers,
   });
   log.info("Kernel boot: step 9 — channel registry created");
 

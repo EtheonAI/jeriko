@@ -9,6 +9,7 @@ import type {
   DriverMessage,
   ToolCall,
 } from "./index.js";
+import { withTimeout } from "./signal.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -174,12 +175,13 @@ export class AnthropicDriver implements LLMDriver {
       };
     }
 
-    // Make the streaming request.
+    // Make the streaming request with timeout protection.
+    const signal = withTimeout(config.signal);
     const response = await fetch(`${this.baseUrl}/v1/messages`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),
-      signal: config.signal,
+      signal,
     });
 
     if (!response.ok) {

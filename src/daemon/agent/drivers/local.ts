@@ -12,6 +12,7 @@ import type {
   DriverMessage,
 } from "./index.js";
 import { parseOpenAIStream } from "./openai-stream.js";
+import { withTimeout } from "./signal.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -142,13 +143,14 @@ export class LocalDriver implements LLMDriver {
       body.tools = tools;
     }
 
+    const signal = withTimeout(config.signal);
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
-        signal: config.signal,
+        signal,
       });
     } catch (err) {
       yield {
@@ -175,6 +177,6 @@ export class LocalDriver implements LLMDriver {
     // Delegate SSE parsing to shared stream parser.
     // Handles AbortSignal racing, tool call accumulation, and flush-on-end
     // (critical for OSS models that don't send [DONE] or finish_reason).
-    yield* parseOpenAIStream({ response, signal: config.signal });
+    yield* parseOpenAIStream({ response, signal });
   }
 }

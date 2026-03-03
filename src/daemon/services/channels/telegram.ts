@@ -272,6 +272,7 @@ export class TelegramChannel implements ChannelAdapter {
       { command: "auth", description: "Configure connector API keys" },
       { command: "health", description: "Test connector connectivity" },
       { command: "skill", description: "View and manage skill packages" },
+      { command: "triggers", description: "List and manage triggers" },
       { command: "share", description: "Share this conversation via link" },
       { command: "status", description: "Show daemon status" },
       { command: "sys", description: "Show system info" },

@@ -56,6 +56,9 @@ interface ActiveRun {
   startedAt: number;
 }
 
+/** Maximum time a single message processing can take before auto-abort (5 minutes). */
+const PROCESS_TIMEOUT_MS = 5 * 60_000;
+
 export interface ChannelRouterOptions {
   channels: ChannelRegistry;
   defaultModel: string;
@@ -64,6 +67,8 @@ export interface ChannelRouterOptions {
   extendedThinking: boolean;
   /** System prompt from AGENT.md — Jeriko identity and commands. */
   systemPrompt?: string;
+  /** Lazy accessor for trigger engine (created after router in kernel boot). */
+  getTriggerEngine?: () => import("../triggers/engine.js").TriggerEngine | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,12 +154,28 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
     // Queue messages per chat — each chat processes one at a time to prevent
     // response mixing, session corruption, and activeRun overwrites.
+    // Each processMessage is wrapped with a timeout so a stuck LLM call
+    // auto-aborts and doesn't block subsequent messages.
     const prev = chatQueues.get(chatId) ?? Promise.resolve();
-    const next = prev.then(() =>
-      processMessage(chatId, text, metadata).catch((err) => {
-        log.error(`Router unhandled error for chat ${chatId}: ${err}`);
-      }),
-    );
+    const next = prev.then(async () => {
+      try {
+        await Promise.race([
+          processMessage(chatId, text, metadata),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("Process timeout")), PROCESS_TIMEOUT_MS),
+          ),
+        ]);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`Router: message processing failed for chat ${chatId}: ${msg}`);
+        // Auto-abort the stuck run so subsequent messages can proceed
+        const stuckRun = activeRuns.get(chatId);
+        if (stuckRun) {
+          stuckRun.controller.abort();
+          activeRuns.delete(chatId);
+        }
+      }
+    });
     chatQueues.set(chatId, next);
     // Clean up queue entry when done to avoid unbounded memory growth
     next.then(() => {
@@ -420,11 +441,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             ],
             [
               { label: "Skills", data: "/skill" },
+              { label: "Triggers", data: "/triggers" },
               { label: "Status", data: "/status" },
-              { label: "System", data: "/sys" },
             ],
             [
               { label: "Share", data: "/share" },
+              { label: "System", data: "/sys" },
               { label: "Stop", data: "/stop" },
             ],
           ],
@@ -1200,6 +1222,69 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               { label: "List Shares", data: "/share list" },
             ],
           ],
+        );
+        return;
+      }
+
+      case "triggers":
+      case "trigger": {
+        const engine = opts.getTriggerEngine?.();
+        if (!engine) {
+          await safeSend(metadata, "Trigger engine not available.");
+          return;
+        }
+
+        const subCommand = rest[0]?.toLowerCase();
+
+        // /triggers enable <id>
+        if (subCommand === "enable") {
+          const triggerId = rest[1];
+          if (!triggerId) {
+            await safeSend(metadata, "Usage: /triggers enable <trigger-id>");
+            return;
+          }
+          const ok = engine.enable(triggerId);
+          await safeSend(metadata, ok ? `Trigger enabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
+          return;
+        }
+
+        // /triggers disable <id>
+        if (subCommand === "disable") {
+          const triggerId = rest[1];
+          if (!triggerId) {
+            await safeSend(metadata, "Usage: /triggers disable <trigger-id>");
+            return;
+          }
+          const ok = engine.disable(triggerId);
+          await safeSend(metadata, ok ? `Trigger disabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
+          return;
+        }
+
+        // /triggers or /triggers list — show all triggers
+        const triggers = engine.listAll();
+        if (triggers.length === 0) {
+          await safeSend(metadata, "No triggers configured.");
+          return;
+        }
+
+        const buttons: KeyboardLayout = [];
+        const lines: string[] = [];
+        for (const t of triggers) {
+          const enabled = t.enabled ? "●" : "○";
+          const runs = t.run_count ?? 0;
+          const lastFired = t.last_fired ? formatAge(new Date(t.last_fired).getTime()) : "never";
+          lines.push(`${enabled} ${t.label ?? t.id} — ${t.type} — ${runs} runs — ${lastFired}`);
+
+          const action = t.enabled
+            ? { label: `Disable ${t.label ?? t.id}`, data: `/triggers disable ${t.id}` }
+            : { label: `Enable ${t.label ?? t.id}`, data: `/triggers enable ${t.id}` };
+          buttons.push([action]);
+        }
+
+        await safeKeyboard(
+          metadata,
+          [`Triggers (${triggers.length}):`, ...lines].join("\n") + "\n\n● = enabled, ○ = disabled",
+          buttons,
         );
         return;
       }
