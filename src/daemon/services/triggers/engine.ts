@@ -11,6 +11,7 @@ import { TriggerStore } from "./store.js";
 import type { ConnectorManager } from "../connectors/manager.js";
 import type { WebhookEvent } from "../connectors/interface.js";
 import type { ChannelRegistry } from "../channels/index.js";
+import { kvGet } from "../../storage/kv.js";
 
 const log = getLogger();
 
@@ -755,8 +756,14 @@ export class TriggerEngine {
     const tasks: Promise<void>[] = [];
 
     // Channel notifications (Telegram, WhatsApp, etc.)
+    // Respects per-chat notification preferences stored in KV at `notify:<channel>:<chatId>`.
+    // Default is ON — only suppressed when explicitly set to false.
     if (this.channelRegistry && this.notifyTargets.length > 0) {
       for (const target of this.notifyTargets) {
+        if (!this.isNotifyEnabled(target.channel, target.chatId)) {
+          log.debug(`Trigger ${trigger.id}: notifications muted for ${target.channel}:${target.chatId}`);
+          continue;
+        }
         tasks.push(
           this.channelRegistry.send(target.channel, target.chatId, message).catch((err) => {
             log.warn(`Trigger ${trigger.id}: channel notify to ${target.channel}:${target.chatId} failed — ${err}`);
@@ -775,6 +782,25 @@ export class TriggerEngine {
     );
 
     await Promise.allSettled(tasks);
+  }
+
+  /**
+   * Check whether notifications are enabled for a specific channel + chatId.
+   *
+   * Reads the per-chat preference from KV store (`notify:<channel>:<chatId>`).
+   * Default is true (notifications on) — only suppressed when explicitly false.
+   *
+   * The KV store is initialized during kernel boot (step 3-4) before the trigger
+   * engine is created (step 10), so kvGet is always available. Try/catch guards
+   * against edge cases in tests or early boot.
+   */
+  private isNotifyEnabled(channel: string, chatId: string): boolean {
+    try {
+      const enabled = kvGet<boolean>(`notify:${channel}:${chatId}`);
+      return enabled !== false; // null (not set) → default ON
+    } catch {
+      return true; // KV unavailable → default ON
+    }
   }
 
   /**

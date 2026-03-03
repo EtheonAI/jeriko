@@ -35,7 +35,7 @@ import {
   restoreBindings,
 } from "./binding.js";
 import { kvGet, kvSet } from "../../storage/kv.js";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -1270,62 +1270,126 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
       case "channels": {
         const channelList = opts.channels.status();
-        if (channelList.length === 0) {
-          await safeSend(metadata, "No messaging channels registered.");
+        const subCommand = rest[0]?.toLowerCase();
+        const channelArg = rest[1]?.toLowerCase();
+
+        // /channels connect <name>
+        if (subCommand === "connect") {
+          if (!channelArg) {
+            await safeSend(metadata, "Usage: /channels connect <channel-name>");
+            return;
+          }
+          try {
+            await opts.channels.connect(channelArg);
+            await safeSend(metadata, `Channel connected: ${channelArg}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to connect ${channelArg}: ${msg}`);
+          }
           return;
         }
 
-        const lines: string[] = [];
+        // /channels disconnect <name>
+        if (subCommand === "disconnect") {
+          if (!channelArg) {
+            await safeSend(metadata, "Usage: /channels disconnect <channel-name>");
+            return;
+          }
+          // Prevent disconnecting the channel you're currently on
+          if (channelArg === metadata.channel) {
+            await safeSend(metadata, `Cannot disconnect ${channelArg} — you're using it right now.`);
+            return;
+          }
+          try {
+            await opts.channels.disconnect(channelArg);
+            await safeSend(metadata, `Channel disconnected: ${channelArg}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to disconnect ${channelArg}: ${msg}`);
+          }
+          return;
+        }
+
+        // /channels or /channels list — show all with action buttons
+        if (channelList.length === 0) {
+          await safeSend(metadata, "No messaging channels registered.\nConfigure channels in ~/.config/jeriko/config.json and restart the daemon.");
+          return;
+        }
+
+        const channelButtons: KeyboardLayout = [];
+        const channelLines: string[] = [];
         for (const ch of channelList) {
           const icon = ch.status === "connected" ? "●" : ch.status === "failed" ? "✗" : "○";
           const extra = ch.connected_at ? ` — since ${formatAge(new Date(ch.connected_at).getTime())}` : "";
           const errMsg = ch.error ? ` (${ch.error})` : "";
-          lines.push(`${icon} ${ch.name} — ${ch.status}${extra}${errMsg}`);
+          channelLines.push(`${icon} ${ch.name} — ${ch.status}${extra}${errMsg}`);
+
+          // Don't show disconnect button for the channel the user is on
+          if (ch.status === "connected" && ch.name !== metadata.channel) {
+            channelButtons.push([{ label: `Disconnect ${ch.name}`, data: `/channels disconnect ${ch.name}` }]);
+          } else if (ch.status !== "connected") {
+            channelButtons.push([{ label: `Connect ${ch.name}`, data: `/channels connect ${ch.name}` }]);
+          }
         }
 
         const connected = channelList.filter((c) => c.status === "connected").length;
-        await safeSend(
-          metadata,
-          [`Channels: ${connected}/${channelList.length} connected`, `● = connected, ○ = disconnected, ✗ = failed`, "", ...lines].join("\n"),
-        );
+        const header = `Channels: ${connected}/${channelList.length} connected\n● = connected, ○ = disconnected, ✗ = failed\n\n${channelLines.join("\n")}`;
+
+        if (channelButtons.length > 0) {
+          await safeKeyboard(metadata, header, channelButtons);
+        } else {
+          await safeSend(metadata, header);
+        }
         return;
       }
 
       case "history": {
-        const limit = arg ? parseInt(arg, 10) || 10 : 10;
+        // Clamp to 1-50 to stay within Telegram message limits.
+        // 50 messages × ~120 chars each ≈ 6000 chars → sendLong splits at 3900.
+        const MAX_HISTORY = 50;
+        const requestedLimit = arg ? parseInt(arg, 10) : 10;
+        const historyLimit = Math.max(1, Math.min(requestedLimit || 10, MAX_HISTORY));
+
         const msgs = getMessages(state.sessionId);
-        const recent = msgs.slice(-limit);
-        if (recent.length === 0) {
+        const recentMsgs = msgs.slice(-historyLimit);
+        if (recentMsgs.length === 0) {
           await safeSend(metadata, "No messages in this session.");
           return;
         }
 
-        const lines: string[] = [`Last ${recent.length} messages:`];
-        for (const m of recent) {
+        // Truncate per-message preview to keep total size manageable.
+        // At 50 messages × 120 chars = ~6k, sendLong handles the split.
+        const MAX_PREVIEW = 120;
+        const historyLines: string[] = [`Last ${recentMsgs.length} of ${msgs.length} messages:`];
+        for (const m of recentMsgs) {
           const role = m.role === "user" ? "You" : "AI";
-          const preview = m.content.length > 200
-            ? m.content.slice(0, 200) + "…"
+          const preview = m.content.length > MAX_PREVIEW
+            ? m.content.slice(0, MAX_PREVIEW) + "…"
             : m.content;
-          lines.push(`\n${role}: ${preview}`);
+          // Replace newlines in preview to keep it compact
+          historyLines.push(`\n${role}: ${preview.replace(/\n/g, " ")}`);
         }
-        await safeSend(metadata, lines.join("\n"));
+        await safeSend(metadata, historyLines.join("\n"));
         return;
       }
 
       case "compact": {
+        // /compact [n] — keep the last n messages, default 10.
+        const DEFAULT_KEEP = 10;
+        const MAX_KEEP = 100;
+        const requestedKeep = arg ? parseInt(arg, 10) : DEFAULT_KEEP;
+        const keepCount = Math.max(1, Math.min(requestedKeep || DEFAULT_KEEP, MAX_KEEP));
+
         const msgs = getMessages(state.sessionId);
-        if (msgs.length <= 10) {
-          await safeSend(metadata, `Session has ${msgs.length} messages — nothing to compact.`);
+        if (msgs.length <= keepCount) {
+          await safeSend(metadata, `Session has ${msgs.length} message(s), keeping ${keepCount} — nothing to compact.`);
           return;
         }
 
-        // Keep only the last 10 messages — clear the rest.
-        // This is a simple compaction: drop old context to free up token space.
-        const keepCount = 10;
         const oldCount = msgs.length - keepCount;
         clearMessages(state.sessionId);
-        const recent = msgs.slice(-keepCount);
-        for (const m of recent) {
+        const recentToKeep = msgs.slice(-keepCount);
+        for (const m of recentToKeep) {
           addMessage(state.sessionId, m.role as "user" | "assistant" | "system" | "tool", m.content);
         }
         await safeSend(
@@ -1340,28 +1404,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         const tasksDir = join(homedir(), ".jeriko", "data", "tasks");
         const subCommand = rest[0]?.toLowerCase();
 
-        // Load tasks from file store
-        const loadTasks = (): Array<{
-          id: string; name: string; type: string;
-          schedule?: string; command: string; enabled: boolean;
-          created_at: string; last_run?: string;
-        }> => {
-          if (!existsSync(tasksDir)) return [];
-          const files = readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
-          return files.map((f) => JSON.parse(readFileSync(join(tasksDir, f), "utf-8")));
-        };
-
         // /tasks enable <id>
         if (subCommand === "enable") {
           const taskId = rest[1];
           if (!taskId) { await safeSend(metadata, "Usage: /tasks enable <task-id>"); return; }
-          const taskPath = join(tasksDir, `${taskId}.json`);
-          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          const taskDef = JSON.parse(readFileSync(taskPath, "utf-8"));
-          taskDef.enabled = true;
-          const { writeFileSync } = await import("node:fs");
-          writeFileSync(taskPath, JSON.stringify(taskDef, null, 2) + "\n");
-          await safeSend(metadata, `Task enabled: ${taskDef.name ?? taskId}`);
+          const updated = updateTaskField(tasksDir, taskId, "enabled", true);
+          if (!updated) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          await safeSend(metadata, `Task enabled: ${updated.name ?? taskId}`);
           return;
         }
 
@@ -1369,20 +1418,102 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         if (subCommand === "disable") {
           const taskId = rest[1];
           if (!taskId) { await safeSend(metadata, "Usage: /tasks disable <task-id>"); return; }
-          const taskPath = join(tasksDir, `${taskId}.json`);
-          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          const taskDef = JSON.parse(readFileSync(taskPath, "utf-8"));
-          taskDef.enabled = false;
-          const { writeFileSync } = await import("node:fs");
-          writeFileSync(taskPath, JSON.stringify(taskDef, null, 2) + "\n");
-          await safeSend(metadata, `Task disabled: ${taskDef.name ?? taskId}`);
+          const updated = updateTaskField(tasksDir, taskId, "enabled", false);
+          if (!updated) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          await safeSend(metadata, `Task disabled: ${updated.name ?? taskId}`);
           return;
         }
 
+        // /tasks create <name> <command>
+        if (subCommand === "create") {
+          const taskName = rest[1];
+          const taskCommand = rest.slice(2).join(" ").trim();
+          if (!taskName || !taskCommand) {
+            await safeSend(metadata, "Usage: /tasks create <name> <command>\n\nExample: /tasks create backup tar -czf ~/backup.tar.gz ~/data");
+            return;
+          }
+          const { randomUUID } = await import("node:crypto");
+          mkdirSync(tasksDir, { recursive: true });
+          const taskDef = {
+            id: randomUUID().slice(0, 8),
+            name: taskName,
+            type: "once",
+            command: taskCommand,
+            enabled: true,
+            created_at: new Date().toISOString(),
+          };
+          writeFileSync(join(tasksDir, `${taskDef.id}.json`), JSON.stringify(taskDef, null, 2) + "\n");
+          await safeSend(metadata, `Task created: ${taskDef.name} (${taskDef.id})\nCommand: ${taskCommand}\n\nUse /tasks to manage.`);
+          return;
+        }
+
+        // /tasks delete <id>
+        if (subCommand === "delete" || subCommand === "remove") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks delete <task-id>"); return; }
+          const taskPath = join(tasksDir, `${taskId}.json`);
+          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          unlinkSync(taskPath);
+          await safeSend(metadata, `Task deleted: ${taskId}`);
+          return;
+        }
+
+        // /tasks run <id>
+        if (subCommand === "run") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks run <task-id>"); return; }
+          const task = loadTaskSafe(tasksDir, taskId);
+          if (!task) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
+          await safeSend(metadata, `Running: ${task.name}...`);
+          try {
+            const { execSync } = await import("node:child_process");
+            const output = execSync(task.command, { encoding: "utf-8", timeout: 60_000 });
+            // Update last_run timestamp
+            updateTaskField(tasksDir, taskId, "last_run", new Date().toISOString());
+            const preview = output.trim().slice(0, 500) || "(no output)";
+            await safeSend(metadata, `Task completed: ${task.name}\n\n${preview}`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Task failed: ${task.name}\n\n${msg.slice(0, 500)}`);
+          }
+          return;
+        }
+
+        // /tasks <id> — show single task detail
+        if (subCommand && subCommand !== "list") {
+          const task = loadTaskSafe(tasksDir, subCommand);
+          if (task) {
+            const taskDetailLines = [
+              `${task.name} (${task.id})`,
+              `type: ${task.type}`,
+              `enabled: ${task.enabled}`,
+              `command: ${task.command}`,
+              `created: ${task.created_at}`,
+              task.last_run ? `last run: ${formatAge(new Date(task.last_run).getTime())}` : "last run: never",
+              task.schedule ? `schedule: ${task.schedule}` : "",
+            ].filter(Boolean);
+            await safeKeyboard(
+              metadata,
+              taskDetailLines.join("\n"),
+              [
+                [
+                  task.enabled
+                    ? { label: "Disable", data: `/tasks disable ${task.id}` }
+                    : { label: "Enable", data: `/tasks enable ${task.id}` },
+                  { label: "Run Now", data: `/tasks run ${task.id}` },
+                  { label: "Delete", data: `/tasks delete ${task.id}` },
+                ],
+              ],
+            );
+            return;
+          }
+          // Fall through to list if not a valid task ID
+        }
+
         // /tasks or /tasks list — show all tasks
-        const tasks = loadTasks();
+        const tasks = loadAllTasksSafe(tasksDir);
         if (tasks.length === 0) {
-          await safeSend(metadata, "No tasks configured.\nCreate tasks via CLI: jeriko task create <name> --command <cmd>");
+          await safeSend(metadata, "No tasks configured.\nCreate one: /tasks create <name> <command>");
           return;
         }
 
@@ -1392,16 +1523,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           const enabled = t.enabled ? "●" : "○";
           const lastRun = t.last_run ? formatAge(new Date(t.last_run).getTime()) : "never";
           taskLines.push(`${enabled} ${t.name} (${t.id}) — ${t.type} — last: ${lastRun}`);
-
-          const action = t.enabled
-            ? { label: `Disable ${t.name}`, data: `/tasks disable ${t.id}` }
-            : { label: `Enable ${t.name}`, data: `/tasks enable ${t.id}` };
-          taskButtons.push([action]);
+          taskButtons.push([{ label: t.name, data: `/tasks ${t.id}` }]);
         }
 
         await safeKeyboard(
           metadata,
-          [`Tasks (${tasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = disabled",
+          [`Tasks (${tasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = disabled\nTap for details:",
           taskButtons,
         );
         return;
@@ -1523,6 +1650,73 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 }
 
 // ---------------------------------------------------------------------------
+// Task file helpers — safe JSON reads with error handling
+// ---------------------------------------------------------------------------
+
+interface TaskDef {
+  id: string;
+  name: string;
+  type: string;
+  schedule?: string;
+  command: string;
+  enabled: boolean;
+  created_at: string;
+  last_run?: string;
+}
+
+/** Load a single task by ID, returning null on missing or malformed files. */
+function loadTaskSafe(tasksDir: string, taskId: string): TaskDef | null {
+  const taskPath = join(tasksDir, `${taskId}.json`);
+  if (!existsSync(taskPath)) return null;
+  try {
+    return JSON.parse(readFileSync(taskPath, "utf-8")) as TaskDef;
+  } catch {
+    log.warn(`Malformed task file: ${taskId}.json`);
+    return null;
+  }
+}
+
+/** Load all tasks from the file store, skipping malformed files. */
+function loadAllTasksSafe(tasksDir: string): TaskDef[] {
+  if (!existsSync(tasksDir)) return [];
+  try {
+    const files = readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
+    return files
+      .map((f) => {
+        try {
+          return JSON.parse(readFileSync(join(tasksDir, f), "utf-8")) as TaskDef;
+        } catch {
+          log.warn(`Malformed task file: ${f}`);
+          return null;
+        }
+      })
+      .filter((t): t is TaskDef => t !== null);
+  } catch (err) {
+    log.error(`Failed to read tasks directory: ${err}`);
+    return [];
+  }
+}
+
+/** Update a single field on a task file. Returns the updated task or null. */
+function updateTaskField(
+  tasksDir: string,
+  taskId: string,
+  field: string,
+  value: unknown,
+): TaskDef | null {
+  const task = loadTaskSafe(tasksDir, taskId);
+  if (!task) return null;
+  (task as Record<string, unknown>)[field] = value;
+  try {
+    writeFileSync(join(tasksDir, `${taskId}.json`), JSON.stringify(task, null, 2) + "\n");
+    return task;
+  } catch (err) {
+    log.error(`Failed to update task ${taskId}: ${err}`);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Connector health check — uses shared registry (single source of truth)
 // ---------------------------------------------------------------------------
 
@@ -1551,6 +1745,7 @@ async function checkConnectorHealth(name: string): Promise<{ healthy: boolean; l
 
 function formatAge(timestampMs: number): string {
   const diffMs = Date.now() - timestampMs;
+  if (diffMs < 0) return "just now"; // future timestamps (clock skew)
   const mins = Math.floor(diffMs / 60_000);
   if (mins < 1) return "just now";
   if (mins < 60) return `${mins}m ago`;
