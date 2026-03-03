@@ -83,76 +83,80 @@ export class WhatsAppChannel implements ChannelAdapter {
   async connect(): Promise<void> {
     if (this.connected) return;
 
+    // Baileys' standard pattern: on every "close" event, destroy the old
+    // socket and create a fresh one. The new socket continues the handshake
+    // (emitting QR, waiting for scan, etc.). All sockets share the same
+    // auth state and creds listener, and feed into a single connectionReady
+    // promise so the caller blocks until fully connected or timed out.
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
 
-    this.socket = makeWASocket({
-      auth: state,
-      printQRInTerminal: !this.onQR,
-    });
-
-    // Track whether the initial handshake has completed (QR scanned + open).
-    // Before that, "close" events are part of Baileys' normal startup
-    // (it may reconnect internally) and should NOT trigger our reconnect loop.
-    let initialConnectDone = false;
+    // 120s gives the user time to open WhatsApp → Linked Devices → Scan.
+    // Timer resets on each new QR code (Baileys rotates QR every ~20s).
+    const CONNECT_TIMEOUT_MS = 120_000;
 
     const connectionReady = new Promise<void>((resolve, reject) => {
-      // 120s gives the user time to open WhatsApp → Linked Devices → Scan.
-      // Timer resets on each new QR code (Baileys rotates QR every ~20s).
-      const CONNECT_TIMEOUT_MS = 120_000;
       let timer = setTimeout(() => {
         reject(new Error("WhatsApp connection timed out — scan the QR code to authenticate"));
       }, CONNECT_TIMEOUT_MS);
+      let settled = false;
 
-      this.socket!.ev.on("connection.update", (update: Partial<ConnectionState>) => {
-        const { connection, lastDisconnect, qr } = update;
+      const createSocket = () => {
+        this.socket = makeWASocket({
+          auth: state,
+          printQRInTerminal: !this.onQR,
+        });
 
-        if (qr) {
-          // Reset timeout on each new QR — user is still trying to scan
-          clearTimeout(timer);
-          timer = setTimeout(() => {
-            reject(new Error("WhatsApp connection timed out — scan the QR code to authenticate"));
-          }, CONNECT_TIMEOUT_MS);
-          if (this.onQR) {
-            // onQR may be async (e.g. sending QR to another channel) — fire
-            // and catch errors but don't block the event loop.
-            Promise.resolve(this.onQR(qr)).catch((err) => {
-              log.warn(`WhatsApp onQR callback error: ${err}`);
-            });
-          }
-        }
+        this.socket.ev.on("creds.update", saveCreds);
+        this.socket.ev.on("messages.upsert", (m) => this.handleIncoming(m.messages));
 
-        if (connection === "open") {
-          log.info("WhatsApp connected");
-          this.connected = true;
-          initialConnectDone = true;
-          clearTimeout(timer);
-          resolve();
-        }
+        this.socket.ev.on("connection.update", (update: Partial<ConnectionState>) => {
+          const { connection, lastDisconnect, qr } = update;
 
-        if (connection === "close") {
-          const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
-          const isLogout = statusCode === DisconnectReason.loggedOut;
-          this.connected = false;
-
-          if (isLogout) {
-            log.info("WhatsApp logged out");
+          if (qr) {
+            // Reset timeout on each new QR — user is still trying to scan
             clearTimeout(timer);
-            reject(new Error("WhatsApp logged out — re-scan QR code to authenticate"));
-          } else if (initialConnectDone) {
-            // Only reconnect after a successful initial connection.
-            log.warn("WhatsApp connection closed, reconnecting in 3s...");
-            setTimeout(() => this.reconnect(), 3_000);
-          } else {
-            // During initial handshake — Baileys may close + reopen the
-            // socket internally (e.g. upgrading transport). Don't interfere.
-            log.debug("WhatsApp connection closed during handshake (normal)");
+            timer = setTimeout(() => {
+              if (!settled) { settled = true; reject(new Error("WhatsApp connection timed out — scan the QR code to authenticate")); }
+            }, CONNECT_TIMEOUT_MS);
+            if (this.onQR) {
+              Promise.resolve(this.onQR(qr)).catch((err) => {
+                log.warn(`WhatsApp onQR callback error: ${err}`);
+              });
+            }
           }
-        }
-      });
-    });
 
-    this.socket.ev.on("creds.update", saveCreds);
-    this.socket.ev.on("messages.upsert", (m) => this.handleIncoming(m.messages));
+          if (connection === "open") {
+            log.info("WhatsApp connected");
+            this.connected = true;
+            clearTimeout(timer);
+            if (!settled) { settled = true; resolve(); }
+          }
+
+          if (connection === "close") {
+            const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
+            const isLogout = statusCode === DisconnectReason.loggedOut;
+            this.connected = false;
+
+            if (isLogout) {
+              log.info("WhatsApp logged out");
+              clearTimeout(timer);
+              if (!settled) { settled = true; reject(new Error("WhatsApp logged out — re-scan QR code to authenticate")); }
+            } else if (settled) {
+              // Post-connect disconnect — background reconnect
+              log.warn("WhatsApp connection closed, reconnecting in 3s...");
+              setTimeout(() => createSocket(), 3_000);
+            } else {
+              // Pre-connect close — Baileys normal handshake cycle.
+              // Recreate socket immediately to continue the handshake.
+              log.debug("WhatsApp socket recycled during handshake, recreating...");
+              setTimeout(() => createSocket(), 500);
+            }
+          }
+        });
+      };
+
+      createSocket();
+    });
 
     await connectionReady;
   }
@@ -321,13 +325,6 @@ export class WhatsAppChannel implements ChannelAdapter {
   }
 
   // ─── Internals ──────────────────────────────────────────────────
-
-  /** Background reconnect — does not block callers. */
-  private reconnect(): void {
-    this.connect().catch((err) => {
-      log.error(`WhatsApp reconnect failed: ${err}`);
-    });
-  }
 
   /** Get socket or throw if not connected. */
   private requireSocket(): WASocket {
