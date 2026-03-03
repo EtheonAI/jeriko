@@ -32,16 +32,28 @@ export default function Home() {
 
       <section id="features" className="grid">
         <article>
-          <h2>Daemon Core</h2>
-          <p>Always-on kernel with agent loop, scheduling, channels, and connector services.</p>
+          <h2>Your OS, One Command</h2>
+          <p>Files, browser, email, calendar, music — control everything with natural language.</p>
         </article>
         <article>
-          <h2>CLI First</h2>
-          <p>Composable command interface for AI and humans. Unix pipelines are first-class.</p>
+          <h2>Always-On Daemon</h2>
+          <p>Runs in the background. Scheduled tasks, triggers, and instant responses around the clock.</p>
         </article>
         <article>
-          <h2>Cross Platform</h2>
-          <p>Built with Bun + TypeScript, targeting macOS, Linux, and Windows.</p>
+          <h2>Any AI Model</h2>
+          <p>OpenAI, Claude, Ollama, or custom providers. Swap models anytime — zero lock-in.</p>
+        </article>
+        <article>
+          <h2>Talk From Anywhere</h2>
+          <p>Telegram, WhatsApp, or your terminal. Your AI follows you across every device.</p>
+        </article>
+        <article>
+          <h2>Privacy First</h2>
+          <p>Runs locally on your machine. Your data never leaves your network.</p>
+        </article>
+        <article>
+          <h2>10+ Integrations</h2>
+          <p>Stripe, GitHub, Gmail, Google Drive, PayPal, and more — connected out of the box.</p>
         </article>
       </section>
 
