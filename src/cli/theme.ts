@@ -1,8 +1,8 @@
 /**
- * CLI Theme — Color palette and semantic chalk wrappers.
+ * CLI Theme — Color palette, semantic chalk wrappers, and visual helpers.
  *
  * Design system for Jeriko's terminal UI. Professional dark-terminal
- * aesthetic with high-contrast hierarchy.
+ * aesthetic with high-contrast hierarchy and rich semantic tokens.
  *
  * Palette philosophy:
  *   - Brand: Warm amber (#e8a468) — distinctive but not loud
@@ -23,10 +23,11 @@ import chalk from "chalk";
 /**
  * Centralized color constants for all CLI output.
  *
- * Three-tier text hierarchy:
+ * Four-tier text hierarchy:
  *   text    → primary content (messages, labels)
  *   muted   → secondary info (metadata, timestamps)
  *   dim     → tertiary chrome (borders, separators)
+ *   faint   → barely visible (background accents)
  */
 export const PALETTE = {
   // Brand
@@ -44,6 +45,12 @@ export const PALETTE = {
   // Extended semantic
   teal:      "#2dd4bf",    // skills, interactive markers
   orange:    "#fb923c",    // cost warnings, budget alerts
+  pink:      "#f472b6",    // highlights, special emphasis
+
+  // Diff colors
+  diffAdd:   "#73daca",    // added lines (matches green)
+  diffRm:    "#f7768e",    // removed lines (matches red)
+  diffCtx:   "#4b5563",    // context lines (matches dim)
 
   // Text hierarchy
   text:      "#e4e4e7",    // primary content
@@ -82,12 +89,18 @@ export const t = {
   // Extended semantic
   teal:      chalk.hex(PALETTE.teal),
   orange:    chalk.hex(PALETTE.orange),
+  pink:      chalk.hex(PALETTE.pink),
 
   // Semantic aliases (used throughout components)
   success:   chalk.hex(PALETTE.green),
   error:     chalk.hex(PALETTE.red),
   warning:   chalk.hex(PALETTE.yellow),
   info:      chalk.hex(PALETTE.cyan),
+
+  // Diff formatters
+  diffAdd:   chalk.hex(PALETTE.diffAdd),
+  diffRm:    chalk.hex(PALETTE.diffRm),
+  diffCtx:   chalk.hex(PALETTE.diffCtx),
 
   // Text hierarchy
   text:      chalk.hex(PALETTE.text),
@@ -98,7 +111,154 @@ export const t = {
   // Emphasis
   bold:      chalk.bold,
   header:    chalk.hex(PALETTE.text).bold,
+  underline: chalk.underline,
 } as const;
+
+// ---------------------------------------------------------------------------
+// Unicode symbols — consistent icons for all CLI output
+// ---------------------------------------------------------------------------
+
+/**
+ * Standardized symbols used across all formatters and components.
+ * Single source of truth — prevents inconsistent icon usage.
+ */
+export const ICONS = {
+  // Status
+  success:    "✓",
+  error:      "✗",
+  warning:    "⚠",
+  info:       "ℹ",
+  pending:    "○",
+
+  // Dots (status indicators)
+  active:     "●",
+  inactive:   "○",
+  dot:        "·",
+
+  // Section markers
+  sparkle:    "✻",
+  diamond:    "◆",
+  arrow:      "▸",
+  arrowDown:  "▾",
+  chevron:    "›",
+
+  // Tool/action markers
+  tool:       "⏺",
+  result:     "⎿",
+  cursor:     "▊",
+
+  // List connectors (tree-style)
+  treeItem:   "├─",
+  treeLast:   "└─",
+  treeBranch: "│",
+
+  // Progress
+  filled:     "█",
+  empty:      "░",
+  half:       "▌",
+
+  // Category icons (for help display)
+  session:    "◈",
+  model:      "◉",
+  channel:    "◎",
+  provider:   "◇",
+  manage:     "◆",
+  billing:    "◈",
+  system:     "◉",
+} as const;
+
+// ---------------------------------------------------------------------------
+// Box drawing characters
+// ---------------------------------------------------------------------------
+
+export const BOX = {
+  tl: "╭", tr: "╮", bl: "╰", br: "╯",
+  h: "─", v: "│",
+  // Light variants
+  ltl: "┌", ltr: "┐", lbl: "└", lbr: "┘",
+  lh: "─", lv: "│",
+} as const;
+
+// ---------------------------------------------------------------------------
+// Visual helper functions
+// ---------------------------------------------------------------------------
+
+/**
+ * Format a section header with a divider line.
+ *
+ * @example sectionHeader("Commands") → "  Commands\n  ────────────"
+ */
+export function sectionHeader(title: string, width: number = 52): string {
+  return `  ${t.brandBold(title)}\n${t.dim("  " + BOX.h.repeat(width))}`;
+}
+
+/**
+ * Format a sub-section label (lighter than sectionHeader).
+ *
+ * @example subSection("── Built-in ──")
+ */
+export function subSection(label: string): string {
+  return `  ${t.muted(`── ${label} ──`)}`;
+}
+
+/**
+ * Format a tree item with appropriate connector.
+ *
+ * @param isLast Whether this is the last item in the tree
+ * @param content The content to display after the connector
+ */
+export function treeItem(isLast: boolean, content: string): string {
+  const connector = isLast ? ICONS.treeLast : ICONS.treeItem;
+  return `  ${t.dim(connector)} ${content}`;
+}
+
+/**
+ * Format a status dot based on state.
+ * Active/warning use filled dot, error uses ✗, inactive uses empty dot.
+ */
+export function statusDot(state: "active" | "inactive" | "error" | "warning"): string {
+  switch (state) {
+    case "active":  return t.green(ICONS.active);
+    case "inactive": return t.dim(ICONS.inactive);
+    case "error":   return t.error(ICONS.error);
+    case "warning": return t.yellow(ICONS.active);
+  }
+}
+
+/**
+ * Format a key-value pair with aligned label.
+ * Used for detail views (/session, /status, /config).
+ *
+ * @example kvPair("Model", "claude-sonnet-4") → "  Model       claude-sonnet-4"
+ */
+export function kvPair(label: string, value: string, labelWidth: number = 12): string {
+  return `  ${t.dim(label.padEnd(labelWidth))}${value}`;
+}
+
+/**
+ * Format a hint line at the bottom of a display.
+ *
+ * @example hint("Use", "/resume <slug>", "to switch sessions.")
+ */
+export function hint(prefix: string, command: string, suffix: string): string {
+  return `  ${t.dim(prefix)} ${t.muted(command)} ${t.dim(suffix)}`;
+}
+
+/**
+ * Format a tier/status badge.
+ *
+ * @example badge("PRO", "brand") → styled "PRO"
+ */
+export function badge(label: string, style: "brand" | "success" | "warning" | "error" | "muted"): string {
+  const colorFn = {
+    brand:   t.brand,
+    success: t.green,
+    warning: t.yellow,
+    error:   t.red,
+    muted:   t.dim,
+  }[style];
+  return colorFn(label);
+}
 
 // Legacy aliases — kept for backward compat with format.ts consumers
 export { t as theme };

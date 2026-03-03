@@ -49,6 +49,13 @@ import {
   extractToolSummary,
   truncateResult,
   safeParseJson,
+  formatSessionDetail,
+  formatShareCreated,
+  formatShareList,
+  formatTaskList,
+  formatNotificationList,
+  formatAuthStatus,
+  formatAuthDetail,
 } from "../../../src/cli/format.js";
 
 // ---------------------------------------------------------------------------
@@ -269,7 +276,7 @@ describe("formatThinkingDone", () => {
   test("default message without summary", () => {
     const result = stripAnsi(formatThinkingDone());
     expect(result).toContain("Thinking complete");
-    expect(result).toContain("✦");
+    expect(result).toContain("✻");
   });
 
   test("truncates long summaries", () => {
@@ -457,15 +464,16 @@ describe("formatWelcome", () => {
     expect(result).toContain("│");
   });
 
-  test("contains bot ASCII art with eyes", () => {
+  test("contains owl logo block characters", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("◆");
+    // Owl logo uses full-block and half-block characters
+    expect(result).toContain("█");
+    expect(result).toContain("▄");
   });
 
-  test("contains bot body structure", () => {
+  test("contains owl logo feet detail", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("╭━━━━━━━━━╮");
-    expect(result).toContain("╰━━━┻━━━╯");
+    expect(result).toContain("▀");
   });
 
   test("shows model metadata in info panel", () => {
@@ -573,8 +581,8 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 21 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(21);
+  test("has all 35 slash commands", () => {
+    expect(SLASH_COMMANDS.size).toBe(35);
   });
 
   test("contains new v3 commands", () => {
@@ -592,6 +600,16 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/health")).toBe(true);
     expect(SLASH_COMMANDS.has("/sys")).toBe(true);
     expect(SLASH_COMMANDS.has("/config")).toBe(true);
+    expect(SLASH_COMMANDS.has("/session")).toBe(true);
+    expect(SLASH_COMMANDS.has("/share")).toBe(true);
+    expect(SLASH_COMMANDS.has("/cost")).toBe(true);
+    expect(SLASH_COMMANDS.has("/billing")).toBe(true);
+    expect(SLASH_COMMANDS.has("/kill")).toBe(true);
+    expect(SLASH_COMMANDS.has("/archive")).toBe(true);
+    expect(SLASH_COMMANDS.has("/auth")).toBe(true);
+    expect(SLASH_COMMANDS.has("/tasks")).toBe(true);
+    expect(SLASH_COMMANDS.has("/notifications")).toBe(true);
+    expect(SLASH_COMMANDS.has("/cancel")).toBe(true);
   });
 });
 
@@ -667,12 +685,14 @@ describe("formatModelList", () => {
 
   test("marks active model", () => {
     const result = stripAnsi(formatModelList(models, "claude"));
-    expect(result).toContain("active");
+    // Active model is marked with ● symbol
+    expect(result).toContain("●");
   });
 
   test("shows capability indicators", () => {
     const result = stripAnsi(formatModelList(models, "claude"));
-    expect(result).toContain("tools");
+    // Tools shown as icon 🔧
+    expect(result).toContain("🔧");
     expect(result).toContain("200k ctx");
   });
 });
@@ -867,5 +887,272 @@ describe("formatHelp (v3)", () => {
     expect(result).toContain("/skills");
     expect(result).toContain("/status");
     expect(result).toContain("/config");
+    expect(result).toContain("/session");
+    expect(result).toContain("/share");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Session detail
+// ---------------------------------------------------------------------------
+
+describe("formatSessionDetail", () => {
+  test("shows session info", () => {
+    const session = {
+      id: "abc123",
+      slug: "bright-fox-7",
+      title: "Test session",
+      model: "claude",
+      tokenCount: 5000,
+      updatedAt: Date.now() - 60000,
+    };
+    const result = stripAnsi(formatSessionDetail(session, "claude-sonnet-4-6"));
+    expect(result).toContain("Current Session");
+    expect(result).toContain("abc123");
+    expect(result).toContain("bright-fox-7");
+    expect(result).toContain("Test session");
+    expect(result).toContain("claude-sonnet-4-6");
+    expect(result).toContain("5.0k");
+  });
+
+  test("shows stats when provided", () => {
+    const session = {
+      id: "abc123",
+      slug: "bright-fox-7",
+      title: "Test session",
+      model: "claude",
+      tokenCount: 5000,
+      updatedAt: Date.now(),
+    };
+    const stats = { tokensIn: 1000, tokensOut: 500, turns: 3, durationMs: 5000 };
+    const result = stripAnsi(formatSessionDetail(session, "claude", stats));
+    expect(result).toContain("Session Stats");
+    expect(result).toContain("Turns");
+    expect(result).toContain("3");
+  });
+
+  test("hides stats section when no turns", () => {
+    const session = {
+      id: "abc123",
+      slug: "bright-fox-7",
+      title: "Test",
+      model: "claude",
+      tokenCount: 0,
+      updatedAt: Date.now(),
+    };
+    const result = stripAnsi(formatSessionDetail(session, "claude"));
+    expect(result).not.toContain("Session Stats");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Share formatting
+// ---------------------------------------------------------------------------
+
+describe("formatShareCreated", () => {
+  test("shows share URL and details", () => {
+    const share = {
+      shareId: "abc123",
+      url: "https://bot.jeriko.ai/s/abc123",
+      sessionId: "session-1",
+      title: "Test session",
+      model: "claude",
+      messageCount: 10,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+    };
+    const result = stripAnsi(formatShareCreated(share));
+    expect(result).toContain("Session shared");
+    expect(result).toContain("https://bot.jeriko.ai/s/abc123");
+    expect(result).toContain("10");
+    expect(result).toContain("claude");
+    expect(result).toContain("30 days");
+  });
+
+  test("handles null expiry", () => {
+    const share = {
+      shareId: "abc123",
+      url: "https://bot.jeriko.ai/s/abc123",
+      sessionId: "session-1",
+      title: "Test",
+      model: "gpt",
+      messageCount: 5,
+      createdAt: Date.now(),
+      expiresAt: null,
+    };
+    const result = stripAnsi(formatShareCreated(share));
+    expect(result).not.toContain("Expires");
+  });
+});
+
+describe("formatShareList", () => {
+  test("shows empty state", () => {
+    const result = stripAnsi(formatShareList([]));
+    expect(result).toContain("No active shares");
+  });
+
+  test("shows shares with details", () => {
+    const shares = [
+      {
+        shareId: "abc123",
+        url: "https://bot.jeriko.ai/s/abc123",
+        sessionId: "s1",
+        title: "Test",
+        model: "claude",
+        messageCount: 10,
+        createdAt: Date.now() - 3600000,
+        expiresAt: null,
+      },
+      {
+        shareId: "def456",
+        url: "https://bot.jeriko.ai/s/def456",
+        sessionId: "s1",
+        title: "Test 2",
+        model: "gpt",
+        messageCount: 5,
+        createdAt: Date.now() - 7200000,
+        expiresAt: null,
+      },
+    ];
+    const result = stripAnsi(formatShareList(shares));
+    expect(result).toContain("Shares (2)");
+    expect(result).toContain("abc123");
+    expect(result).toContain("def456");
+    expect(result).toContain("10 msgs");
+    expect(result).toContain("5 msgs");
+    expect(result).toContain("/share revoke");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatTaskList
+// ---------------------------------------------------------------------------
+
+describe("formatTaskList", () => {
+  test("shows 'no tasks' when empty", () => {
+    const result = stripAnsi(formatTaskList([]));
+    expect(result).toMatch(/[Nn]o tasks/);
+  });
+
+  test("formats a list of tasks", () => {
+    const tasks = [
+      { id: "abc1", name: "backup", type: "once", command: "tar -czf ~/backup.tar.gz", enabled: true, created_at: "2025-01-01" },
+      { id: "def2", name: "cleanup", type: "once", command: "rm -rf /tmp/old", enabled: false, created_at: "2025-01-02" },
+    ];
+    const result = stripAnsi(formatTaskList(tasks));
+    expect(result).toContain("Tasks (2)");
+    expect(result).toContain("backup");
+    expect(result).toContain("cleanup");
+    expect(result).toContain("abc1");
+    expect(result).toContain("enabled");
+    expect(result).toContain("disabled");
+    expect(result).toContain("/tasks create");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatNotificationList
+// ---------------------------------------------------------------------------
+
+describe("formatNotificationList", () => {
+  test("shows default message when empty", () => {
+    const result = stripAnsi(formatNotificationList([]));
+    expect(result).toMatch(/[Nn]o notification|default/);
+  });
+
+  test("formats notification preferences", () => {
+    const prefs = [
+      { channel: "telegram", chatId: "123", enabled: true },
+      { channel: "whatsapp", chatId: "456", enabled: false },
+    ];
+    const result = stripAnsi(formatNotificationList(prefs));
+    expect(result).toContain("Notifications (2)");
+    expect(result).toContain("telegram");
+    expect(result).toContain("whatsapp");
+    expect(result).toContain("ON");
+    expect(result).toContain("OFF");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatAuthStatus
+// ---------------------------------------------------------------------------
+
+describe("formatAuthStatus", () => {
+  test("shows 'no connectors' when empty", () => {
+    const result = stripAnsi(formatAuthStatus([]));
+    expect(result).toMatch(/[Nn]o connectors/);
+  });
+
+  test("formats connector auth status", () => {
+    const connectors = [
+      {
+        name: "stripe",
+        label: "Stripe",
+        description: "Payment processing",
+        configured: true,
+        required: [{ variable: "STRIPE_SECRET_KEY", label: "STRIPE_SECRET_KEY", set: true }],
+        optional: [],
+      },
+      {
+        name: "github",
+        label: "GitHub",
+        description: "Source code hosting",
+        configured: false,
+        required: [{ variable: "GITHUB_TOKEN", label: "GITHUB_TOKEN", set: false }],
+        optional: [{ variable: "GITHUB_ORG", set: false }],
+      },
+    ];
+    const result = stripAnsi(formatAuthStatus(connectors));
+    expect(result).toContain("Connector Authentication");
+    expect(result).toContain("Stripe");
+    expect(result).toContain("configured");
+    expect(result).toContain("GitHub");
+    expect(result).toContain("not configured");
+    expect(result).toContain("/auth");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatAuthDetail
+// ---------------------------------------------------------------------------
+
+describe("formatAuthDetail", () => {
+  test("formats detail for a connector with single key", () => {
+    const connector = {
+      name: "stripe",
+      label: "Stripe",
+      description: "Payment processing",
+      configured: false,
+      required: [{ variable: "STRIPE_SECRET_KEY", label: "STRIPE_SECRET_KEY", set: false }],
+      optional: [],
+    };
+    const result = stripAnsi(formatAuthDetail(connector));
+    expect(result).toContain("Stripe");
+    expect(result).toContain("Payment processing");
+    expect(result).toContain("not configured");
+    expect(result).toContain("STRIPE_SECRET_KEY");
+    expect(result).toContain("/auth stripe");
+  });
+
+  test("formats detail for a connector with multiple keys", () => {
+    const connector = {
+      name: "paypal",
+      label: "PayPal",
+      description: "PayPal payments",
+      configured: false,
+      required: [
+        { variable: "PAYPAL_CLIENT_ID", label: "PAYPAL_CLIENT_ID", set: false },
+        { variable: "PAYPAL_CLIENT_SECRET", label: "PAYPAL_CLIENT_SECRET", set: false },
+      ],
+      optional: [{ variable: "PAYPAL_MODE", set: false }],
+    };
+    const result = stripAnsi(formatAuthDetail(connector));
+    expect(result).toContain("PayPal");
+    expect(result).toContain("Required:");
+    expect(result).toContain("PAYPAL_CLIENT_ID");
+    expect(result).toContain("PAYPAL_CLIENT_SECRET");
+    expect(result).toContain("Optional:");
+    expect(result).toContain("PAYPAL_MODE");
   });
 });

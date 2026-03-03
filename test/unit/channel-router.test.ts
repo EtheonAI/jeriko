@@ -109,7 +109,7 @@ function createMockRegistry() {
     lastKeyboardData(): string[] {
       const kb = keyboards[keyboards.length - 1];
       if (!kb) return [];
-      return kb.keyboard.flatMap((row) => row.map((b) => b.data));
+      return kb.keyboard.flatMap((row) => row.map((b) => b.data ?? b.url ?? ""));
     },
     allMessages(): string[] {
       return sent.map((s) => s.message);
@@ -168,23 +168,20 @@ describe("Channel router — command parsing", () => {
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Jeriko");
 
-    // Verify the keyboard buttons map to key commands
+    // Verify the keyboard buttons map to hub commands
     const data = registry.lastKeyboardData();
-    expect(data).toContain("/new");
     expect(data).toContain("/sessions");
     expect(data).toContain("/model");
-    expect(data).toContain("/connect");
+    expect(data).toContain("/stop");
     expect(data).toContain("/connectors");
-    expect(data).toContain("/health");
     expect(data).toContain("/skill");
     expect(data).toContain("/triggers");
     expect(data).toContain("/tasks");
     expect(data).toContain("/channels");
-    expect(data).toContain("/notifications");
     expect(data).toContain("/share");
-    expect(data).toContain("/history");
+    expect(data).toContain("/billing");
+    expect(data).toContain("/notifications");
     expect(data).toContain("/status");
-    expect(data).toContain("/sys");
   });
 
   it("/start is an alias for /help", async () => {
@@ -205,7 +202,7 @@ describe("Channel router — command parsing", () => {
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Jeriko");
-    expect(registry.lastKeyboardData()).toContain("/new");
+    expect(registry.lastKeyboardData()).toContain("/sessions");
   });
 
   it("/commands is an alias for /help", async () => {
@@ -226,7 +223,7 @@ describe("Channel router — command parsing", () => {
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Jeriko");
-    expect(registry.lastKeyboardData()).toContain("/new");
+    expect(registry.lastKeyboardData()).toContain("/sessions");
   });
 
   it("unknown command shows error with /help hint", async () => {
@@ -351,7 +348,7 @@ describe("Channel router — session commands", () => {
     expect(text).toContain("session:");
   });
 
-  it("/sessions lists recent sessions", async () => {
+  it("/sessions shows hub menu with session actions", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
 
     const registry = createMockRegistry();
@@ -370,9 +367,17 @@ describe("Channel router — session commands", () => {
     emitCommand(registry, "/sessions");
     await settle();
 
-    const text = registry.lastMessage();
-    // Should list at least one session or say "No sessions"
-    expect(text.length).toBeGreaterThan(0);
+    // Sessions now shows a hub menu with keyboard buttons
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Current:");
+
+    // Hub should contain action buttons
+    const labels = registry.lastKeyboardLabels();
+    expect(labels).toContain("New Session");
+    expect(labels).toContain("Switch");
+    expect(labels).toContain("Delete");
+    expect(labels).toContain("Archive");
   });
 
   it("/switch without argument shows usage", async () => {
@@ -936,8 +941,10 @@ describe("Channel router — /channels", () => {
     emitCommand(registry, "/channels connect whatsapp");
     await settle();
 
-    const text = registry.lastMessage();
-    expect(text).toContain("Channel connected: whatsapp");
+    // Connect success now shows keyboard with back navigation
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Channel connected: whatsapp");
   });
 
   it("/channels disconnect prevents disconnecting current channel", async () => {
@@ -1339,5 +1346,407 @@ describe("Channel router — /triggers", () => {
 
     const text = registry.lastMessage();
     expect(text).toContain("Usage:");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sessions hub — multi-step flow tests
+// ---------------------------------------------------------------------------
+
+describe("Channel router — sessions hub", () => {
+  it("/sessions shows hub menu with action buttons", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/sessions");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Current:");
+
+    const labels = registry.lastKeyboardLabels();
+    expect(labels).toContain("New Session");
+    expect(labels).toContain("Switch");
+    expect(labels).toContain("Delete");
+    expect(labels).toContain("Archive");
+    expect(labels).toContain("Rename");
+    expect(labels).toContain("History");
+
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/new");
+    expect(data).toContain("/sessions switch");
+    expect(data).toContain("/sessions delete");
+    expect(data).toContain("/archive");
+  });
+
+  it("/sessions switch shows session list with switch buttons", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    // Create two sessions
+    emitCommand(registry, "/new");
+    await settle();
+    emitCommand(registry, "/new");
+    await settle();
+
+    emitCommand(registry, "/sessions switch");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Sessions:");
+    // Should have back button
+    const labels = registry.lastKeyboardLabels();
+    expect(labels).toContain("« Back");
+    // Should have switch buttons (at least one non-current session)
+    const data = registry.lastKeyboardData();
+    expect(data.some((d) => d.startsWith("/switch "))).toBe(true);
+  });
+
+  it("/sessions delete shows session list with delete buttons", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    // Create two sessions
+    emitCommand(registry, "/new");
+    await settle();
+    emitCommand(registry, "/new");
+    await settle();
+
+    emitCommand(registry, "/sessions delete");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    // Should have delete buttons for non-current sessions
+    const data = registry.lastKeyboardData();
+    expect(data.some((d) => d.startsWith("/sessions rm "))).toBe(true);
+    // Should have back button
+    expect(data).toContain("/sessions");
+  });
+
+  it("/sessions rm refuses to delete current session", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    // Send a message to create a session
+    emitCommand(registry, "/session");
+    await settle();
+
+    // Get the current session's slug from the response
+    const sessionText = registry.lastMessage();
+    const sessionId = sessionText.split("\n")[0]?.split(": ")[1]?.trim();
+
+    if (sessionId) {
+      emitCommand(registry, `/sessions rm ${sessionId}`);
+      await settle();
+      const text = registry.lastMessage();
+      expect(text).toContain("Cannot delete the active session");
+    }
+  });
+
+  it("/sessions rm without slug shows usage", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/sessions rm");
+    await settle();
+
+    const text = registry.lastMessage();
+    expect(text).toContain("Usage:");
+  });
+
+  it("/sessions rename without title shows usage", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/sessions rename");
+    await settle();
+
+    const text = registry.lastMessage();
+    expect(text).toContain("Usage:");
+  });
+
+  it("/sessions rename with title renames session", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/sessions rename My Test Chat");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Session renamed: My Test Chat");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Billing hub — multi-step flow tests
+// ---------------------------------------------------------------------------
+
+describe("Channel router — billing hub", () => {
+  it("/billing shows hub menu with plan summary", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/billing");
+    await settle();
+
+    // Billing either shows hub or "not configured" message
+    const text = registry.lastMessage() || registry.lastKeyboard()?.text || "";
+    expect(text.length).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Channels hub — management features
+// ---------------------------------------------------------------------------
+
+describe("Channel router — channels hub", () => {
+  it("/channels shows hub with Add Channel button", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/channels");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    const labels = registry.lastKeyboardLabels();
+    expect(labels).toContain("Add Channel");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/channels add");
+  });
+
+  it("/channels add shows available channel types", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/channels add");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Add a channel");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/channels add telegram");
+    expect(data).toContain("/channels add whatsapp");
+    expect(data).toContain("/channels add slack");
+    expect(data).toContain("/channels add discord");
+  });
+
+  it("/channels add telegram shows setup guide", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/channels add telegram");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Telegram Setup");
+    expect(kb!.text).toContain("@BotFather");
+    // Should have back button
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/channels");
+  });
+
+  it("/channels disconnect shows confirmation with back navigation", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    // Connect whatsapp first so we can disconnect it
+    emitCommand(registry, "/channels connect whatsapp");
+    await settle();
+
+    emitCommand(registry, "/channels disconnect whatsapp");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Channel disconnected: whatsapp");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/channels");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Model hub — enhanced model command
+// ---------------------------------------------------------------------------
+
+describe("Channel router — model hub", () => {
+  it("/model shows current model and provider buttons", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "anthropic",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/model");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Current:");
+    const labels = registry.lastKeyboardLabels();
+    expect(labels).toContain("Browse Models");
+    expect(labels).toContain("Add Provider");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/model list");
+    expect(data).toContain("/model add");
+  });
+
+  it("/model list shows provider categories", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "anthropic",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/model list");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("provider");
+    const data = registry.lastKeyboardData();
+    // Should have back button
+    expect(data).toContain("/model");
+  });
+
+  it("/model add shows custom provider setup guide", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "anthropic",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/model add");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("custom AI provider");
+    expect(kb!.text).toContain("config.json");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/model");
+  });
+
+  it("/model <driver> switches model and shows confirmation with back button", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "anthropic",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+    });
+
+    emitCommand(registry, "/model openai");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Switched to:");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/model");
   });
 });

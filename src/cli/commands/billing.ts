@@ -11,6 +11,7 @@
 import type { CommandHandler } from "../dispatcher.js";
 import { parseArgs, flagBool, flagStr } from "../../shared/args.js";
 import { ok, fail } from "../../shared/output.js";
+import { PRO_PRICE_DISPLAY } from "../../daemon/billing/config.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -95,13 +96,13 @@ export const planCommand: CommandHandler = {
 
 export const upgradeCommand: CommandHandler = {
   name: "upgrade",
-  description: "Upgrade to Pro plan ($19/mo)",
+  description: `Upgrade to Pro plan (${PRO_PRICE_DISPLAY})`,
   async run(args: string[]) {
     const parsed = parseArgs(args);
 
     if (flagBool(parsed, "help")) {
       console.log("Usage: jeriko upgrade --email <email>");
-      console.log("\nStart the upgrade flow to Jeriko Pro ($19/mo).");
+      console.log(`\nStart the upgrade flow to Jeriko Pro (${PRO_PRICE_DISPLAY}).`);
       console.log("Opens Stripe Checkout in your browser.");
       console.log("\nFlags:");
       console.log("  --email <email>     Your email address (required)");
@@ -135,11 +136,29 @@ export const upgradeCommand: CommandHandler = {
       if (!response.ok) fail(response.error ?? "Failed to create checkout session");
       url = (response.data as { url: string }).url;
     } else {
-      // Direct access — no daemon. Load secrets so billing env vars are available.
+      // No daemon — try relay proxy first, then fall back to direct Stripe.
       loadSecrets();
-      const { createCheckoutSession } = await import("../../daemon/billing/stripe.js");
-      const result = await createCheckoutSession(email, termsAccepted);
-      url = result.url;
+
+      // Strategy 1: Relay proxy (distributed users — no local Stripe keys)
+      const { createCheckoutViaRelay } = await import("../../daemon/billing/relay-proxy.js");
+      const relayResult = await createCheckoutViaRelay(email, termsAccepted);
+
+      if (relayResult) {
+        url = relayResult.url;
+      } else {
+        // Strategy 2: Direct Stripe SDK (self-hosted users with local keys)
+        try {
+          const { createCheckoutSession } = await import("../../daemon/billing/stripe.js");
+          const result = await createCheckoutSession(email, termsAccepted);
+          url = result.url;
+        } catch {
+          fail(
+            "Unable to create checkout session. "
+            + "Start the daemon with `jeriko serve` or check your internet connection.",
+          );
+          return;
+        }
+      }
     }
 
     await openInBrowser(url);
@@ -184,8 +203,9 @@ export const billingCommand: CommandHandler = {
       if (!response.ok) fail(response.error ?? "Failed to create portal session");
       url = (response.data as { url: string }).url;
     } else {
-      // Direct access — no daemon. Load secrets so billing env vars are available.
+      // No daemon — try relay proxy first, then fall back to direct Stripe.
       loadSecrets();
+
       const { getSubscription } = await import("../../daemon/billing/store.js");
       const sub = getSubscription();
       if (!sub?.customer_id) {
@@ -193,9 +213,26 @@ export const billingCommand: CommandHandler = {
         return;
       }
 
-      const { createPortalSession } = await import("../../daemon/billing/stripe.js");
-      const result = await createPortalSession(sub.customer_id);
-      url = result.url;
+      // Strategy 1: Relay proxy (distributed users — no local Stripe keys)
+      const { createPortalViaRelay } = await import("../../daemon/billing/relay-proxy.js");
+      const relayResult = await createPortalViaRelay(sub.customer_id);
+
+      if (relayResult) {
+        url = relayResult.url;
+      } else {
+        // Strategy 2: Direct Stripe SDK (self-hosted users with local keys)
+        try {
+          const { createPortalSession } = await import("../../daemon/billing/stripe.js");
+          const result = await createPortalSession(sub.customer_id);
+          url = result.url;
+        } catch {
+          fail(
+            "Unable to open billing portal. "
+            + "Start the daemon with `jeriko serve` or check your internet connection.",
+          );
+          return;
+        }
+      }
     }
 
     await openInBrowser(url);

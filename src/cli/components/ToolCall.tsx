@@ -6,29 +6,35 @@
  *     ⎿  (332 lines)
  *
  *   ⏺ Bash npm test
- *     ⎿  ✓ 12 tests passed
+ *     ⎿  12 tests passed
+ *
+ * Status colors:
+ *   running:   cyan spinner dot
+ *   completed: blue solid dot
+ *   pending:   dim dot
  */
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE } from "../theme.js";
-import { capitalize, extractToolSummary, truncateResult } from "../format.js";
+import { PALETTE, ICONS } from "../theme.js";
+import {
+  capitalize,
+  extractToolSummary,
+  shortenHome,
+  truncateResult,
+} from "../format.js";
 import type { DisplayToolCall } from "../types.js";
 
 // ---------------------------------------------------------------------------
 // Status mapping
 // ---------------------------------------------------------------------------
 
-function getStatusColor(status: DisplayToolCall["status"]): string {
+function getStatusIcon(status: DisplayToolCall["status"]): { char: string; color: string } {
   switch (status) {
-    case "completed": return PALETTE.green;
-    case "running":   return PALETTE.cyan;
-    case "pending":   return PALETTE.dim;
+    case "completed": return { char: ICONS.tool, color: PALETTE.blue };
+    case "running":   return { char: ICONS.tool, color: PALETTE.cyan };
+    case "pending":   return { char: ICONS.pending, color: PALETTE.dim };
   }
-}
-
-function getResultConnectorColor(isError: boolean): string {
-  return isError ? PALETTE.red : PALETTE.dim;
 }
 
 // ---------------------------------------------------------------------------
@@ -41,27 +47,47 @@ interface ToolCallViewProps {
 
 export const ToolCallView: React.FC<ToolCallViewProps> = ({ toolCall }) => {
   const name = capitalize(toolCall.name);
-  const summary = extractToolSummary(toolCall.args);
-  const statusColor = getStatusColor(toolCall.status);
+  const rawSummary = extractToolSummary(toolCall.args);
+  const summary = shortenHome(rawSummary);
+  const { char: statusChar, color: statusColor } = getStatusIcon(toolCall.status);
 
   return (
     <Box flexDirection="column" marginTop={0}>
       {/* Header: ⏺ ToolName summary */}
       <Text>
-        <Text color={statusColor}>⏺ </Text>
+        <Text color={statusColor}>{statusChar} </Text>
         <Text bold color={PALETTE.text}>{name}</Text>
         {summary ? <Text color={PALETTE.muted}> {summary}</Text> : null}
       </Text>
 
       {/* Result: ⎿ output */}
       {toolCall.result !== undefined && (
-        <Box marginLeft={2}>
-          <Text color={getResultConnectorColor(!!toolCall.isError)}>⎿  </Text>
-          <Text color={toolCall.isError ? PALETTE.red : PALETTE.muted}>
-            {truncateResult(toolCall.result)}
-          </Text>
-        </Box>
+        <ToolResult
+          result={toolCall.result}
+          isError={!!toolCall.isError}
+        />
       )}
+    </Box>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Tool result sub-component
+// ---------------------------------------------------------------------------
+
+interface ToolResultProps {
+  result: string;
+  isError: boolean;
+}
+
+const ToolResult: React.FC<ToolResultProps> = ({ result, isError }) => {
+  const connectorColor = isError ? PALETTE.red : PALETTE.dim;
+  const textColor = isError ? PALETTE.red : PALETTE.muted;
+
+  return (
+    <Box marginLeft={2}>
+      <Text color={connectorColor}>{ICONS.result}  </Text>
+      <Text color={textColor}>{truncateResult(result)}</Text>
     </Box>
   );
 };

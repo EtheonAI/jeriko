@@ -584,7 +584,7 @@ describe("Command: /connect", () => {
       } else {
         // Should generate login URL
         expect(text).toContain(`Connect ${provider.label}`);
-        expect(text).toContain(`/oauth/${provider.name}/start`);
+        expect(text).toContain(`/${provider.name}/start`);
         expect(text).toContain("state=");
         expect(text).toContain("10 minutes");
       }
@@ -835,5 +835,120 @@ describe("OAuth state (live)", () => {
     const token = generateState("github", "chat-1", "telegram");
     expect(consumeState(token)).not.toBeNull();
     expect(consumeState(token)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Provider commands (channel parity)
+// ---------------------------------------------------------------------------
+
+describe("Channel: /provider", () => {
+  it("/providers lists built-in and custom providers", async () => {
+    resetCapture();
+    emitCommand("/providers", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Built-in");
+    expect(text).toContain("Providers");
+  });
+
+  it("/provider without args lists providers", async () => {
+    resetCapture();
+    emitCommand("/provider", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Built-in");
+  });
+
+  it("/provider add without args shows preset picker", async () => {
+    resetCapture();
+    emitCommand("/provider add", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Add a Provider");
+  });
+
+  it("/provider add with unknown id shows usage", async () => {
+    resetCapture();
+    emitCommand("/provider add myai", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Usage");
+  });
+
+  it("/provider add with known preset id shows key prompt", async () => {
+    resetCapture();
+    emitCommand("/provider add groq", "provider-test");
+    await settle();
+    const text = lastSent();
+    // Groq is a known preset — if env var not set, asks for key
+    // If env var is set, it auto-adds
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("/provider remove without id shows usage", async () => {
+    resetCapture();
+    emitCommand("/provider remove", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Usage");
+  });
+
+  it("/provider remove nonexistent shows not found", async () => {
+    resetCapture();
+    emitCommand("/provider remove nonexistent-xyz", "provider-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("not found");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Config command (channel parity)
+// ---------------------------------------------------------------------------
+
+describe("Channel: /config", () => {
+  it("/config shows configuration", async () => {
+    resetCapture();
+    emitCommand("/config", "config-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Configuration");
+    expect(text).toContain("Model");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Share commands (channel)
+// ---------------------------------------------------------------------------
+
+describe("Channel: /share", () => {
+  it("/share on empty session says no messages", async () => {
+    resetCapture();
+    emitCommand("/new", "share-test");
+    await settle();
+
+    resetCapture();
+    emitCommand("/share", "share-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("No messages");
+  });
+
+  it("/share list shows shares", async () => {
+    resetCapture();
+    emitCommand("/share list", "share-test");
+    await settle();
+    const text = lastSent();
+    // Either "No active shares" or a list
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it("/share revoke without id shows usage", async () => {
+    resetCapture();
+    emitCommand("/share revoke", "share-test");
+    await settle();
+    const text = lastSent();
+    expect(text).toContain("Usage");
   });
 });

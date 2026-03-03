@@ -1,5 +1,5 @@
 /**
- * Tests for mascot ASCII art builder.
+ * Tests for mascot ASCII art builder (Jeriko owl logo).
  */
 
 import { describe, test, expect } from "bun:test";
@@ -40,25 +40,19 @@ describe("buildMascot", () => {
     expect(/\u001b\[[0-9;]*m/.test(joined)).toBe(true);
   });
 
-  test("stripped content contains structural characters", () => {
+  test("contains block characters from the owl logo", () => {
     const result = buildMascot();
     const plain = result.map(stripAnsi).join("\n");
-    // Should contain box-drawing characters from the mascot
-    expect(plain).toContain("╭");
-    expect(plain).toContain("╰");
-    expect(plain).toContain("┃");
+    // Owl logo uses full-block and half-block characters
+    expect(plain).toContain("█");
+    expect(plain).toContain("▄");
   });
 
-  test("contains diamond eye characters", () => {
+  test("contains foot detail with half-block characters", () => {
     const result = buildMascot();
     const plain = result.map(stripAnsi).join("\n");
-    expect(plain).toContain("◆");
-  });
-
-  test("contains data-stream chest detail", () => {
-    const result = buildMascot();
-    const plain = result.map(stripAnsi).join("\n");
-    expect(plain).toContain("▰");
+    // The owl's feet use ▀ characters
+    expect(plain).toContain("▀");
   });
 
   test("consistent between calls", () => {
@@ -99,9 +93,9 @@ describe("buildMascotCompact", () => {
     expect(/\u001b\[[0-9;]*m/.test(joined)).toBe(true);
   });
 
-  test("contains diamond eyes", () => {
+  test("contains block characters", () => {
     const result = buildMascotCompact();
     const plain = result.map(stripAnsi).join("\n");
-    expect(plain).toContain("◆");
+    expect(plain).toContain("█");
   });
 });

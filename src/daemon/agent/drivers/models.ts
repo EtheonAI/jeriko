@@ -519,10 +519,16 @@ function getOllamaBaseUrl(): string {
  * Resolve a model alias to a real API model ID.
  *
  * Resolution order:
- *   1. Exact match in capability index
- *   2. Alias match from fetched registry (family-based)
- *   3. Static fallback aliases
- *   4. Pass-through
+ *   1. Exact match in capability index (e.g., "claude-sonnet-4-6")
+ *   2. Direct alias match from registry (models.dev + custom providers)
+ *   3. Static alias (curated defaults: "claude" → "claude-sonnet-4-6")
+ *   4. Fuzzy substring match from models.dev (last resort, e.g., "gemini-pro")
+ *   5. Local model env var
+ *   6. Pass-through
+ *
+ * Static aliases are checked BEFORE fuzzy matching because they represent
+ * intentional curated defaults (e.g., "claude" → sonnet, not opus).
+ * Fuzzy matching is a last resort for arbitrary model names.
  */
 export function resolveModel(provider: string, alias: string): string {
   const normalized = alias.toLowerCase();
@@ -531,33 +537,34 @@ export function resolveModel(provider: string, alias: string): string {
   if (capIndex.has(`${provider}:${alias}`)) return alias;
   if (capIndex.has(`${provider}:${normalized}`)) return normalized;
 
-  // 2. Alias lookup — always check aliasIndex (populated by both models.dev
-  //    AND registerProviderAliases for custom providers). The `fetched` guard
-  //    only applies to the fuzzy substring matching (step 2b), not direct lookup.
+  // 2. Direct alias match — from models.dev families AND custom provider aliases.
+  //    This handles exact family names (e.g., "claude-sonnet" → "claude-sonnet-4-6").
   const aliases = aliasIndex.get(provider);
   if (aliases) {
-    // 2a. Direct alias match — works for both models.dev and custom providers
     const direct = aliases.get(normalized);
     if (direct) return direct;
-
-    // 2b. Fuzzy substring match — only from models.dev data (requires fetch)
-    if (fetched) {
-      for (const [key, modelId] of aliases) {
-        if (key.includes(normalized) || normalized.includes(key)) return modelId;
-      }
-    }
   }
 
-  // 3. Static alias fallback
+  // 3. Static alias — curated defaults take priority over fuzzy matching.
+  //    These are intentional choices: "claude" → sonnet (not opus),
+  //    "gpt" → gpt-4o (not gpt-5.2), "sonnet" → latest sonnet.
   const staticMap = STATIC_ALIASES[provider];
   if (staticMap?.[normalized]) return staticMap[normalized]!;
 
-  // 4. Local model: resolve "local"/"ollama" to env var
+  // 4. Fuzzy substring match — last resort, only from models.dev data.
+  //    Catches cases like "gemini-pro" matching "gemini-2.5-pro".
+  if (aliases && fetched) {
+    for (const [key, modelId] of aliases) {
+      if (key.includes(normalized) || normalized.includes(key)) return modelId;
+    }
+  }
+
+  // 5. Local model: resolve "local"/"ollama" to env var
   if (provider === "local" && (normalized === "local" || normalized === "ollama")) {
     return process.env.LOCAL_MODEL ?? "llama3";
   }
 
-  // 5. Pass-through
+  // 6. Pass-through
   return alias;
 }
 

@@ -26,7 +26,7 @@ import {
 import { addMessage, getMessages, clearMessages } from "../../agent/session/message.js";
 import type { DriverMessage } from "../../agent/drivers/index.js";
 import { listDrivers, getDriver } from "../../agent/drivers/index.js";
-import { resolveModel, getCapabilities, parseModelSpec } from "../../agent/drivers/models.js";
+import { resolveModel, getCapabilities, parseModelSpec, listModels } from "../../agent/drivers/models.js";
 import {
   bindSession,
   getBinding,
@@ -433,31 +433,31 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       case "commands":
         await safeKeyboard(
           metadata,
-          "Jeriko — tap a button or type a command:",
+          "Jeriko — your AI agent. Tap to navigate:",
           [
             [
-              { label: "New Session", data: "/new" },
               { label: "Sessions", data: "/sessions" },
               { label: "Model", data: "/model" },
+              { label: "Stop", data: "/stop" },
             ],
             [
-              { label: "Connect", data: "/connect" },
               { label: "Connectors", data: "/connectors" },
-              { label: "Health", data: "/health" },
-            ],
-            [
               { label: "Skills", data: "/skill" },
               { label: "Triggers", data: "/triggers" },
-              { label: "Tasks", data: "/tasks" },
             ],
             [
+              { label: "Providers", data: "/providers" },
               { label: "Channels", data: "/channels" },
-              { label: "Notifications", data: "/notifications" },
               { label: "Share", data: "/share" },
             ],
             [
-              { label: "History", data: "/history" },
+              { label: "Tasks", data: "/tasks" },
+              { label: "Config", data: "/config" },
               { label: "Status", data: "/status" },
+            ],
+            [
+              { label: "Billing", data: "/billing" },
+              { label: "Notifications", data: "/notifications" },
               { label: "System", data: "/sys" },
             ],
           ],
@@ -529,33 +529,141 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
 
       case "sessions": {
-        const recent = listSessions(10);
-        if (recent.length === 0) {
-          await safeSend(metadata, "No sessions.");
+        const subCmd = rest[0]?.toLowerCase();
+
+        // /sessions switch — list sessions to switch to
+        if (subCmd === "switch") {
+          const recent = listSessions(10);
+          if (recent.length === 0) {
+            await safeSend(metadata, "No sessions available.");
+            return;
+          }
+          const buttons: KeyboardLayout = [];
+          const lines: string[] = [];
+          for (const s of recent) {
+            const active = s.id === state.sessionId;
+            const age = formatAge(s.updated_at);
+            lines.push(`${active ? "●" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
+            if (!active) {
+              buttons.push([{ label: s.slug, data: `/switch ${s.slug}` }]);
+            }
+          }
+          if (buttons.length > 0) {
+            buttons.push([{ label: "« Back", data: "/sessions" }]);
+            await safeKeyboard(
+              metadata,
+              ["Sessions:", ...lines].join("\n") + "\n\nTap to switch:",
+              buttons,
+            );
+          } else {
+            await safeSend(metadata, ["Sessions:", ...lines].join("\n") + "\n\nOnly the current session exists.");
+          }
           return;
         }
 
-        const buttons: KeyboardLayout = [];
-        const lines: string[] = [];
-        for (const s of recent) {
-          const active = s.id === state.sessionId;
-          const age = formatAge(s.updated_at);
-          const label = active ? `${s.slug} ●` : s.slug;
-          lines.push(`${active ? "●" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
-          if (!active) {
-            buttons.push([{ label, data: `/switch ${s.slug}` }]);
+        // /sessions delete — list sessions to delete
+        if (subCmd === "delete" || subCmd === "del") {
+          const recent = listSessions(10);
+          if (recent.length === 0) {
+            await safeSend(metadata, "No sessions to delete.");
+            return;
           }
+          const buttons: KeyboardLayout = [];
+          const lines: string[] = [];
+          for (const s of recent) {
+            const active = s.id === state.sessionId;
+            const age = formatAge(s.updated_at);
+            lines.push(`${active ? "● current" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
+            if (!active) {
+              buttons.push([{ label: `Delete ${s.slug}`, data: `/sessions rm ${s.slug}` }]);
+            }
+          }
+          if (buttons.length > 0) {
+            buttons.push([{ label: "« Back", data: "/sessions" }]);
+            await safeKeyboard(
+              metadata,
+              ["Sessions:", ...lines].join("\n") + "\n\nTap to delete (cannot delete current):",
+              buttons,
+            );
+          } else {
+            await safeSend(metadata, "Only the current session exists — nothing to delete.");
+          }
+          return;
         }
 
-        if (buttons.length > 0) {
+        // /sessions rm <slug|id> — delete a specific session
+        if (subCmd === "rm" || subCmd === "remove") {
+          const targetSlug = rest[1];
+          if (!targetSlug) {
+            await safeSend(metadata, "Usage: /sessions rm <session-slug>");
+            return;
+          }
+          const target = getSessionBySlug(targetSlug) ?? getSession(targetSlug);
+          if (!target) {
+            await safeSend(metadata, `Session not found: ${targetSlug}`);
+            return;
+          }
+          if (target.id === state.sessionId) {
+            await safeSend(metadata, "Cannot delete the active session. Use /kill to destroy and start fresh.");
+            return;
+          }
+          deleteSession(target.id);
           await safeKeyboard(
             metadata,
-            ["Recent sessions:", ...lines].join("\n") + "\n\nTap to switch:",
-            buttons,
+            `Session deleted: ${target.slug}`,
+            [[{ label: "« Sessions", data: "/sessions" }]],
           );
-        } else {
-          await safeSend(metadata, ["Recent sessions:", ...lines].join("\n"));
+          return;
         }
+
+        // /sessions rename <title> — rename current session
+        if (subCmd === "rename") {
+          const newTitle = rest.slice(1).join(" ").trim();
+          if (!newTitle) {
+            await safeSend(metadata, "Usage: /sessions rename <new title>");
+            return;
+          }
+          updateSession(state.sessionId, { title: newTitle });
+          await safeKeyboard(
+            metadata,
+            `Session renamed: ${newTitle}`,
+            [[{ label: "« Sessions", data: "/sessions" }]],
+          );
+          return;
+        }
+
+        // /sessions — hub menu
+        const currentSession = getSession(state.sessionId);
+        const sessionCount = listSessions(100).length;
+        const sessionTitle = currentSession?.title ?? "Untitled";
+        const sessionAge = currentSession?.updated_at
+          ? formatAge(currentSession.updated_at)
+          : "just now";
+
+        await safeKeyboard(
+          metadata,
+          [
+            `Current: ${currentSession?.slug ?? state.sessionId}`,
+            `Title: ${sessionTitle}`,
+            `Model: ${state.model}`,
+            `Updated: ${sessionAge}`,
+            `Total: ${sessionCount} session(s)`,
+          ].join("\n"),
+          [
+            [
+              { label: "New Session", data: "/new" },
+              { label: "Switch", data: "/sessions switch" },
+            ],
+            [
+              { label: "Delete", data: "/sessions delete" },
+              { label: "Archive", data: "/archive" },
+            ],
+            [
+              { label: "Rename", data: "/sessions rename" },
+              { label: "History", data: "/history" },
+            ],
+          ],
+        );
         return;
       }
 
@@ -597,12 +705,124 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
       case "model":
       case "models": {
+        const modelSubCmd = rest[0]?.toLowerCase();
+
+        // /model list <provider> — show models for a specific provider
+        if (modelSubCmd === "list") {
+          const providerArg = rest[1]?.toLowerCase();
+          if (!providerArg) {
+            // List all providers
+            const drivers = listDrivers();
+            const buttons: KeyboardLayout = [];
+            let row: Array<{ label: string; data?: string }> = [];
+            for (const driver of drivers) {
+              row.push({ label: driver, data: `/model list ${driver}` });
+              if (row.length === 3) {
+                buttons.push(row);
+                row = [];
+              }
+            }
+            if (row.length > 0) buttons.push(row);
+            buttons.push([{ label: "« Model", data: "/model" }]);
+
+            await safeKeyboard(
+              metadata,
+              "Select a provider to see available models:",
+              buttons,
+            );
+            return;
+          }
+
+          // Show models for a specific provider
+          try {
+            getDriver(providerArg);
+          } catch {
+            await safeSend(metadata, `Unknown provider: ${providerArg}\nAvailable: ${listDrivers().join(", ")}`);
+            return;
+          }
+
+          const models = listModels(providerArg);
+          if (models.length === 0) {
+            await safeKeyboard(
+              metadata,
+              `No models found for ${providerArg}.\n\nSwitch directly: /model ${providerArg}:model-name`,
+              [[{ label: "« Providers", data: "/model list" }]],
+            );
+            return;
+          }
+
+          // Show up to 10 models to stay within Telegram limits
+          const displayModels = models.slice(0, 10);
+          const buttons: KeyboardLayout = [];
+          const { backend: currentBackend, model: currentModelId } = parseModelSpec(state.model);
+          for (const m of displayModels) {
+            const spec = `${providerArg}:${m.id}`;
+            const isCurrent =
+              state.model === spec ||
+              (currentBackend === providerArg && resolveModel(currentBackend, currentModelId) === m.id);
+            const cost = m.costInput === 0
+              ? "free"
+              : `$${m.costInput}/$${m.costOutput}`;
+            const label = isCurrent
+              ? `${m.id} ●`
+              : m.id.length > 28 ? m.id.slice(0, 28) + "…" : m.id;
+            buttons.push([{ label, data: `/model ${spec}` }]);
+          }
+
+          const lines = displayModels.map((m) => {
+            const cost = m.costInput === 0 ? "free" : `$${m.costInput}/$${m.costOutput}`;
+            const ctx = `${(m.context / 1000).toFixed(0)}k`;
+            return `${m.id} — ctx=${ctx} tools=${m.toolCall} ${cost}`;
+          });
+
+          if (models.length > 10) {
+            lines.push(`\n... and ${models.length - 10} more. Use /model ${providerArg}:name`);
+          }
+
+          buttons.push([{ label: "« Providers", data: "/model list" }]);
+
+          await safeKeyboard(
+            metadata,
+            [`${providerArg} models:`, "", ...lines].join("\n"),
+            buttons,
+          );
+          return;
+        }
+
+        // /model add — custom provider setup guide
+        if (modelSubCmd === "add" || modelSubCmd === "setup") {
+          await safeKeyboard(
+            metadata,
+            [
+              "Add a custom AI provider:",
+              "",
+              "Option 1 — Environment variable (auto-discovery):",
+              "  Set OPENROUTER_API_KEY, GROQ_API_KEY, etc.",
+              "  Restart daemon. Provider appears automatically.",
+              "",
+              "Option 2 — Config file:",
+              "  ~/.config/jeriko/config.json",
+              '  { "providers": [{ "id": "my-ai",',
+              '    "baseUrl": "https://api.example.com/v1",',
+              '    "apiKey": "{env:MY_API_KEY}",',
+              '    "type": "openai",',
+              '    "defaultModel": "model-name" }] }',
+              "",
+              "Then use: /model my-ai:model-name",
+            ].join("\n"),
+            [[{ label: "« Model", data: "/model" }]],
+          );
+          return;
+        }
+
+        // /model — hub menu (no args)
         if (!arg) {
           const drivers = listDrivers();
+          const { backend: activeBackend } = parseModelSpec(state.model);
           const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data: string }> = [];
+          let row: Array<{ label: string; data?: string }> = [];
           for (const driver of drivers) {
-            const isCurrent = state.model === driver;
+            const isCurrent = state.model === driver || activeBackend === driver;
             const label = isCurrent ? `${driver} ●` : driver;
             row.push({ label, data: `/model ${driver}` });
             if (row.length === 3) {
@@ -611,16 +831,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             }
           }
           if (row.length > 0) buttons.push(row);
+          buttons.push([
+            { label: "Browse Models", data: "/model list" },
+            { label: "Add Provider", data: "/model add" },
+          ]);
 
           await safeKeyboard(
             metadata,
-            `Current: ${describeModel(state.model)}\n\nTap to switch:`,
+            `Current: ${describeModel(state.model)}\n\nTap provider to switch (uses default model):`,
             buttons,
           );
           return;
         }
 
-        // Validate that the driver/provider exists
+        // /model <spec> — validate and switch
         const { backend: argBackend } = parseModelSpec(arg);
         try {
           getDriver(argBackend);
@@ -636,7 +860,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         sessionsByChat.set(chatId, state);
         updateBindingModel(metadata.channel, chatId, arg);
         updateSession(state.sessionId, { model: arg });
-        await safeSend(metadata, `Switched to:\n${describeModel(arg)}`);
+        await safeKeyboard(
+          metadata,
+          `Switched to:\n${describeModel(arg)}`,
+          [[{ label: "« Model", data: "/model" }]],
+        );
         return;
       }
 
@@ -733,10 +961,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // Generate state token and send the login link
+        // Generate state token and send the login link.
+        // Uses the shared URL builder for relay-aware routing.
         const stateToken = generateState(provider.name, chatId, metadata.channel);
-        const baseUrl = process.env.JERIKO_PUBLIC_URL ?? "https://bot.jeriko.ai";
-        const loginUrl = `${baseUrl}/oauth/${provider.name}/start?state=${stateToken}`;
+        const { buildOAuthStartUrl } = await import("../../../shared/urls.js");
+        const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
 
         await safeSend(
           metadata,
@@ -757,7 +986,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
       case "disconnect": {
         const { getConnectorDef, isConnectorConfigured } = await import("../../../shared/connector.js");
-        const { getOAuthProvider } = await import("../oauth/providers.js");
+        const { getOAuthProvider, isOAuthCapable } = await import("../oauth/providers.js");
         const { deleteSecret } = await import("../../../shared/secrets.js");
 
         const connectorName = rest[0]?.toLowerCase();
@@ -805,22 +1034,89 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           if (provider.refreshTokenEnvVar) {
             deleteSecret(provider.refreshTokenEnvVar);
           }
-          await safeSend(metadata, `${def.label} disconnected.`);
         } else {
           // API-key connector — delete all required vars
           const { primaryVarName } = await import("../../../shared/connector.js");
           for (const entry of def.required) {
             deleteSecret(primaryVarName(entry));
           }
-          await safeSend(metadata, `${def.label} disconnected. API key(s) removed.`);
         }
+
+        await safeKeyboard(
+          metadata,
+          `${def.label} disconnected.`,
+          [
+            [
+              { label: `Reconnect`, data: isOAuthCapable(connectorName) ? `/connect ${connectorName}` : `/auth ${connectorName}` },
+              { label: "Connectors", data: "/connectors" },
+            ],
+          ],
+        );
         return;
       }
 
-      case "connectors": {
-        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
-        const { isOAuthCapable } = await import("../oauth/providers.js");
+      case "connectors":
+      case "connector": {
+        const { CONNECTOR_DEFS, getConnectorDef, isConnectorConfigured } = await import("../../../shared/connector.js");
+        const { isOAuthCapable, getOAuthProvider } = await import("../oauth/providers.js");
 
+        const detailName = rest[0]?.toLowerCase();
+
+        // ── Detail view: /connector <name> ──
+        if (detailName) {
+          const def = getConnectorDef(detailName);
+          if (!def) {
+            await safeSend(metadata, `Unknown connector: ${detailName}`);
+            return;
+          }
+
+          const ready = isConnectorConfigured(detailName);
+          const oauth = isOAuthCapable(detailName);
+          const provider = getOAuthProvider(detailName);
+
+          if (ready) {
+            // Connected — show status + actions
+            const buttons: KeyboardLayout = [
+              [
+                { label: "Health Check", data: `/health ${def.name}` },
+                { label: "Disconnect", data: `/disconnect ${def.name}` },
+              ],
+              [{ label: "← Connectors", data: "/connectors" }],
+            ];
+            await safeKeyboard(
+              metadata,
+              `${def.label} — Connected ✓\n${def.description}`,
+              buttons,
+            );
+          } else if (oauth && provider) {
+            // Not connected — OAuth
+            const hasCredentials = !!process.env[provider.clientIdVar];
+            const buttons: KeyboardLayout = hasCredentials
+              ? [
+                  [{ label: `Connect ${def.label}`, data: `/connect ${def.name}` }],
+                  [{ label: "← Connectors", data: "/connectors" }],
+                ]
+              : [[{ label: "← Connectors", data: "/connectors" }]];
+            const status = hasCredentials
+              ? `${def.label} — Not connected\n${def.description}\n\nTap to start OAuth:`
+              : `${def.label} — Not configured\n${def.description}\n\nSet ${provider.clientIdVar} and ${provider.clientSecretVar} first.`;
+            await safeKeyboard(metadata, status, buttons);
+          } else {
+            // Not connected — API key
+            const buttons: KeyboardLayout = [
+              [{ label: `Set API Key`, data: `/auth ${def.name}` }],
+              [{ label: "← Connectors", data: "/connectors" }],
+            ];
+            await safeKeyboard(
+              metadata,
+              `${def.label} — Not connected\n${def.description}\n\nRequires API key:`,
+              buttons,
+            );
+          }
+          return;
+        }
+
+        // ── Grid view: /connectors ──
         let configuredCount = 0;
         const buttons: KeyboardLayout = [];
         let row: Array<{ label: string; data: string }> = [];
@@ -828,15 +1124,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         for (const def of CONNECTOR_DEFS) {
           const ready = isConnectorConfigured(def.name);
           if (ready) configuredCount++;
-          const oauth = isOAuthCapable(def.name);
-          const label = ready ? `${def.label} ✓` : `${def.label}`;
-          const action = ready
-            ? `/health ${def.name}`
-            : oauth
-              ? `/connect ${def.name}`
-              : `/auth ${def.name}`;
-
-          row.push({ label, data: action });
+          const label = ready ? `${def.label} ✓` : def.label;
+          row.push({ label, data: `/connector ${def.name}` });
           if (row.length === 3) {
             buttons.push(row);
             row = [];
@@ -846,7 +1135,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         await safeKeyboard(
           metadata,
-          `Connectors: ${configuredCount}/${CONNECTOR_DEFS.length} connected\n✓ = connected (tap for health check)\nOthers: tap to connect`,
+          `Connectors: ${configuredCount}/${CONNECTOR_DEFS.length} connected\nTap for details:`,
           buttons,
         );
         return;
@@ -1268,20 +1557,196 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
+      case "channel":
       case "channels": {
+        const {
+          CHANNEL_DEFS,
+          getChannelDef,
+          addChannel: addCh,
+          removeChannel: removeCh,
+          renderQRText,
+        } = await import("./lifecycle.js");
+
         const channelList = opts.channels.status();
         const subCommand = rest[0]?.toLowerCase();
         const channelArg = rest[1]?.toLowerCase();
+        const tokens = rest.slice(2);
 
-        // /channels connect <name>
-        if (subCommand === "connect") {
+        // ── /channel add <type> [token(s)] — live add ──────────────
+
+        if (subCommand === "add" || subCommand === "setup") {
+          // /channel add — show available channel types
           if (!channelArg) {
-            await safeSend(metadata, "Usage: /channels connect <channel-name>");
+            const registered = new Set(opts.channels.list());
+            const buttons: KeyboardLayout = [];
+            for (const def of CHANNEL_DEFS) {
+              if (registered.has(def.name)) continue;
+              buttons.push([{ label: def.label, data: `/channel add ${def.name}` }]);
+            }
+            if (buttons.length === 0) {
+              await safeKeyboard(
+                metadata,
+                "All supported channels are already registered.",
+                [[{ label: "← Channels", data: "/channels" }]],
+              );
+              return;
+            }
+            buttons.push([{ label: "← Channels", data: "/channels" }]);
+            await safeKeyboard(metadata, "Add a channel — tap to set up:", buttons);
+            return;
+          }
+
+          // /channel add <type> — validate type
+          const def = getChannelDef(channelArg);
+          if (!def) {
+            const available = CHANNEL_DEFS.map((d) => d.name).join(", ");
+            await safeSend(metadata, `Unknown channel: ${channelArg}\nAvailable: ${available}`);
+            return;
+          }
+
+          // Already registered?
+          if (opts.channels.get(channelArg)) {
+            await safeKeyboard(
+              metadata,
+              `${def.label} is already registered.`,
+              [
+                [
+                  { label: "Reconnect", data: `/channel reconnect ${def.name}` },
+                  { label: "Remove", data: `/channel remove ${def.name}` },
+                ],
+                [{ label: "← Channels", data: "/channels" }],
+              ],
+            );
+            return;
+          }
+
+          // Token required but not provided — show setup guide
+          if (def.requiresToken && tokens.length < def.tokenCount) {
+            await safeKeyboard(
+              metadata,
+              `${def.label} Setup:\n${def.setupGuide.join("\n")}`,
+              [[{ label: "← Channels", data: "/channels" }]],
+            );
+            return;
+          }
+
+          // Build config from tokens
+          let channelConfig: Record<string, unknown> | undefined;
+          if (channelArg === "telegram") {
+            channelConfig = { token: tokens[0] };
+          } else if (channelArg === "discord") {
+            channelConfig = { token: tokens[0] };
+          } else if (channelArg === "slack") {
+            channelConfig = { botToken: tokens[0], appToken: tokens[1] };
+          } else if (channelArg === "whatsapp") {
+            channelConfig = { enabled: true };
+          }
+
+          // Delete the user's message — it contains sensitive tokens
+          if (def.requiresToken && metadata.message_id) {
+            await opts.channels.deleteMessage(
+              metadata.channel,
+              metadata.chat_id,
+              metadata.message_id,
+            );
+          }
+
+          // Add the channel live — WhatsApp gets a QR callback so the
+          // requesting channel receives the QR code directly in chat.
+          try {
+            let qrSent = false;
+            const onQR = channelArg === "whatsapp"
+              ? async (qr: string) => {
+                  const text = await renderQRText(qr);
+                  if (text) {
+                    await safeSend(metadata, `Scan this QR code with WhatsApp:\n\n${text}`);
+                    qrSent = true;
+                  }
+                }
+              : undefined;
+
+            if (channelArg === "whatsapp" && !qrSent) {
+              await safeSend(metadata, "Connecting WhatsApp — QR code will appear shortly...");
+            }
+
+            await addCh(opts.channels, channelArg, channelConfig, onQR ? { onQR } : undefined);
+
+            await safeKeyboard(
+              metadata,
+              `${def.label} added and connected.`,
+              [[{ label: "← Channels", data: "/channels" }]],
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeKeyboard(
+              metadata,
+              `Failed to add ${def.label}: ${msg}`,
+              [[{ label: "← Channels", data: "/channels" }]],
+            );
+          }
+          return;
+        }
+
+        // ── /channel remove <name> — live remove ─────────────────
+
+        if (subCommand === "remove" || subCommand === "rm") {
+          if (!channelArg) {
+            // Show removable channels as buttons
+            const removable = channelList.filter((ch) => ch.name !== metadata.channel);
+            if (removable.length === 0) {
+              await safeKeyboard(
+                metadata,
+                "No channels to remove (can't remove the one you're using).",
+                [[{ label: "← Channels", data: "/channels" }]],
+              );
+              return;
+            }
+            const buttons: KeyboardLayout = removable.map((ch) => [
+              { label: ch.name, data: `/channel remove ${ch.name}` },
+            ]);
+            buttons.push([{ label: "← Channels", data: "/channels" }]);
+            await safeKeyboard(metadata, "Remove a channel:", buttons);
+            return;
+          }
+
+          if (channelArg === metadata.channel) {
+            await safeSend(metadata, `Cannot remove ${channelArg} — you're using it right now.`);
+            return;
+          }
+
+          try {
+            await removeCh(opts.channels, channelArg);
+            await safeKeyboard(
+              metadata,
+              `${channelArg} removed.`,
+              [
+                [
+                  { label: "Re-add", data: `/channel add ${channelArg}` },
+                  { label: "← Channels", data: "/channels" },
+                ],
+              ],
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to remove ${channelArg}: ${msg}`);
+          }
+          return;
+        }
+
+        // ── /channel connect <name> — reconnect existing ─────────
+
+        if (subCommand === "connect" || subCommand === "reconnect") {
+          if (!channelArg) {
+            await safeSend(metadata, "Usage: /channel connect <name>");
             return;
           }
           try {
             await opts.channels.connect(channelArg);
-            await safeSend(metadata, `Channel connected: ${channelArg}`);
+            await safeKeyboard(
+              metadata,
+              `${channelArg} connected.`,
+              [[{ label: "← Channels", data: "/channels" }]],
+            );
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             await safeSend(metadata, `Failed to connect ${channelArg}: ${msg}`);
@@ -1289,20 +1754,30 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /channels disconnect <name>
+        // ── /channel disconnect <name> — pause without removing ──
+
         if (subCommand === "disconnect") {
           if (!channelArg) {
-            await safeSend(metadata, "Usage: /channels disconnect <channel-name>");
+            await safeSend(metadata, "Usage: /channel disconnect <name>");
             return;
           }
-          // Prevent disconnecting the channel you're currently on
           if (channelArg === metadata.channel) {
             await safeSend(metadata, `Cannot disconnect ${channelArg} — you're using it right now.`);
             return;
           }
           try {
             await opts.channels.disconnect(channelArg);
-            await safeSend(metadata, `Channel disconnected: ${channelArg}`);
+            await safeKeyboard(
+              metadata,
+              `${channelArg} disconnected.`,
+              [
+                [
+                  { label: "Reconnect", data: `/channel connect ${channelArg}` },
+                  { label: "Remove", data: `/channel remove ${channelArg}` },
+                ],
+                [{ label: "← Channels", data: "/channels" }],
+              ],
+            );
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             await safeSend(metadata, `Failed to disconnect ${channelArg}: ${msg}`);
@@ -1310,36 +1785,98 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /channels or /channels list — show all with action buttons
-        if (channelList.length === 0) {
-          await safeSend(metadata, "No messaging channels registered.\nConfigure channels in ~/.config/jeriko/config.json and restart the daemon.");
+        // ── /channel <name> — detail view for a specific channel ──
+
+        if (subCommand && !["list", "add", "setup", "remove", "rm", "connect", "reconnect", "disconnect"].includes(subCommand)) {
+          const chName = subCommand;
+          const def = getChannelDef(chName);
+          const registered = opts.channels.get(chName);
+          const status = opts.channels.statusOf(chName);
+
+          if (!def && !registered) {
+            await safeSend(metadata, `Unknown channel: ${chName}`);
+            return;
+          }
+
+          if (registered && status) {
+            // Registered — show status + actions
+            const icon = status.status === "connected" ? "●" : status.status === "failed" ? "✗" : "○";
+            const buttons: KeyboardLayout = [];
+
+            if (status.status === "connected" && chName !== metadata.channel) {
+              buttons.push([
+                { label: "Disconnect", data: `/channel disconnect ${chName}` },
+                { label: "Remove", data: `/channel remove ${chName}` },
+              ]);
+            } else if (status.status !== "connected") {
+              buttons.push([
+                { label: "Connect", data: `/channel connect ${chName}` },
+                { label: "Remove", data: `/channel remove ${chName}` },
+              ]);
+            }
+            buttons.push([{ label: "← Channels", data: "/channels" }]);
+
+            const extra = status.connected_at
+              ? `\nConnected since ${formatAge(new Date(status.connected_at).getTime())}`
+              : "";
+            const errMsg = status.error ? `\nError: ${status.error}` : "";
+
+            await safeKeyboard(
+              metadata,
+              `${icon} ${def?.label ?? chName} — ${status.status}${extra}${errMsg}`,
+              buttons,
+            );
+          } else if (def) {
+            // Not registered — offer to add
+            await safeKeyboard(
+              metadata,
+              `${def.label} — Not registered\n\n${def.setupGuide.join("\n")}`,
+              [
+                def.requiresToken
+                  ? [{ label: "← Channels", data: "/channels" }]
+                  : [
+                      { label: `Add ${def.label}`, data: `/channel add ${chName}` },
+                      { label: "← Channels", data: "/channels" },
+                    ],
+              ],
+            );
+          }
           return;
         }
 
-        const channelButtons: KeyboardLayout = [];
-        const channelLines: string[] = [];
-        for (const ch of channelList) {
-          const icon = ch.status === "connected" ? "●" : ch.status === "failed" ? "✗" : "○";
-          const extra = ch.connected_at ? ` — since ${formatAge(new Date(ch.connected_at).getTime())}` : "";
-          const errMsg = ch.error ? ` (${ch.error})` : "";
-          channelLines.push(`${icon} ${ch.name} — ${ch.status}${extra}${errMsg}`);
+        // ── /channels or /channels list — hub menu ───────────────
+        // Shows ALL supported channel types with their current status.
+        // Registered channels show connected/disconnected/failed.
+        // Unregistered channels show "Not added" with a button to add.
 
-          // Don't show disconnect button for the channel the user is on
-          if (ch.status === "connected" && ch.name !== metadata.channel) {
-            channelButtons.push([{ label: `Disconnect ${ch.name}`, data: `/channels disconnect ${ch.name}` }]);
-          } else if (ch.status !== "connected") {
-            channelButtons.push([{ label: `Connect ${ch.name}`, data: `/channels connect ${ch.name}` }]);
+        const registered = new Map(channelList.map((ch) => [ch.name, ch]));
+        const buttons: KeyboardLayout = [];
+        const lines: string[] = [];
+        let connectedCount = 0;
+
+        for (const def of CHANNEL_DEFS) {
+          const ch = registered.get(def.name);
+          if (ch) {
+            const icon = ch.status === "connected" ? "●" : ch.status === "failed" ? "✗" : "○";
+            const current = ch.name === metadata.channel ? " (you)" : "";
+            if (ch.status === "connected") connectedCount++;
+            lines.push(`${icon} ${def.label} — ${ch.status}${current}`);
+            buttons.push([{ label: `${def.label}${current}`, data: `/channel ${def.name}` }]);
+          } else {
+            lines.push(`  ${def.label} — not added`);
+            buttons.push([{ label: `+ ${def.label}`, data: `/channel add ${def.name}` }]);
           }
         }
 
-        const connected = channelList.filter((c) => c.status === "connected").length;
-        const header = `Channels: ${connected}/${channelList.length} connected\n● = connected, ○ = disconnected, ✗ = failed\n\n${channelLines.join("\n")}`;
-
-        if (channelButtons.length > 0) {
-          await safeKeyboard(metadata, header, channelButtons);
-        } else {
-          await safeSend(metadata, header);
-        }
+        await safeKeyboard(
+          metadata,
+          [
+            `Channels: ${connectedCount}/${CHANNEL_DEFS.length} active`,
+            "",
+            ...lines,
+          ].join("\n"),
+          buttons,
+        );
         return;
       }
 
@@ -1597,6 +2134,692 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
+      // ── Billing commands ───────────────────────────────────────────
+
+      case "plan": {
+        const { isBillingConfigured } = await import("../../billing/stripe.js");
+        if (!isBillingConfigured()) {
+          await safeSend(metadata, "Billing is not configured on this instance.");
+          return;
+        }
+
+        const { getLicenseState } = await import("../../billing/license.js");
+        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
+
+        const licState = getLicenseState();
+        const connectorCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+        const triggerEngine = opts.getTriggerEngine?.();
+        const triggerCount = triggerEngine?.listAll().filter((t) => t.enabled).length ?? 0;
+
+        const triggerLimitDisplay = licState.triggerLimit === Infinity ? "∞" : String(licState.triggerLimit);
+
+        const lines: string[] = [
+          `Plan: ${licState.label}`,
+          `Status: ${licState.status}`,
+          "",
+          `Connectors: ${connectorCount}/${licState.connectorLimit}`,
+          `Triggers: ${triggerCount}/${triggerLimitDisplay}`,
+        ];
+
+        if (licState.pastDue) {
+          lines.push("", "⚠ Payment past due — update your payment method to avoid downgrade.");
+        }
+        if (licState.gracePeriod && !licState.pastDue) {
+          lines.push("", "Offline grace period active.");
+        }
+
+        const buttons: KeyboardLayout = [];
+        if (licState.tier === "free") {
+          buttons.push([
+            { label: "Upgrade to Pro", data: "/upgrade" },
+          ]);
+        } else {
+          buttons.push([
+            { label: "Manage Portal", data: "/billing portal" },
+            { label: "Cancel", data: "/cancel" },
+          ]);
+        }
+        buttons.push([{ label: "« Billing", data: "/billing" }]);
+
+        await safeKeyboard(metadata, lines.join("\n"), buttons);
+        return;
+      }
+
+      case "upgrade": {
+        const { isBillingConfigured, createCheckoutSession } = await import("../../billing/stripe.js");
+        if (!isBillingConfigured()) {
+          await safeSend(metadata, "Billing is not configured on this instance.");
+          return;
+        }
+
+        const { getLicenseState } = await import("../../billing/license.js");
+        const { TIER_LIMITS, PRO_PRICE_DISPLAY } = await import("../../billing/config.js");
+        const licState = getLicenseState();
+
+        if (licState.tier !== "free") {
+          await safeKeyboard(
+            metadata,
+            `You're already on the ${licState.label} plan.`,
+            [[{ label: "« Billing", data: "/billing" }]],
+          );
+          return;
+        }
+
+        const email = arg?.trim();
+        if (!email) {
+          const freeLimits = TIER_LIMITS.free;
+          const proLimits = TIER_LIMITS.pro;
+          const proTriggers = proLimits.triggers === Infinity ? "unlimited" : String(proLimits.triggers);
+
+          await safeKeyboard(
+            metadata,
+            [
+              `${freeLimits.label} (current): ${freeLimits.connectors} connectors, ${freeLimits.triggers} triggers`,
+              `${proLimits.label}: ${proLimits.connectors} connectors, ${proTriggers} triggers — ${PRO_PRICE_DISPLAY}`,
+              "",
+              "Usage: /upgrade your@email.com",
+            ].join("\n"),
+            [
+              [{ label: "View Plan", data: "/plan" }],
+              [{ label: "« Billing", data: "/billing" }],
+            ],
+          );
+          return;
+        }
+
+        // Basic email validation
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+          await safeSend(metadata, "Invalid email address. Usage: /upgrade your@email.com");
+          return;
+        }
+
+        try {
+          const { url } = await createCheckoutSession(email, true);
+          await safeKeyboard(
+            metadata,
+            `Checkout ready for ${email}.\nComplete your upgrade:`,
+            [[{ label: "Open Checkout", url }]],
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await safeSend(metadata, `Checkout failed: ${msg}`);
+        }
+        return;
+      }
+
+      case "billing": {
+        const { isBillingConfigured, createPortalSession } = await import("../../billing/stripe.js");
+        if (!isBillingConfigured()) {
+          await safeSend(metadata, "Billing is not configured on this instance.");
+          return;
+        }
+
+        const subCommand = rest[0]?.toLowerCase();
+
+        // /billing events — show recent billing event log
+        if (subCommand === "events") {
+          const { getRecentEvents } = await import("../../billing/store.js");
+          const events = getRecentEvents(10);
+
+          if (events.length === 0) {
+            await safeKeyboard(
+              metadata,
+              "No billing events recorded.",
+              [[{ label: "« Billing", data: "/billing" }]],
+            );
+            return;
+          }
+
+          const lines = events.map((e) => {
+            const when = formatAge(toMs(e.processed_at));
+            return `${e.type} — ${when}`;
+          });
+
+          await safeKeyboard(
+            metadata,
+            [`Recent billing events:`, "", ...lines].join("\n"),
+            [
+              [{ label: "View Plan", data: "/plan" }],
+              [{ label: "« Billing", data: "/billing" }],
+            ],
+          );
+          return;
+        }
+
+        // /billing portal — open Stripe Customer Portal
+        if (subCommand === "portal") {
+          const { getSubscription } = await import("../../billing/store.js");
+          const subscription = getSubscription();
+
+          if (!subscription) {
+            await safeKeyboard(
+              metadata,
+              "No active subscription.\nUpgrade to Pro to access the billing portal.",
+              [
+                [{ label: "Upgrade", data: "/upgrade" }],
+                [{ label: "« Billing", data: "/billing" }],
+              ],
+            );
+            return;
+          }
+
+          try {
+            const { url } = await createPortalSession(subscription.customer_id);
+            await safeKeyboard(
+              metadata,
+              "Manage your subscription, payment method, and invoices:",
+              [
+                [{ label: "Open Billing Portal", url }],
+                [{ label: "« Billing", data: "/billing" }],
+              ],
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to open billing portal: ${msg}`);
+          }
+          return;
+        }
+
+        // /billing — hub menu
+        const { getLicenseState } = await import("../../billing/license.js");
+        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
+
+        const licState = getLicenseState();
+        const connectorCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+        const triggerEngine = opts.getTriggerEngine?.();
+        const triggerCount = triggerEngine?.listAll().filter((t) => t.enabled).length ?? 0;
+        const triggerLimitDisplay = licState.triggerLimit === Infinity ? "∞" : String(licState.triggerLimit);
+
+        const planLines = [
+          `Plan: ${licState.label}`,
+          `Status: ${licState.status}`,
+          `Connectors: ${connectorCount}/${licState.connectorLimit}`,
+          `Triggers: ${triggerCount}/${triggerLimitDisplay}`,
+        ];
+
+        if (licState.pastDue) {
+          planLines.push("", "⚠ Payment past due.");
+        }
+
+        const buttons: KeyboardLayout = [
+          [{ label: "View Plan", data: "/plan" }],
+        ];
+
+        if (licState.tier === "free") {
+          buttons.push([{ label: "Upgrade to Pro", data: "/upgrade" }]);
+        } else {
+          buttons.push([
+            { label: "Manage Portal", data: "/billing portal" },
+            { label: "Events", data: "/billing events" },
+          ]);
+          buttons.push([{ label: "Cancel", data: "/cancel" }]);
+        }
+
+        await safeKeyboard(metadata, planLines.join("\n"), buttons);
+        return;
+      }
+
+      case "cancel": {
+        const { isBillingConfigured, cancelSubscription } = await import("../../billing/stripe.js");
+        if (!isBillingConfigured()) {
+          await safeSend(metadata, "Billing is not configured on this instance.");
+          return;
+        }
+
+        const { getLicenseState } = await import("../../billing/license.js");
+        const { getSubscription } = await import("../../billing/store.js");
+
+        const licState = getLicenseState();
+        const subscription = getSubscription();
+
+        if (!subscription || licState.tier === "free") {
+          await safeSend(metadata, "No active subscription to cancel.");
+          return;
+        }
+
+        const periodEnd = subscription.current_period_end
+          ? new Date(toMs(subscription.current_period_end)).toLocaleDateString()
+          : "end of billing period";
+
+        if (subscription.cancel_at_period_end) {
+          await safeSend(metadata, `Subscription is already set to cancel on ${periodEnd}.`);
+          return;
+        }
+
+        const confirmArg = rest[0]?.toLowerCase();
+        if (confirmArg !== "confirm") {
+
+          await safeKeyboard(
+            metadata,
+            [
+              `Cancel your ${licState.label} subscription?`,
+              "",
+              `You'll keep access until ${periodEnd}.`,
+              "After that, your plan reverts to Community (free).",
+            ].join("\n"),
+            [
+              [
+                { label: "Yes, Cancel", data: "/cancel confirm" },
+                { label: "Keep Subscription", data: "/billing" },
+              ],
+            ],
+          );
+          return;
+        }
+
+        try {
+          const { cancelAt } = await cancelSubscription(subscription.id);
+          const endDisplay = cancelAt
+            ? new Date(toMs(cancelAt)).toLocaleDateString()
+            : "end of billing period";
+
+          await safeKeyboard(
+            metadata,
+            `Subscription canceled. You keep ${licState.label} access until ${endDisplay}.`,
+            [[{ label: "« Billing", data: "/billing" }]],
+          );
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          await safeSend(metadata, `Cancel failed: ${msg}`);
+        }
+        return;
+      }
+
+      // ── Provider management ─────────────────────────────────────────
+
+      case "provider":
+      case "providers": {
+        const { loadConfig, getConfigDir } = await import("../../../shared/config.js");
+        const { readFileSync: readFs, writeFileSync: writeFs, existsSync: fileExists } = await import("node:fs");
+        const { join: pathJoin } = await import("node:path");
+
+        const subCommand = rest[0]?.toLowerCase();
+
+        // /provider add — preset-aware provider addition
+        //
+        // Supports three flows:
+        //   1. /provider add              → show preset picker (buttons)
+        //   2. /provider add <preset-id>  → auto-add if env set, else ask for key
+        //   3. /provider add <id> <key>   → add preset with API key
+        //   4. /provider add <id> <url> <key> → manual add (original flow)
+        if (subCommand === "add") {
+          const { PROVIDER_PRESETS, getPreset } = await import("../../agent/drivers/presets.js");
+          const providerId = rest[1]?.toLowerCase();
+
+          // Flow 1: No args → show available presets as buttons
+          if (!providerId) {
+            const config = loadConfig();
+            const configuredIds = new Set([
+              ...listDrivers(),
+              ...(config.providers ?? []).map((p) => p.id),
+            ]);
+
+            const presetLines: string[] = [];
+            const presetButtons: KeyboardLayout = [];
+
+            for (const preset of PROVIDER_PRESETS) {
+              if (configuredIds.has(preset.id)) continue;
+              const hasKey = !!(
+                process.env[preset.envKey] ??
+                (preset.envKeyAlt ? process.env[preset.envKeyAlt] : undefined)
+              );
+              const status = hasKey ? "●" : "○";
+              const envHint = hasKey ? ` ✓ ${preset.envKey}` : "";
+              const modelHint = preset.defaultModel ? ` — ${preset.defaultModel}` : "";
+              presetLines.push(`  ${status} ${preset.name}${modelHint}${envHint}`);
+              presetButtons.push([
+                { label: preset.name, data: `/provider add ${preset.id}` },
+              ]);
+            }
+
+            if (presetLines.length === 0) {
+              await safeSend(metadata, "All known providers are already configured.");
+              return;
+            }
+
+            presetButtons.push([{ label: "« Providers", data: "/providers" }]);
+
+            await safeKeyboard(
+              metadata,
+              ["Add a Provider:", "", ...presetLines, "", "Tap to add:"].join("\n"),
+              presetButtons,
+            );
+            return;
+          }
+
+          const providerUrl = rest[2];
+          const providerKey = rest[3];
+
+          // Check if this is a known preset
+          const preset = getPreset(providerId);
+
+          // Flow 2: /provider add <preset-id> — preset with no key
+          if (preset && !providerUrl && !providerKey) {
+            const hasKey = !!(
+              process.env[preset.envKey] ??
+              (preset.envKeyAlt ? process.env[preset.envKeyAlt] : undefined)
+            );
+
+            if (hasKey) {
+              // Env var set → auto-configure from preset
+              try {
+                const configDir = getConfigDir();
+                const configPath = pathJoin(configDir, "config.json");
+                let fileConfig: Record<string, unknown> = {};
+                if (fileExists(configPath)) {
+                  fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+                }
+
+                const providers = (fileConfig.providers as Array<Record<string, unknown>>) ?? [];
+                if (providers.some((p) => p.id === preset.id)) {
+                  await safeSend(metadata, `Provider "${preset.name}" already exists.`);
+                  return;
+                }
+
+                providers.push({
+                  id: preset.id,
+                  name: preset.name,
+                  baseUrl: preset.baseUrl,
+                  apiKey: `{env:${preset.envKey}}`,
+                  type: "openai-compatible",
+                  ...(preset.defaultModel ? { defaultModel: preset.defaultModel } : {}),
+                });
+                fileConfig.providers = providers;
+                writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+                const modelHint = preset.defaultModel
+                  ? `\n\nUse: /model ${preset.id}:${preset.defaultModel}`
+                  : "";
+
+                await safeKeyboard(
+                  metadata,
+                  `✓ ${preset.name} added (${preset.envKey} detected)${modelHint}`,
+                  [[{ label: "« Providers", data: "/providers" }]],
+                );
+              } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                await safeSend(metadata, `Failed to add provider: ${msg}`);
+              }
+              return;
+            }
+
+            // Env var not set → ask for API key
+            await safeSend(
+              metadata,
+              `${preset.name} — API key required.\n\nSend:\n/provider add ${preset.id} <your-api-key>\n\nOr set ${preset.envKey} in your environment.`,
+            );
+            return;
+          }
+
+          // Flow 3: /provider add <preset-id> <key> — preset with API key (no URL)
+          if (preset && providerUrl && !providerKey) {
+            // providerUrl is actually the API key here (2nd arg after preset ID)
+            const apiKey = providerUrl;
+            try {
+              const configDir = getConfigDir();
+              const configPath = pathJoin(configDir, "config.json");
+              let fileConfig: Record<string, unknown> = {};
+              if (fileExists(configPath)) {
+                fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+              }
+
+              const providers = (fileConfig.providers as Array<Record<string, unknown>>) ?? [];
+              if (providers.some((p) => p.id === preset.id)) {
+                await safeSend(metadata, `Provider "${preset.name}" already exists.`);
+                return;
+              }
+
+              providers.push({
+                id: preset.id,
+                name: preset.name,
+                baseUrl: preset.baseUrl,
+                apiKey: `{env:${preset.envKey}}`,
+                type: "openai-compatible",
+                ...(preset.defaultModel ? { defaultModel: preset.defaultModel } : {}),
+              });
+              fileConfig.providers = providers;
+              writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+              // Save the actual API key to secrets
+              const { saveSecret } = await import("../../../shared/secrets.js");
+              saveSecret(preset.envKey, apiKey);
+
+              // Delete the user message containing the API key (security)
+              if (metadata.message_id) {
+                await opts.channels.deleteMessage(metadata.channel, metadata.chat_id, metadata.message_id);
+              }
+
+              const modelHint = preset.defaultModel
+                ? `\n\nUse: /model ${preset.id}:${preset.defaultModel}`
+                : "";
+
+              await safeKeyboard(
+                metadata,
+                `✓ ${preset.name} added${modelHint}`,
+                [[{ label: "« Providers", data: "/providers" }]],
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              await safeSend(metadata, `Failed to add provider: ${msg}`);
+            }
+            return;
+          }
+
+          // Flow 4: /provider add <id> <base-url> <api-key> — manual add
+          if (!providerUrl || !providerKey) {
+            await safeSend(
+              metadata,
+              `Usage: /provider add <id> <base-url> <api-key>\n\nOr tap a preset: /provider add`,
+            );
+            return;
+          }
+
+          try {
+            const configDir = getConfigDir();
+            const configPath = pathJoin(configDir, "config.json");
+            let fileConfig: Record<string, unknown> = {};
+            if (fileExists(configPath)) {
+              fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+            }
+
+            const providers = (fileConfig.providers as Array<Record<string, unknown>>) ?? [];
+            if (providers.some((p) => p.id === providerId)) {
+              await safeSend(metadata, `Provider "${providerId}" already exists.`);
+              return;
+            }
+
+            const displayName = providerId.charAt(0).toUpperCase() + providerId.slice(1);
+            providers.push({
+              id: providerId,
+              name: displayName,
+              baseUrl: providerUrl,
+              apiKey: `{env:${providerId.toUpperCase()}_API_KEY}`,
+              type: "openai-compatible",
+            });
+            fileConfig.providers = providers;
+            writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+            // Save the actual API key to secrets
+            const { saveSecret } = await import("../../../shared/secrets.js");
+            saveSecret(`${providerId.toUpperCase()}_API_KEY`, providerKey);
+
+            // Delete the user message containing the API key (security)
+            if (metadata.message_id) {
+              await opts.channels.deleteMessage(metadata.channel, metadata.chat_id, metadata.message_id);
+            }
+
+            await safeKeyboard(
+              metadata,
+              `Provider added: ${displayName}\nURL: ${providerUrl}\n\nUse: /model ${providerId}:model-name`,
+              [[{ label: "« Providers", data: "/providers" }]],
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to add provider: ${msg}`);
+          }
+          return;
+        }
+
+        // /provider remove <id>
+        if (subCommand === "remove" || subCommand === "rm") {
+          const removeId = rest[1]?.toLowerCase();
+          if (!removeId) {
+            await safeSend(metadata, "Usage: /provider remove <id>");
+            return;
+          }
+
+          try {
+            const configDir = getConfigDir();
+            const configPath = pathJoin(configDir, "config.json");
+            if (!fileExists(configPath)) {
+              await safeSend(metadata, `Provider "${removeId}" not found.`);
+              return;
+            }
+
+            const fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+            const providers = (fileConfig.providers as Array<Record<string, unknown>>) ?? [];
+            const idx = providers.findIndex((p) => p.id === removeId);
+            if (idx === -1) {
+              await safeSend(metadata, `Provider "${removeId}" not found.`);
+              return;
+            }
+
+            providers.splice(idx, 1);
+            fileConfig.providers = providers;
+            writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+            await safeKeyboard(
+              metadata,
+              `Provider removed: ${removeId}`,
+              [[{ label: "« Providers", data: "/providers" }]],
+            );
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to remove provider: ${msg}`);
+          }
+          return;
+        }
+
+        // /providers or /provider list — show all providers + presets
+        const config = loadConfig();
+        const drivers = listDrivers();
+        const { PROVIDER_PRESETS: allPresets } = await import("../../agent/drivers/presets.js");
+
+        const lines: string[] = [];
+        const buttons: KeyboardLayout = [];
+        const configuredIds = new Set([
+          ...drivers,
+          ...(config.providers ?? []).map((p) => p.id),
+        ]);
+
+        // Built-in drivers
+        lines.push("Built-in:");
+        for (const driver of drivers) {
+          const isCurrent = state.model.startsWith(driver);
+          lines.push(`  ${isCurrent ? "●" : "○"} ${driver}`);
+        }
+
+        // Custom providers from config
+        const customProviders = config.providers ?? [];
+        if (customProviders.length > 0) {
+          lines.push("");
+          lines.push("Custom:");
+          for (const p of customProviders) {
+            lines.push(`  ○ ${p.name ?? p.id} — ${p.baseUrl}`);
+            buttons.push([
+              { label: `Use ${p.id}`, data: `/model ${p.id}` },
+              { label: `Remove ${p.id}`, data: `/provider remove ${p.id}` },
+            ]);
+          }
+        }
+
+        // Discovered presets (env var set, not yet configured)
+        const discoveredPresets = allPresets.filter((preset) => {
+          if (configuredIds.has(preset.id)) return false;
+          return !!(
+            process.env[preset.envKey] ??
+            (preset.envKeyAlt ? process.env[preset.envKeyAlt] : undefined)
+          );
+        });
+
+        if (discoveredPresets.length > 0) {
+          lines.push("");
+          lines.push("Discovered (API key detected):");
+          for (const preset of discoveredPresets) {
+            const modelHint = preset.defaultModel ? ` — ${preset.defaultModel}` : "";
+            lines.push(`  ✓ ${preset.name}${modelHint}`);
+            buttons.push([
+              { label: `Add ${preset.name}`, data: `/provider add ${preset.id}` },
+            ]);
+          }
+        }
+
+        buttons.push([
+          { label: "Add Provider", data: "/provider add" },
+          { label: "Browse Models", data: "/model list" },
+        ]);
+
+        const totalCount = drivers.length + customProviders.length + discoveredPresets.length;
+        await safeKeyboard(
+          metadata,
+          [`Providers (${totalCount} active, ${allPresets.length} presets available):`, "", ...lines].join("\n"),
+          buttons,
+        );
+        return;
+      }
+
+      // ── Configuration display ─────────────────────────────────────────
+
+      case "config": {
+        const { loadConfig } = await import("../../../shared/config.js");
+        const config = loadConfig();
+
+        const lines: string[] = [];
+        lines.push("Configuration:");
+        lines.push("");
+
+        // Agent
+        lines.push(`Model: ${config.agent.model}`);
+        lines.push(`Max Tokens: ${config.agent.maxTokens}`);
+        lines.push(`Temperature: ${config.agent.temperature}`);
+        lines.push(`Extended Thinking: ${config.agent.extendedThinking}`);
+
+        // Channels
+        const channelNames = Object.keys(config.channels ?? {});
+        if (channelNames.length > 0) {
+          lines.push("");
+          lines.push(`Channels: ${channelNames.join(", ")}`);
+        }
+
+        // Connectors
+        const connectorNames = Object.keys(config.connectors ?? {});
+        if (connectorNames.length > 0) {
+          lines.push(`Connectors: ${connectorNames.join(", ")}`);
+        }
+
+        // Providers
+        const providerCount = config.providers?.length ?? 0;
+        if (providerCount > 0) {
+          lines.push(`Custom Providers: ${providerCount}`);
+        }
+
+        await safeKeyboard(
+          metadata,
+          lines.join("\n"),
+          [
+            [
+              { label: "Model", data: "/model" },
+              { label: "Providers", data: "/providers" },
+            ],
+            [
+              { label: "Connectors", data: "/connectors" },
+              { label: "Channels", data: "/channels" },
+            ],
+          ],
+        );
+        return;
+      }
+
       default:
         await safeSend(metadata, `Unknown: /${command}\nUse /help`);
     }
@@ -1742,6 +2965,11 @@ async function checkConnectorHealth(name: string): Promise<{ healthy: boolean; l
 // ---------------------------------------------------------------------------
 // Utility helpers
 // ---------------------------------------------------------------------------
+
+/** Normalize a timestamp that may be in seconds or milliseconds to ms. */
+function toMs(ts: number): number {
+  return ts < 1e12 ? ts * 1000 : ts;
+}
 
 function formatAge(timestampMs: number): string {
   const diffMs = Date.now() - timestampMs;

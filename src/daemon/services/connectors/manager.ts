@@ -293,6 +293,26 @@ export class ConnectorManager {
   }
 
   /**
+   * Evict a single connector from the cache and shut it down.
+   * Used when a connector is disconnected (credentials deleted).
+   * The connector can be re-initialized on the next get() call if
+   * credentials are reconfigured.
+   */
+  async evict(name: string): Promise<void> {
+    const connector = this.instances.get(name);
+    if (connector) {
+      try {
+        await connector.shutdown();
+        log.info(`ConnectorManager: evicted "${name}"`);
+      } catch (err) {
+        log.warn(`ConnectorManager: "${name}" shutdown error during evict: ${err}`);
+      }
+      this.instances.delete(name);
+    }
+    this.healthCache.delete(name);
+  }
+
+  /**
    * Number of currently active (cached) connector instances.
    */
   get activeCount(): number {

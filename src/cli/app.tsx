@@ -36,13 +36,28 @@ import {
   formatStatus,
   formatSysInfo,
   formatConfig,
+  formatConfigStructured,
   formatHistory,
   formatHealth,
   formatError,
+  formatChannelHelp,
+  formatChannelSetupHint,
+  formatProviderList,
+  formatProviderAdded,
+  formatProviderRemoved,
+  formatPlan,
+  formatSessionCost,
+  formatSessionDetail,
+  formatShareCreated,
+  formatShareList,
+  formatTaskList,
+  formatNotificationList,
+  formatAuthStatus,
+  formatAuthDetail,
   safeParseJson,
 } from "./format.js";
 import { t } from "./theme.js";
-import type { Phase, DisplayToolCall } from "./types.js";
+import type { Phase, DisplayToolCall, ProviderInfo } from "./types.js";
 import type { ProviderOption } from "./lib/setup.js";
 import { useAppState } from "./hooks/useAppReducer.js";
 
@@ -50,6 +65,7 @@ import { Messages, StreamingText } from "./components/Messages.js";
 import { Input } from "./components/Input.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { Setup } from "./components/Setup.js";
+import { ProviderPicker, type PickerResult } from "./components/ProviderPicker.js";
 import { ToolCallView } from "./components/ToolCall.js";
 import { SubAgentView, SubAgentList } from "./components/SubAgent.js";
 import { useSubAgents } from "./hooks/useSubAgents.js";
@@ -82,6 +98,7 @@ export const App: React.FC<AppProps> = ({
   // Refs for mutable state used in callbacks
   const turnStartRef = useRef(0);
   const hasThinkingRef = useRef(false);
+  const pickerProvidersRef = useRef<ProviderInfo[]>([]);
 
   // ----- Helpers -----
 
@@ -112,6 +129,16 @@ export const App: React.FC<AppProps> = ({
           dispatch({ type: "RESET_STATS" });
           dispatch({ type: "SET_SESSION_SLUG", slug: info.slug });
           addSystemMessage(formatNewSession(info.slug, state.model));
+          return true;
+        }
+
+        case "/session": {
+          const detail = await backend.getSessionDetail();
+          if (detail) {
+            addSystemMessage(formatSessionDetail(detail, state.model, state.stats));
+          } else {
+            addSystemMessage(t.muted("No active session."));
+          }
           return true;
         }
 
@@ -164,13 +191,56 @@ export const App: React.FC<AppProps> = ({
           return true;
         }
 
+        case "/share": {
+          const shareArg = args.trim();
+          const shareSubCmd = shareArg.split(/\s+/)[0]?.toLowerCase();
+
+          if (shareSubCmd === "list") {
+            try {
+              const shares = await backend.listShares();
+              addSystemMessage(formatShareList(shares));
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          if (shareSubCmd === "revoke") {
+            const shareId = shareArg.split(/\s+/)[1];
+            if (!shareId) {
+              addSystemMessage(t.yellow("Usage: /share revoke <share-id>"));
+              return true;
+            }
+            try {
+              const revoked = await backend.revokeShare(shareId);
+              addSystemMessage(
+                revoked
+                  ? t.green(`✓ Share revoked: ${shareId}`)
+                  : formatError(`Share not found or already revoked: ${shareId}`),
+              );
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          // Default: create a share
+          try {
+            const share = await backend.createShare();
+            addSystemMessage(formatShareCreated(share));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
         case "/model": {
           const modelArg = args.trim();
           if (!modelArg) {
             addSystemMessage(t.muted(`Current model: ${t.blue(state.model)}`));
           } else {
-            backend.setModel(modelArg);
             dispatch({ type: "SET_MODEL", model: modelArg });
+            await backend.updateSessionModel(modelArg);
             addSystemMessage(t.green(`Model switched to ${modelArg}`));
           }
           return true;
@@ -205,27 +275,42 @@ export const App: React.FC<AppProps> = ({
           }
           const spaceIdx = args.indexOf(" ");
           if (spaceIdx === -1) {
-            addSystemMessage(t.yellow("Usage: /channel connect <name> | /channel disconnect <name>"));
+            addSystemMessage(formatChannelHelp());
             return true;
           }
           const action = args.slice(0, spaceIdx).trim();
           const channelName = args.slice(spaceIdx + 1).trim();
           if (action === "connect") {
-            const ok = await backend.connectChannel(channelName);
-            addSystemMessage(
-              ok
-                ? t.green(`✓ Channel "${channelName}" connected`)
-                : formatError(`Failed to connect "${channelName}"`),
-            );
+            const result = await backend.connectChannel(channelName);
+            if (result.ok) {
+              addSystemMessage(t.green(`✓ Channel "${channelName}" connected`));
+            } else {
+              addSystemMessage(formatError(result.error ?? `Failed to connect "${channelName}"`));
+              addSystemMessage(formatChannelSetupHint(channelName));
+            }
           } else if (action === "disconnect") {
-            const ok = await backend.disconnectChannel(channelName);
-            addSystemMessage(
-              ok
-                ? t.green(`✓ Channel "${channelName}" disconnected`)
-                : formatError(`Failed to disconnect "${channelName}"`),
-            );
+            const result = await backend.disconnectChannel(channelName);
+            if (result.ok) {
+              addSystemMessage(t.green(`✓ Channel "${channelName}" disconnected`));
+            } else {
+              addSystemMessage(formatError(result.error ?? `Failed to disconnect "${channelName}"`));
+            }
+          } else if (action === "add") {
+            const result = await backend.addChannel(channelName);
+            if (result.ok) {
+              addSystemMessage(t.green(`✓ Channel "${channelName}" added and connected`));
+            } else {
+              addSystemMessage(formatError(result.error ?? `Failed to add "${channelName}"`));
+            }
+          } else if (action === "remove" || action === "rm") {
+            const result = await backend.removeChannel(channelName);
+            if (result.ok) {
+              addSystemMessage(t.green(`✓ Channel "${channelName}" removed`));
+            } else {
+              addSystemMessage(formatError(result.error ?? `Failed to remove "${channelName}"`));
+            }
           } else {
-            addSystemMessage(t.yellow("Usage: /channel connect <name> | /channel disconnect <name>"));
+            addSystemMessage(formatChannelHelp());
           }
           return true;
         }
@@ -250,12 +335,20 @@ export const App: React.FC<AppProps> = ({
             addSystemMessage(t.yellow("Usage: /connect <service-name>"));
             return true;
           }
-          const ok = await backend.connectService(svcName);
-          addSystemMessage(
-            ok
-              ? t.green(`✓ Service "${svcName}" connected`)
-              : formatError(`Failed to connect "${svcName}"`),
-          );
+          const connectResult = await backend.connectService(svcName);
+          if (!connectResult.ok) {
+            addSystemMessage(formatError(connectResult.error ?? `Failed to connect "${svcName}"`));
+          } else if (connectResult.status === "already_connected") {
+            addSystemMessage(t.muted(`${svcName} is already connected. Use /disconnect ${svcName} to remove it first.`));
+          } else if (connectResult.status === "oauth_required" && connectResult.loginUrl) {
+            addSystemMessage(
+              t.blue(`Connect ${connectResult.label ?? svcName}:\n`) +
+              t.underline(connectResult.loginUrl) + "\n" +
+              t.dim("Link expires in 10 minutes."),
+            );
+          } else {
+            addSystemMessage(t.green(`✓ ${connectResult.label ?? svcName} connected`));
+          }
           return true;
         }
 
@@ -269,12 +362,12 @@ export const App: React.FC<AppProps> = ({
             addSystemMessage(t.yellow("Usage: /disconnect <service-name>"));
             return true;
           }
-          const dOk = await backend.disconnectService(dSvcName);
-          addSystemMessage(
-            dOk
-              ? t.green(`✓ Service "${dSvcName}" disconnected`)
-              : formatError(`Failed to disconnect "${dSvcName}"`),
-          );
+          const disconnectResult = await backend.disconnectService(dSvcName);
+          if (!disconnectResult.ok) {
+            addSystemMessage(formatError(disconnectResult.error ?? `Failed to disconnect "${dSvcName}"`));
+          } else {
+            addSystemMessage(t.green(`✓ ${disconnectResult.label ?? dSvcName} disconnected`));
+          }
           return true;
         }
 
@@ -335,7 +428,236 @@ export const App: React.FC<AppProps> = ({
 
         case "/config": {
           const cfg = await backend.getConfig();
-          addSystemMessage(formatConfig(cfg));
+          addSystemMessage(formatConfigStructured(cfg));
+          return true;
+        }
+
+        // ── Provider commands ───────────────────────────────
+        case "/providers": {
+          const providersList = await backend.listProviders();
+          addSystemMessage(formatProviderList(providersList, state.model));
+          return true;
+        }
+
+        case "/provider": {
+          const providerArgs = args.trim();
+          if (!providerArgs || providerArgs === "list") {
+            const providersList = await backend.listProviders();
+            addSystemMessage(formatProviderList(providersList, state.model));
+            return true;
+          }
+
+          // Parse subcommand
+          const providerParts = providerArgs.split(/\s+/);
+          const providerAction = providerParts[0];
+
+          if (providerAction === "add") {
+            const providerId = providerParts[1];
+            if (!providerId) {
+              // No args — launch interactive provider picker
+              try {
+                const allProviders = await backend.listProviders();
+                pickerProvidersRef.current = allProviders;
+                dispatch({ type: "SET_PHASE", phase: "provider-add" });
+              } catch (err) {
+                addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+              }
+              return true;
+            }
+            // Inline syntax: /provider add <id> <base-url> <api-key>
+            const providerUrl = providerParts[2];
+            if (!providerUrl) {
+              addSystemMessage(t.yellow("Usage: /provider add <id> <base-url> [api-key]"));
+              return true;
+            }
+            const providerKey = providerParts[3] ?? "";
+            if (!providerKey) {
+              addSystemMessage(t.yellow("API key required. Usage: /provider add <id> <base-url> <api-key>"));
+              return true;
+            }
+            try {
+              const result = await backend.addProvider({
+                id: providerId,
+                baseUrl: providerUrl,
+                apiKey: providerKey,
+              });
+              addSystemMessage(formatProviderAdded(result.id, result.name));
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          if (providerAction === "remove" || providerAction === "rm") {
+            const removeId = providerParts[1];
+            if (!removeId) {
+              addSystemMessage(t.yellow("Usage: /provider remove <id>"));
+              return true;
+            }
+            try {
+              await backend.removeProvider(removeId);
+              addSystemMessage(formatProviderRemoved(removeId));
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          addSystemMessage(t.yellow("Usage: /provider [list | add <id> <url> <key> | remove <id>]"));
+          return true;
+        }
+
+        // ── Billing commands ────────────────────────────────
+        case "/plan": {
+          try {
+            const planInfo = await backend.getPlan();
+            addSystemMessage(formatPlan(planInfo));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        case "/upgrade": {
+          const upgradeEmail = args.trim();
+          if (!upgradeEmail) {
+            addSystemMessage(t.yellow("Usage: /upgrade <email>"));
+            return true;
+          }
+          try {
+            const result = await backend.startUpgrade(upgradeEmail);
+            addSystemMessage(t.green(`✓ Checkout opened: ${result.url}`));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        case "/billing": {
+          try {
+            const portalResult = await backend.openBillingPortal();
+            addSystemMessage(t.green(`✓ Billing portal: ${portalResult.url}`));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        case "/cost": {
+          addSystemMessage(formatSessionCost(state.stats, state.model));
+          return true;
+        }
+
+        // ── Session lifecycle ─────────────────────────────────
+        case "/kill": {
+          try {
+            const newSession = await backend.killSession();
+            dispatch({ type: "RESET_STATS" });
+            dispatch({ type: "CLEAR_MESSAGES" });
+            dispatch({ type: "SET_SESSION_SLUG", slug: newSession.slug });
+            addSystemMessage(t.green(`Session destroyed. New session: ${newSession.slug}`));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        case "/archive": {
+          try {
+            const newSession = await backend.archiveSession();
+            dispatch({ type: "RESET_STATS" });
+            dispatch({ type: "CLEAR_MESSAGES" });
+            dispatch({ type: "SET_SESSION_SLUG", slug: newSession.slug });
+            addSystemMessage(t.green(`Session archived. New session: ${newSession.slug}`));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        // ── Auth ──────────────────────────────────────────────
+        case "/auth": {
+          const authArg = args.trim();
+
+          if (!authArg) {
+            // Show all connector auth status
+            try {
+              const connectors = await backend.getAuthStatus();
+              addSystemMessage(formatAuthStatus(connectors));
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          const authParts = authArg.split(/\s+/);
+          const connectorName = authParts[0]!;
+          const keys = authParts.slice(1);
+
+          if (keys.length === 0) {
+            // Show detail for a specific connector
+            try {
+              const connectors = await backend.getAuthStatus();
+              const detail = connectors.find((c) => c.name === connectorName);
+              if (!detail) {
+                addSystemMessage(formatError(`Unknown connector: ${connectorName}`));
+              } else {
+                addSystemMessage(formatAuthDetail(detail));
+              }
+            } catch (err) {
+              addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+            }
+            return true;
+          }
+
+          // Save keys
+          try {
+            const result = await backend.saveAuth(connectorName, keys);
+            addSystemMessage(t.green(`${result.label}: ${result.saved} key(s) saved.`));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        // ── Tasks ─────────────────────────────────────────────
+        case "/tasks": {
+          try {
+            const tasks = await backend.listTasks();
+            addSystemMessage(formatTaskList(tasks));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        // ── Notifications ─────────────────────────────────────
+        case "/notifications": {
+          try {
+            const prefs = await backend.listNotifications();
+            addSystemMessage(formatNotificationList(prefs));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+          return true;
+        }
+
+        // ── Cancel subscription ───────────────────────────────
+        case "/cancel": {
+          if (backend.mode !== "daemon") {
+            addSystemMessage(t.muted("Cancellation requires the daemon. Start with: jeriko server start"));
+            return true;
+          }
+          try {
+            const result = await backend.cancelSubscription();
+            if (result.already_cancelling) {
+              addSystemMessage(t.muted(`Subscription is already set to cancel on ${result.cancel_at}.`));
+            } else {
+              addSystemMessage(t.green(`Subscription cancelled. Access until ${result.cancel_at}.`));
+            }
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
           return true;
         }
 
@@ -535,6 +857,34 @@ export const App: React.FC<AppProps> = ({
     [backend, addSystemMessage, dispatch],
   );
 
+  // ----- Provider picker handlers -----
+
+  const handleProviderPickerComplete = useCallback(
+    async (result: PickerResult) => {
+      dispatch({ type: "SET_PHASE", phase: "idle" });
+      try {
+        const added = await backend.addProvider({
+          id: result.id,
+          name: result.name,
+          baseUrl: result.baseUrl,
+          apiKey: result.apiKey,
+          defaultModel: result.defaultModel,
+        });
+        const modelHint = result.defaultModel
+          ? `\n  Use: ${t.muted(`/model ${result.id}:${result.defaultModel}`)}`
+          : "";
+        addSystemMessage(`${t.green("✓")} ${t.blue(added.name)} added · default model: ${t.muted(result.defaultModel ?? "none")}${modelHint}`);
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+    },
+    [backend, addSystemMessage, dispatch],
+  );
+
+  const handleProviderPickerCancel = useCallback(() => {
+    dispatch({ type: "SET_PHASE", phase: "idle" });
+  }, [dispatch]);
+
   // ----- Derived sub-agent state -----
   const subAgentDerived = useSubAgents(state.subAgents);
 
@@ -571,6 +921,7 @@ export const App: React.FC<AppProps> = ({
         context={state.context}
         sessionSlug={state.sessionSlug}
         subAgents={state.subAgents}
+        streamLength={state.streamText.length}
       />
 
       {/* Input prompt (idle only) */}
@@ -582,6 +933,15 @@ export const App: React.FC<AppProps> = ({
 
       {/* Setup wizard (first launch) */}
       {state.phase === "setup" && <Setup onComplete={handleSetupComplete} />}
+
+      {/* Interactive provider picker (/provider add) */}
+      {state.phase === "provider-add" && (
+        <ProviderPicker
+          providers={pickerProvidersRef.current}
+          onComplete={handleProviderPickerComplete}
+          onCancel={handleProviderPickerCancel}
+        />
+      )}
     </Box>
   );
 };

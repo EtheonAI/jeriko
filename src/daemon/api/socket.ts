@@ -62,7 +62,11 @@ export interface IpcRequest {
     | "billing.plan"
     | "billing.checkout"
     | "billing.portal"
-    | "billing.events";
+    | "billing.events"
+    | "update_session"
+    | "providers.list"
+    | "providers.add"
+    | "providers.remove";
   params?: Record<string, unknown>;
 }
 

@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { BILLING_ENV } from "../../../daemon/billing/config.js";
 
 const TASKS_DIR = join(homedir(), ".jeriko", "data", "tasks");
 
@@ -67,6 +68,20 @@ export const command: CommandHandler = {
           fail("Cron tasks require --schedule flag. Example: --schedule '0 9 * * *'");
         }
 
+        // Billing gate: check trigger limit before creating a new task.
+        // Only active when billing is configured (STRIPE_BILLING_SECRET_KEY is set).
+        if (process.env[BILLING_ENV.secretKey]) {
+          const { loadSecrets } = await import("../../../shared/secrets.js");
+          loadSecrets();
+          const { canAddTrigger } = await import("../../../daemon/billing/license.js");
+          const enabledCount = loadTasks().filter((t) => t.enabled).length;
+          const check = canAddTrigger(enabledCount);
+          if (!check.allowed) {
+            fail(check.reason!);
+            return;
+          }
+        }
+
         const task: TaskDef = {
           id: randomUUID().slice(0, 8),
           name,
@@ -94,6 +109,20 @@ export const command: CommandHandler = {
         if (!id) fail("Missing task ID");
         const task = getTask(id);
         if (!task) fail(`Task not found: "${id}"`, 5);
+
+        // Billing gate: check trigger limit before re-enabling a task.
+        if (!task.enabled && process.env[BILLING_ENV.secretKey]) {
+          const { loadSecrets } = await import("../../../shared/secrets.js");
+          loadSecrets();
+          const { canAddTrigger } = await import("../../../daemon/billing/license.js");
+          const enabledCount = loadTasks().filter((t) => t.enabled).length;
+          const check = canAddTrigger(enabledCount);
+          if (!check.allowed) {
+            fail(check.reason!);
+            return;
+          }
+        }
+
         task.enabled = true;
         saveTask(task);
         ok({ enabled: true, id });

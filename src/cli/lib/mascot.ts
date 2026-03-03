@@ -1,12 +1,18 @@
 /**
- * Mascot — ASCII art builder for Jeriko's visual identity.
+ * Mascot — ASCII art builder for Jeriko's cat logo.
  *
- * Produces a multi-line string array of a geometric AI agent.
- * Each line is pre-colored with chalk using the PALETTE.
- * All lines are padded to uniform visual width.
+ * The Jeriko cat logo, rendered with Unicode block characters (█ ▀ ▄)
+ * for high-resolution terminal display. Downscaled from the source artwork
+ * (ascii-art-jeriko.txt) using half-block character compositing — each
+ * display row represents two pixel rows from the original.
  *
- * Design philosophy: diamond eyes, data-stream chest, arm circuits.
- * Sleek, modern, distinctive — not cute, not corporate.
+ * Pre-colored with the brand palette: amber body, blue eye accents,
+ * dim shadow edges. All lines padded to uniform visual width for
+ * column alignment in the welcome banner.
+ *
+ * Two sizes:
+ *   buildMascot()        — full logo (13 lines, ~30 chars) for welcome banner
+ *   buildMascotCompact() — compact logo (8 lines, ~22 chars) for inline use
  */
 
 import { t } from "../theme.js";
@@ -17,45 +23,55 @@ import { stripAnsi } from "../format.js";
 // ---------------------------------------------------------------------------
 
 /**
- * Build the mascot ASCII art as an array of chalk-styled lines.
+ * Build the Jeriko cat logo as an array of chalk-styled lines.
  * All lines are padded to the same visual width for column alignment.
+ *
+ * Features: two asymmetric ears (right larger), round face, squinting
+ * eye detail, and smoothly narrowing chin.
  */
 export function buildMascot(): string[] {
-  const b = t.blue;     // body structure
-  const e = t.brand;    // eyes + accent
-  const d = t.cyan;     // decorative details
+  const b = t.brand;    // body — warm amber
+  const e = t.blue;     // eyes — blue accents
+  const d = t.dim;      // shadow / edge detail
 
+  // Jeriko cat — 13-line logo, 30 chars wide
+  // Downscaled from ascii-art-jeriko.txt via half-block compositing.
   const raw = [
-    "",
-    `       ${b("╭━━━━━━━━━╮")}`,
-    `       ${b("┃")}  ${e("◆")}   ${e("◆")}  ${b("┃")}`,
-    `       ${b("┃")}    ${d("◇")}    ${b("┃")}`,
-    `       ${b("╰┳━━━━━┳╯")}`,
-    `    ${b("╭━━━┫")} ${d("▰▰▰")} ${b("┣━━━╮")}`,
-    `    ${b("┃")}   ${b("╰━━┳━━╯")}   ${b("┃")}`,
-    `    ${b("╰━━╮")}   ${b("┃")}   ${b("╭━━╯")}`,
-    `       ${b("╰━━━┻━━━╯")}`,
-    "",
+    `    ${d("▄▄")}               ${d("▄▄")}${b("██")}${d("▄")}`,
+    `   ${b("████")}${d("▄▄")}          ${d("▄")}${b("██████")}`,
+    `  ${b("████████████████████████")}`,
+    `  ${d("▀")}${b("███████████████████████")}`,
+    `   ${b("███████████████████████")}`,
+    `  ${d("▄")}${b("████████████████████████")}${d("▄")}`,
+    ` ${b("████████████████████████████")}`,
+    `${d("▄")}${b("█████████████████")}${e("▀▀▀▀")}${b("████████")}`,
+    `${b("██████████████████████████████")}`,
+    ` ${b("████████████████████████████")}`,
+    `  ${b("██████████████████████████")}`,
+    `   ${d("▀▀▀")}${b("███████████████████")}${d("▀▀")}`,
+    `       ${d("▀▀")}${b("██████████████")}${d("▀")}`,
   ];
 
   return normalizeWidth(raw);
 }
 
 /**
- * Build a compact mascot (fewer lines) for narrow terminals or inline use.
+ * Build a compact cat logo (fewer lines) for narrow terminals or inline use.
  */
 export function buildMascotCompact(): string[] {
-  const b = t.blue;
-  const e = t.brand;
-  const d = t.cyan;
+  const b = t.brand;
+  const d = t.dim;
 
+  // Compact cat — 8-line logo, 22 chars wide
   const raw = [
-    `  ${b("╭───────╮")}`,
-    `  ${b("│")} ${e("◆")}   ${e("◆")} ${b("│")}`,
-    `  ${b("│")}   ${d("◇")}   ${b("│")}`,
-    `  ${b("╰┬─────┬╯")}`,
-    `   ${b("│")} ${d("═══")} ${b("│")}`,
-    `   ${b("╰─────╯")}`,
+    `  ${d("▄▄▄▄")}         ${d("▄")}${b("██")}${d("▄")}`,
+    `  ${b("█████")}${d("▄▄▄")}${b("█")}${d("▄▄▄")}${b("█████")}`,
+    `  ${b("█████████████████")}`,
+    ` ${d("▄")}${b("██████████████████")}${d("▄")}`,
+    `${d("▄")}${b("█████████████████████")}`,
+    `${b("██████████████████████")}`,
+    ` ${d("▀")}${b("██████████████████")}${d("▀")}`,
+    `    ${d("▀▀")}${b("███████████")}${d("▀▀")}`,
   ];
 
   return normalizeWidth(raw);

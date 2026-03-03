@@ -13,7 +13,7 @@ import {
   recordEvent,
   hasEvent,
   updateLicense,
-  getSubscription,
+  getSubscriptionById,
 } from "./store.js";
 
 const log = getLogger();
@@ -56,27 +56,45 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+export interface WebhookOptions {
+  /**
+   * When true, skip local signature verification.
+   *
+   * Used for webhooks forwarded from the relay server, which already
+   * verified the Stripe signature before forwarding. The daemon trusts
+   * the relay's verification since communication is authenticated via
+   * RELAY_AUTH_SECRET over a secure WebSocket.
+   *
+   * Direct webhooks (self-hosted mode) always verify locally.
+   */
+  trusted?: boolean;
+}
+
 /**
  * Process a Stripe webhook event.
  *
  * @param rawBody         Raw request body string (for signature verification)
  * @param signatureHeader Stripe-Signature header value
+ * @param options         Processing options (e.g. trusted relay forwarding)
  * @returns Processing result with handled status
  */
 export function processWebhookEvent(
   rawBody: string,
   signatureHeader: string,
+  options?: WebhookOptions,
 ): WebhookResult {
-  // Verify signature
-  const config = loadBillingConfig();
-  if (!config?.stripeWebhookSecret) {
-    log.warn("Billing webhook: no webhook secret configured");
-    return { handled: false, error: "Webhook secret not configured" };
-  }
+  // Skip signature verification for trusted relay-forwarded webhooks
+  if (!options?.trusted) {
+    const config = loadBillingConfig();
+    if (!config?.stripeWebhookSecret) {
+      log.warn("Billing webhook: no webhook secret configured");
+      return { handled: false, error: "Webhook secret not configured" };
+    }
 
-  if (!verifyStripeSignature(rawBody, signatureHeader, config.stripeWebhookSecret)) {
-    log.warn("Billing webhook: signature verification failed");
-    return { handled: false, error: "Invalid signature" };
+    if (!verifyStripeSignature(rawBody, signatureHeader, config.stripeWebhookSecret)) {
+      log.warn("Billing webhook: signature verification failed");
+      return { handled: false, error: "Invalid signature" };
+    }
   }
 
   // Parse the event
@@ -185,8 +203,10 @@ function handleSubscriptionChange(event: StripeEvent): void {
   const metadata = sub.metadata as Record<string, string> | undefined;
   const tier = resolveTier(metadata?.tier);
 
-  // Get email from existing record or leave empty
-  const existing = getSubscription();
+  // Look up the existing record for THIS specific subscription to preserve email/terms.
+  // Using getSubscriptionById() ensures we don't read a stale record from a different
+  // subscription when multiple subscription records exist.
+  const existing = getSubscriptionById(id);
   const email = existing?.email ?? "";
 
   upsertSubscription({
@@ -213,7 +233,7 @@ function handleSubscriptionDeleted(event: StripeEvent): void {
   const id = sub.id as string;
   const customerId = sub.customer as string;
 
-  const existing = getSubscription();
+  const existing = getSubscriptionById(id);
   const email = existing?.email ?? "";
 
   upsertSubscription({
@@ -239,7 +259,7 @@ function handleSubscriptionPaused(event: StripeEvent): void {
   const sub = event.data.object;
   const id = sub.id as string;
 
-  const existing = getSubscription();
+  const existing = getSubscriptionById(id);
   if (existing) {
     upsertSubscription({
       ...existing,
@@ -261,7 +281,7 @@ function handleSubscriptionResumed(event: StripeEvent): void {
   const metadata = sub.metadata as Record<string, string> | undefined;
   const tier = resolveTier(metadata?.tier);
 
-  const existing = getSubscription();
+  const existing = getSubscriptionById(id);
   if (existing) {
     upsertSubscription({
       ...existing,
@@ -301,8 +321,8 @@ function handleInvoicePaymentFailed(event: StripeEvent): void {
 
   if (!subscriptionId) return;
 
-  const existing = getSubscription();
-  if (existing && existing.id === subscriptionId) {
+  const existing = getSubscriptionById(subscriptionId);
+  if (existing) {
     upsertSubscription({
       ...existing,
       status: "past_due",

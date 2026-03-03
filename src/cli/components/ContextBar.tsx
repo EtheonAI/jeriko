@@ -15,7 +15,7 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE } from "../theme.js";
+import { PALETTE, ICONS } from "../theme.js";
 import { formatTokens } from "../format.js";
 import type { ContextInfo } from "../types.js";
 
@@ -31,10 +31,6 @@ const VISIBILITY_THRESHOLD = 0.5;
 
 /** Transition to red above this percentage. */
 const DANGER_THRESHOLD = 0.8;
-
-/** Characters for the progress bar. */
-const FILLED_CHAR = "█";
-const EMPTY_CHAR = "░";
 
 // ---------------------------------------------------------------------------
 // Pure computation
@@ -66,7 +62,7 @@ export function computeContextBar(totalUsed: number, context: ContextInfo): {
   const usedStr = formatTokens(totalUsed);
   const maxStr = formatTokens(context.maxTokens);
   const compactStr = context.compactionCount > 0
-    ? ` · compacted ${context.compactionCount}x`
+    ? ` ${ICONS.dot} compacted ${context.compactionCount}x`
     : "";
 
   return {
@@ -75,7 +71,7 @@ export function computeContextBar(totalUsed: number, context: ContextInfo): {
     filledWidth,
     emptyWidth,
     color,
-    label: `${pctStr} · ${usedStr} / ${maxStr} tokens${compactStr}`,
+    label: `${pctStr} ${ICONS.dot} ${usedStr} / ${maxStr} tokens${compactStr}`,
   };
 }
 
@@ -96,8 +92,8 @@ export const ContextBar: React.FC<ContextBarProps> = ({ totalUsed, context }) =>
   return (
     <Box marginLeft={2}>
       <Text>
-        <Text color={PALETTE.dim}>{EMPTY_CHAR.repeat(bar.emptyWidth)}</Text>
-        <Text color={bar.color}>{FILLED_CHAR.repeat(bar.filledWidth)}</Text>
+        <Text color={PALETTE.dim}>{ICONS.empty.repeat(bar.emptyWidth)}</Text>
+        <Text color={bar.color}>{ICONS.filled.repeat(bar.filledWidth)}</Text>
         <Text color={PALETTE.muted}> {bar.label}</Text>
       </Text>
     </Box>

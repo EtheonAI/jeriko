@@ -287,6 +287,19 @@ uninstall: PKG (remove plugin)
 plugin: [validate PATH] [test PATH] (plugin development)
 prompt: [--raw] [--name N] [--list] [--json] (generate system prompt)
 
+### Billing & Subscription
+plan: (show current tier, limits, and usage)
+upgrade: --email EMAIL [--terms-accepted] (start Stripe Checkout for Pro plan)
+billing: [events] [--limit N] [--type TYPE] (manage subscription — default opens Stripe Customer Portal, `events` shows audit trail)
+
+**Tiers:** Community (free: 2 connectors, 3 triggers) → Pro ($19.99/mo: 10 connectors, unlimited triggers)
+
+**Channel commands (Telegram, WhatsApp):**
+- `/plan` — view current tier, limits, usage. Buttons: Upgrade (if free) or Manage Billing + Cancel (if subscribed)
+- `/upgrade <email>` — no arg shows pricing comparison. With email creates Stripe Checkout link
+- `/billing` — opens Stripe Customer Portal. `/billing events` shows recent billing event log
+- `/cancel` — shows confirmation prompt. `/cancel confirm` cancels at period end (keeps access until then)
+
 ### Webhook Hooks
 stripe-hook: [--no-notify] (format Stripe webhook events)
 paypal hook: [--no-notify] (format PayPal webhook events)

@@ -23,6 +23,7 @@ import {
   setupCompletions,
   setupPath,
   setupTemplates,
+  setupUserId,
   verifyInstallation,
   info,
   success,
@@ -76,6 +77,9 @@ export async function runSelfInstall(target: string): Promise<void> {
 
   // 2. Data directories
   setupDirectories();
+
+  // 2.5. User identity (must run after directories, before agent prompt)
+  setupUserId();
 
   // 3. Agent system prompt
   setupAgentPrompt();

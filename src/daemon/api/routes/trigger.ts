@@ -5,6 +5,7 @@
 
 import { Hono } from "hono";
 import { getLogger } from "../../../shared/logger.js";
+import { buildWebhookUrl } from "../../../shared/urls.js";
 import type {
   TriggerEngine,
   TriggerConfig,
@@ -119,7 +120,7 @@ interface TriggerView {
   webhook_url?: string;
 }
 
-function toTriggerView(trigger: TriggerConfig, baseUrl?: string): TriggerView {
+function toTriggerView(trigger: TriggerConfig, localBaseUrl?: string): TriggerView {
   const view: TriggerView = {
     id: trigger.id,
     type: trigger.type,
@@ -134,9 +135,11 @@ function toTriggerView(trigger: TriggerConfig, baseUrl?: string): TriggerView {
     created_at: trigger.created_at,
   };
 
-  // Include the webhook URL for webhook triggers so callers know where to point
-  if (trigger.type === "webhook" && baseUrl) {
-    view.webhook_url = `${baseUrl}/hooks/${trigger.id}`;
+  // Include the webhook URL for webhook triggers so callers know where to point.
+  // Uses the shared URL builder which handles relay routing (includes userId when
+  // using the relay) and self-hosted mode (direct to daemon).
+  if (trigger.type === "webhook") {
+    view.webhook_url = buildWebhookUrl(trigger.id, localBaseUrl);
   }
 
   return view;

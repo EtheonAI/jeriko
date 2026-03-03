@@ -6,8 +6,20 @@
 import Stripe from "stripe";
 import { BILLING_ENV, loadBillingConfig, type BillingConfig } from "./config.js";
 import { getLogger } from "../../shared/logger.js";
+import { getUserId } from "../../shared/config.js";
 
 const log = getLogger();
+
+/** Default billing website base URL. Override with JERIKO_BILLING_URL. */
+const DEFAULT_BILLING_URL = "https://jeriko.ai";
+
+/**
+ * Get the base URL for billing pages (success, cancel, portal return).
+ * Configurable to support self-hosted or staging environments.
+ */
+function getBillingBaseUrl(): string {
+  return (process.env.JERIKO_BILLING_URL ?? DEFAULT_BILLING_URL).replace(/\/+$/, "");
+}
 
 // ---------------------------------------------------------------------------
 // Lazy client singleton
@@ -82,6 +94,9 @@ export async function createCheckoutSession(
     );
   }
 
+  const userId = getUserId() ?? "";
+  const billingBaseUrl = getBillingBaseUrl();
+
   const session = await stripe.checkout.sessions.create({
     mode: "subscription",
     customer_email: email,
@@ -94,14 +109,16 @@ export async function createCheckoutSession(
     subscription_data: {
       metadata: {
         source: "jeriko-cli",
+        jeriko_user_id: userId,
         terms_accepted: termsAccepted ? "true" : "false",
         terms_accepted_at: new Date().toISOString(),
       },
     },
-    success_url: "https://jeriko.ai/billing/success?session_id={CHECKOUT_SESSION_ID}",
-    cancel_url: "https://jeriko.ai/billing/cancel",
+    success_url: `${billingBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${billingBaseUrl}/billing/cancel`,
     metadata: {
       source: "jeriko-cli",
+      jeriko_user_id: userId,
     },
   });
 
@@ -130,7 +147,7 @@ export async function createPortalSession(customerId: string): Promise<{ url: st
 
   const params: Stripe.BillingPortal.SessionCreateParams = {
     customer: customerId,
-    return_url: "https://jeriko.ai/billing",
+    return_url: `${getBillingBaseUrl()}/billing`,
   };
 
   if (config.stripePortalConfigId) {
@@ -188,6 +205,39 @@ export async function getCustomerByEmail(
   if (customer.deleted) return null;
 
   return customer as Stripe.Customer;
+}
+
+// ---------------------------------------------------------------------------
+// Subscription management
+// ---------------------------------------------------------------------------
+
+/**
+ * Cancel a subscription at the end of the current billing period.
+ *
+ * Uses `cancel_at_period_end: true` — the Stripe best practice for SaaS.
+ * The customer keeps full access until the period ends, then downgrades to free.
+ *
+ * @param subscriptionId  Stripe subscription ID (sub_xxx)
+ * @returns Cancel timestamp and current status
+ */
+export async function cancelSubscription(
+  subscriptionId: string,
+): Promise<{ cancelAt: number | null; status: string }> {
+  const stripe = getStripeClient();
+
+  const updated = await stripe.subscriptions.update(subscriptionId, {
+    cancel_at_period_end: true,
+  });
+
+  log.info(
+    `Subscription ${subscriptionId} set to cancel at period end `
+    + `(status=${updated.status}, cancel_at=${updated.cancel_at})`,
+  );
+
+  return {
+    cancelAt: updated.cancel_at,
+    status: updated.status,
+  };
 }
 
 // ---------------------------------------------------------------------------

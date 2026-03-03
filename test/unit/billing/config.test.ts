@@ -8,6 +8,7 @@ import {
   INACTIVE_STATUSES,
   GRACE_PERIOD_MS,
   PAST_DUE_GRACE_MS,
+  UNLIMITED_TRIGGERS_STORED,
   BILLING_ENV,
   isBillingTier,
   loadBillingConfig,
@@ -121,6 +122,12 @@ describe("billing/config", () => {
 
     it("PAST_DUE_GRACE_MS is 7 days", () => {
       expect(PAST_DUE_GRACE_MS).toBe(7 * 24 * 60 * 60 * 1000);
+    });
+
+    it("UNLIMITED_TRIGGERS_STORED is a high sentinel value", () => {
+      expect(UNLIMITED_TRIGGERS_STORED).toBe(999_999);
+      // Must be larger than any practical trigger count
+      expect(UNLIMITED_TRIGGERS_STORED).toBeGreaterThan(10_000);
     });
   });
 

@@ -1,0 +1,36 @@
+# Jeriko Relay — Cloudflare Worker + Durable Object.
+#
+# Routes all requests to a single global Durable Object that manages
+# WebSocket connections, webhook forwarding, OAuth proxying, and billing.
+#
+# Deploy: npx wrangler deploy
+# Secrets: npx wrangler secret put RELAY_AUTH_SECRET
+#          npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
+
+name = "jeriko-relay"
+main = "src/index.ts"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+routes = [
+  { pattern = "bot.jeriko.ai/*", zone_name = "jeriko.ai" }
+]
+
+[durable_objects]
+bindings = [
+  { name = "RELAY_DO", class_name = "RelayDO" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RelayDO"]
+
+[vars]
+ENVIRONMENT = "production"
+STRIPE_BILLING_PRICE_ID = "price_1RFrNYP9l6pSLOnXLp3CXmTz"
+JERIKO_BILLING_URL = "https://jeriko.ai"
+
+# Secrets (set via `wrangler secret put`):
+#   RELAY_AUTH_SECRET              — shared secret for daemon authentication
+#   STRIPE_BILLING_WEBHOOK_SECRET  — Stripe webhook signing secret
+#   STRIPE_BILLING_SECRET_KEY      — Stripe API secret key for checkout/portal

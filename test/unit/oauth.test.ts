@@ -548,3 +548,109 @@ describe("OAuth routes", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// handleOAuthCallback — core handler (relay + direct)
+// ---------------------------------------------------------------------------
+
+describe("handleOAuthCallback", () => {
+  let handleOAuthCallback: typeof import("../../src/daemon/api/routes/oauth.js").handleOAuthCallback;
+
+  beforeEach(async () => {
+    ({ handleOAuthCallback } = await import("../../src/daemon/api/routes/oauth.js"));
+  });
+
+  it("returns 400 when provider sends error param", async () => {
+    const result = await handleOAuthCallback("github", {
+      error: "access_denied",
+      error_description: "User denied access",
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).toContain("User denied access");
+  });
+
+  it("returns 400 when missing code", async () => {
+    const result = await handleOAuthCallback("github", { state: "abc" });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).toContain("Missing code or state");
+  });
+
+  it("returns 400 when missing state", async () => {
+    const result = await handleOAuthCallback("github", { code: "abc" });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).toContain("Missing code or state");
+  });
+
+  it("returns 400 for invalid state token", async () => {
+    const result = await handleOAuthCallback("github", {
+      code: "abc",
+      state: "invalid-token",
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).toContain("Invalid or expired state");
+  });
+
+  it("returns 400 for provider/state mismatch", async () => {
+    const token = generateState("x", "chat1", "telegram");
+    const result = await handleOAuthCallback("github", {
+      code: "abc",
+      state: token,
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).toContain("mismatch");
+  });
+
+  it("returns 404 for unknown provider", async () => {
+    const token = generateState("fakeprovider", "chat1", "telegram");
+    const result = await handleOAuthCallback("fakeprovider", {
+      code: "abc",
+      state: token,
+    });
+    expect(result.statusCode).toBe(404);
+    expect(result.html).toContain("Unknown provider");
+  });
+
+  it("returns 503 when credentials not configured", async () => {
+    const origId = process.env.GITHUB_OAUTH_CLIENT_ID;
+    const origSecret = process.env.GITHUB_OAUTH_CLIENT_SECRET;
+    delete process.env.GITHUB_OAUTH_CLIENT_ID;
+    delete process.env.GITHUB_OAUTH_CLIENT_SECRET;
+
+    try {
+      const token = generateState("github", "chat1", "telegram");
+      const result = await handleOAuthCallback("github", {
+        code: "test-code",
+        state: token,
+      });
+      expect(result.statusCode).toBe(503);
+      expect(result.html).toContain("not configured");
+    } finally {
+      if (origId) process.env.GITHUB_OAUTH_CLIENT_ID = origId;
+      if (origSecret) process.env.GITHUB_OAUTH_CLIENT_SECRET = origSecret;
+    }
+  });
+
+  it("escapes HTML in error description", async () => {
+    const result = await handleOAuthCallback("github", {
+      error: "bad",
+      error_description: '<script>alert("xss")</script>',
+    });
+    expect(result.statusCode).toBe(400);
+    expect(result.html).not.toContain("<script>");
+    expect(result.html).toContain("&lt;script&gt;");
+  });
+
+  it("returns consistent result shape", async () => {
+    const result = await handleOAuthCallback("github", {});
+    expect(typeof result.statusCode).toBe("number");
+    expect(typeof result.html).toBe("string");
+  });
+
+  it("works without channels (relay mode)", async () => {
+    // Relay callbacks pass null channels — should not throw
+    const result = await handleOAuthCallback("github", {
+      error: "access_denied",
+    }, null);
+    expect(result.statusCode).toBe(400);
+  });
+});

@@ -2,7 +2,7 @@
 // This is the entry point for `jeriko serve`.
 
 import { getLogger, Logger } from "../shared/logger.js";
-import { loadConfig, type JerikoConfig } from "../shared/config.js";
+import { loadConfig, type JerikoConfig, type ProviderConfig } from "../shared/config.js";
 import { initDatabase, closeDatabase } from "./storage/db.js";
 import { ChannelRegistry } from "./services/channels/index.js";
 import { startChannelRouter } from "./services/channels/router.js";
@@ -27,6 +27,7 @@ export interface KernelState {
   connectors: ConnectorManager | null;
   workers: WorkerPool | null;
   plugins: PluginLoader | null;
+  relay: import("./services/relay/client.js").RelayClient | null;
   server: ReturnType<typeof Bun.serve> | null;
   startedAt: number | null;
 }
@@ -44,6 +45,7 @@ const state: KernelState = {
   connectors: null,
   workers: null,
   plugins: null,
+  relay: null,
   server: null,
   startedAt: null,
 };
@@ -159,9 +161,19 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   ]);
 
   // Register custom providers from config (OpenRouter, DeepInfra, Together, Groq, etc.)
+  const { registerCustomProviders } = await import("./agent/drivers/providers.js");
   if (config.providers?.length) {
-    const { registerCustomProviders } = await import("./agent/drivers/providers.js");
     registerCustomProviders(config.providers);
+  }
+
+  // Auto-discover providers from environment variables (preset registry).
+  // Presets only activate when the env var is set AND no explicit config exists.
+  const { discoverProviderPresets } = await import("./agent/drivers/presets.js");
+  const explicitIds = new Set((config.providers ?? []).map((p) => p.id));
+  const discovered = discoverProviderPresets(explicitIds);
+  if (discovered.length > 0) {
+    registerCustomProviders(discovered);
+    log.info(`Auto-discovered ${discovered.length} provider(s): ${discovered.map((p) => p.id).join(", ")}`);
   }
 
   log.info("Kernel boot: step 7 — LLM drivers initialized, model registry loaded");
@@ -281,6 +293,134 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   }
 
   log.info("Kernel boot: step 10.5 — connector manager + channel notifications wired to trigger engine");
+
+  // Step 10.6: Connect to jeriko.ai relay (non-fatal — works offline too)
+  //
+  // The relay client allows external services to reach this daemon when it
+  // runs behind NAT/firewall. Only needed for webhook triggers and OAuth
+  // callbacks. All local triggers (cron, file, HTTP poll) work without relay.
+  //
+  // Skipped when: no user ID, no auth secret, or JERIKO_PUBLIC_URL is set
+  // (self-hosted tunnel — webhooks go directly to daemon).
+  try {
+    const { getUserId } = await import("../shared/config.js");
+    const userId = getUserId();
+    // RELAY_AUTH_SECRET is the dedicated relay token. Falls back to
+    // NODE_AUTH_SECRET for backward compat (single-machine setups).
+    const relayToken = process.env.RELAY_AUTH_SECRET ?? process.env.NODE_AUTH_SECRET;
+    const selfHosted = !!process.env.JERIKO_PUBLIC_URL;
+
+    if (userId && relayToken && !selfHosted) {
+      const { RelayClient } = await import("./services/relay/client.js");
+      const relay = new RelayClient({
+        userId,
+        token: relayToken,
+        version: process.env.JERIKO_VERSION ?? "dev",
+      });
+      state.relay = relay;
+
+      // Wire webhook forwarding: relay → billing processor or TriggerEngine
+      relay.onWebhook(async (triggerId, headers, body, _requestId) => {
+        // Billing webhooks use a reserved trigger ID — route directly to
+        // the billing webhook processor instead of the trigger engine.
+        // The relay already verified the Stripe signature; the daemon
+        // re-verifies independently (defense-in-depth).
+        if (triggerId === "__billing__") {
+          const signatureHeader = headers["stripe-signature"];
+          if (!signatureHeader) {
+            log.warn("Relay billing webhook: missing stripe-signature header");
+            return;
+          }
+          try {
+            const { processWebhookEvent } = await import("./billing/webhook.js");
+            const result = processWebhookEvent(body, signatureHeader, { trusted: true });
+            if (!result.handled) {
+              log.warn(`Relay billing webhook rejected: ${result.error}`);
+            }
+          } catch (err) {
+            log.error(`Relay billing webhook processing failed: ${err}`);
+          }
+          return;
+        }
+
+        if (!state.triggers) return;
+
+        let payload: unknown;
+        try {
+          payload = JSON.parse(body);
+        } catch {
+          payload = body;
+        }
+
+        await state.triggers.handleWebhook(triggerId, payload, headers, body);
+      });
+
+      // Wire trigger registration: TriggerEngine → relay
+      triggers.bus.on("trigger:added", (trigger) => {
+        if (trigger.type === "webhook") {
+          relay.registerTrigger(trigger.id);
+        }
+      });
+      triggers.bus.on("trigger:removed", ({ id }) => {
+        relay.unregisterTrigger(id);
+      });
+
+      // Wire OAuth callback forwarding: relay → daemon token exchange
+      relay.onOAuthCallback(async (provider, params, _requestId) => {
+        try {
+          const { handleOAuthCallback } = await import("./api/routes/oauth.js");
+          return handleOAuthCallback(provider, params, state.channels);
+        } catch (err) {
+          log.error(`Relay OAuth callback error: ${err}`);
+          return { statusCode: 500, html: "Internal error processing OAuth callback" };
+        }
+      });
+
+      // Wire OAuth start forwarding: relay → daemon authorization URL builder
+      relay.onOAuthStart(async (provider, params, _requestId) => {
+        try {
+          const { handleOAuthStart } = await import("./api/routes/oauth.js");
+          return handleOAuthStart(provider, params);
+        } catch (err) {
+          log.error(`Relay OAuth start error: ${err}`);
+          return { statusCode: 500, html: "Internal error processing OAuth start" };
+        }
+      });
+
+      // Wire share page forwarding: relay → daemon share renderer
+      relay.onShareRequest(async (shareId, _requestId) => {
+        try {
+          const { renderShareById } = await import("./api/routes/share.js");
+          return renderShareById(shareId);
+        } catch (err) {
+          log.error(`Relay share request error: ${err}`);
+          return { statusCode: 500, html: "Internal error rendering share page" };
+        }
+      });
+
+      // Connect (non-blocking, reconnects automatically)
+      relay.connect();
+
+      // Register all existing webhook triggers
+      for (const t of triggers.listAll()) {
+        if (t.type === "webhook" && t.enabled) {
+          relay.registerTrigger(t.id);
+        }
+      }
+
+      log.info("Kernel boot: step 10.6 — relay client connected");
+    } else {
+      if (selfHosted) {
+        log.info("Kernel boot: step 10.6 — relay skipped (self-hosted: JERIKO_PUBLIC_URL set)");
+      } else if (!userId) {
+        log.info("Kernel boot: step 10.6 — relay skipped (no user ID — run `jeriko install`)");
+      } else {
+        log.info("Kernel boot: step 10.6 — relay skipped (no RELAY_AUTH_SECRET or NODE_AUTH_SECRET)");
+      }
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: step 10.6 — relay client failed (non-fatal): ${err}`);
+  }
 
   // Step 11: Load plugins
   const plugins = new PluginLoader();
@@ -446,6 +586,31 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     };
   });
 
+  registerMethod("update_session", async (params) => {
+    const { getSession, updateSession } = await import("./agent/session/session.js");
+    const sessionId = params.session_id as string;
+    if (!sessionId) throw new Error("session_id is required");
+
+    const session = getSession(sessionId);
+    if (!session) throw new Error(`Session "${sessionId}" not found`);
+
+    const updates: Record<string, unknown> = {};
+    if (params.model !== undefined) updates.model = params.model;
+    if (params.title !== undefined) updates.title = params.title;
+
+    updateSession(sessionId, updates as { model?: string; title?: string });
+
+    const updated = getSession(sessionId)!;
+    return {
+      id: updated.id,
+      slug: updated.slug,
+      title: updated.title,
+      model: updated.model,
+      token_count: updated.token_count,
+      updated_at: updated.updated_at,
+    };
+  });
+
   registerMethod("stop", async () => {
     // Initiate shutdown in background
     setTimeout(() => shutdown(), 100);
@@ -477,6 +642,21 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
     await channels.disconnect(name);
     return channels.statusOf(name);
+  });
+
+  registerMethod("channel_add", async (params) => {
+    const name = (params.name as string)?.toLowerCase();
+    if (!name) throw new Error("name is required");
+    const channelConfig = params.config as Record<string, unknown> | undefined;
+    const { addChannel } = await import("./services/channels/lifecycle.js");
+    return addChannel(channels, name, channelConfig);
+  });
+
+  registerMethod("channel_remove", async (params) => {
+    const name = (params.name as string)?.toLowerCase();
+    if (!name) throw new Error("name is required");
+    const { removeChannel } = await import("./services/channels/lifecycle.js");
+    return removeChannel(channels, name);
   });
 
   // ── History / compact IPC methods ──────────────────────────────
@@ -515,25 +695,273 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
   // ── Model listing IPC method ──────────────────────────────────
   registerMethod("models", async () => {
-    const { getModelRegistry } = await import("./agent/drivers/models.js");
-    try {
-      const registry = getModelRegistry();
-      const models = Object.entries(registry).map(([id, info]: [string, any]) => ({
-        id,
-        name: info.name ?? id,
-        provider: info.provider ?? "unknown",
-        contextWindow: info.contextWindow,
-        supportsTools: info.supportsTools ?? false,
-        supportsVision: info.supportsVision ?? false,
-      }));
-      return models;
-    } catch {
-      return [
-        { id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsVision: true },
-        { id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true, supportsVision: true },
-        { id: "local", name: "Local (Ollama)", provider: "ollama", supportsTools: false, supportsVision: false },
-      ];
+    const { listModels } = await import("./agent/drivers/models.js");
+    const { listDrivers } = await import("./agent/drivers/index.js");
+
+    // Get all models from the capability index (populated from models.dev)
+    const allModels = listModels();
+
+    // Filter to models from our registered drivers + custom providers
+    const registeredDrivers = new Set(listDrivers());
+    const providerIds = new Set(config.providers?.map((p) => p.id) ?? []);
+
+    // Built-in driver → provider mapping
+    const driverProviders: Record<string, string> = {
+      anthropic: "anthropic",
+      openai: "openai",
+      local: "local",
+    };
+
+    const relevantProviders = new Set<string>();
+    for (const driver of registeredDrivers) {
+      const provider = driverProviders[driver];
+      if (provider) relevantProviders.add(provider);
     }
+    for (const id of providerIds) {
+      relevantProviders.add(id);
+    }
+
+    // Collect models for relevant providers, deduplicated by id
+    const seen = new Set<string>();
+    const models: Array<{
+      id: string;
+      name: string;
+      provider: string;
+      contextWindow: number;
+      maxOutput: number;
+      supportsTools: boolean;
+      supportsReasoning: boolean;
+      costInput: number;
+      costOutput: number;
+    }> = [];
+
+    for (const caps of allModels) {
+      if (!relevantProviders.has(caps.provider)) continue;
+      if (seen.has(`${caps.provider}:${caps.id}`)) continue;
+      seen.add(`${caps.provider}:${caps.id}`);
+
+      models.push({
+        id: caps.id,
+        name: caps.id,
+        provider: caps.provider,
+        contextWindow: caps.context,
+        maxOutput: caps.maxOutput,
+        supportsTools: caps.toolCall,
+        supportsReasoning: caps.reasoning,
+        costInput: caps.costInput,
+        costOutput: caps.costOutput,
+      });
+    }
+
+    // Add custom provider models from config (may not be in models.dev)
+    for (const provider of config.providers ?? []) {
+      if (!seen.has(`${provider.id}:default`) && provider.defaultModel) {
+        const { getCapabilities } = await import("./agent/drivers/models.js");
+        const caps = getCapabilities(provider.id, provider.defaultModel);
+        seen.add(`${provider.id}:${provider.defaultModel}`);
+        models.push({
+          id: provider.defaultModel,
+          name: provider.name,
+          provider: provider.id,
+          contextWindow: caps.context,
+          maxOutput: caps.maxOutput,
+          supportsTools: caps.toolCall,
+          supportsReasoning: caps.reasoning,
+          costInput: caps.costInput,
+          costOutput: caps.costOutput,
+        });
+      }
+
+      // Add aliased models from provider config
+      if (provider.models) {
+        for (const [alias, modelId] of Object.entries(provider.models)) {
+          const key = `${provider.id}:${modelId}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const { getCapabilities } = await import("./agent/drivers/models.js");
+          const caps = getCapabilities(provider.id, modelId);
+          models.push({
+            id: modelId,
+            name: alias,
+            provider: provider.id,
+            contextWindow: caps.context,
+            maxOutput: caps.maxOutput,
+            supportsTools: caps.toolCall,
+            supportsReasoning: caps.reasoning,
+            costInput: caps.costInput,
+            costOutput: caps.costOutput,
+          });
+        }
+      }
+    }
+
+    return models;
+  });
+
+  // ── Provider management IPC methods ──────────────────────────
+  registerMethod("providers.list", async () => {
+    const { listDrivers } = await import("./agent/drivers/index.js");
+    const { listPresets } = await import("./agent/drivers/presets.js");
+    const builtInDrivers = listDrivers();
+
+    const providers: Array<{
+      id: string;
+      name: string;
+      type: "built-in" | "custom" | "discovered" | "available";
+      baseUrl?: string;
+      defaultModel?: string;
+      modelCount?: number;
+      envKey?: string;
+    }> = [];
+
+    // Track all registered IDs to avoid duplication
+    const registered = new Set<string>();
+
+    // Built-in drivers (anthropic, openai, local)
+    const builtInIds = new Set(["anthropic", "openai", "local", "claude-code"]);
+    for (const driverName of builtInDrivers) {
+      if (driverName === "claude-code") continue;
+      if (!builtInIds.has(driverName)) continue; // Only show true built-ins here
+      registered.add(driverName);
+      providers.push({
+        id: driverName,
+        name: driverName.charAt(0).toUpperCase() + driverName.slice(1),
+        type: "built-in",
+      });
+    }
+
+    // Custom providers from config
+    for (const p of config.providers ?? []) {
+      registered.add(p.id);
+      providers.push({
+        id: p.id,
+        name: p.name,
+        type: "custom",
+        baseUrl: p.baseUrl,
+        defaultModel: p.defaultModel,
+        modelCount: p.models ? Object.keys(p.models).length : undefined,
+      });
+    }
+
+    // Auto-discovered providers (env var set, not in config)
+    for (const driverName of builtInDrivers) {
+      if (registered.has(driverName)) continue;
+      if (builtInIds.has(driverName)) continue;
+      // This is a driver registered from presets or runtime
+      const preset = listPresets().find((p) => p.id === driverName);
+      registered.add(driverName);
+      providers.push({
+        id: driverName,
+        name: preset?.name ?? driverName.charAt(0).toUpperCase() + driverName.slice(1),
+        type: "discovered",
+        baseUrl: preset?.baseUrl,
+        defaultModel: preset?.defaultModel,
+        envKey: preset?.envKey,
+      });
+    }
+
+    // Available presets (env var not set, not configured)
+    for (const preset of listPresets()) {
+      if (registered.has(preset.id)) continue;
+      providers.push({
+        id: preset.id,
+        name: preset.name,
+        type: "available",
+        baseUrl: preset.baseUrl,
+        defaultModel: preset.defaultModel,
+        envKey: preset.envKey,
+      });
+    }
+
+    return providers;
+  });
+
+  registerMethod("providers.add", async (params) => {
+    const id = params.id as string;
+    const name = params.name as string | undefined;
+    const baseUrl = params.base_url as string;
+    const apiKey = params.api_key as string;
+    const defaultModel = params.default_model as string | undefined;
+
+    if (!id || !baseUrl || !apiKey) {
+      throw new Error("id, base_url, and api_key are required");
+    }
+
+    // Load and update config file
+    const { readFileSync, writeFileSync, existsSync: fileExists, mkdirSync } = await import("node:fs");
+    const { join: pathJoin } = await import("node:path");
+    const { getConfigDir } = await import("../shared/config.js");
+
+    const configDir = getConfigDir();
+    const configPath = pathJoin(configDir, "config.json");
+
+    let fileConfig: Record<string, unknown> = {};
+    if (fileExists(configPath)) {
+      fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+    }
+
+    const providers = (fileConfig.providers as ProviderConfig[] | undefined) ?? [];
+
+    // Check for duplicate
+    if (providers.some((p) => p.id === id)) {
+      throw new Error(`Provider "${id}" already exists. Remove it first.`);
+    }
+
+    const newProvider: ProviderConfig = {
+      id,
+      name: name ?? id.charAt(0).toUpperCase() + id.slice(1),
+      baseUrl,
+      apiKey,
+      type: "openai-compatible",
+      ...(defaultModel ? { defaultModel } : {}),
+    };
+
+    providers.push(newProvider);
+    fileConfig.providers = providers;
+
+    if (!fileExists(configDir)) mkdirSync(configDir, { recursive: true });
+    writeFileSync(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+    // Register the driver at runtime
+    const { registerCustomProviders } = await import("./agent/drivers/providers.js");
+    registerCustomProviders([newProvider]);
+
+    // Update in-memory config
+    if (!config.providers) config.providers = [];
+    config.providers.push(newProvider);
+
+    return { id, name: newProvider.name, baseUrl };
+  });
+
+  registerMethod("providers.remove", async (params) => {
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+
+    const { readFileSync, writeFileSync, existsSync: fileExists } = await import("node:fs");
+    const { join: pathJoin } = await import("node:path");
+    const { getConfigDir } = await import("../shared/config.js");
+
+    const configPath = pathJoin(getConfigDir(), "config.json");
+    if (!fileExists(configPath)) {
+      throw new Error(`Provider "${id}" not found`);
+    }
+
+    const fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+    const providers = (fileConfig.providers as ProviderConfig[] | undefined) ?? [];
+
+    const idx = providers.findIndex((p) => p.id === id);
+    if (idx === -1) throw new Error(`Provider "${id}" not found`);
+
+    providers.splice(idx, 1);
+    fileConfig.providers = providers;
+    writeFileSync(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+    // Update in-memory config
+    if (config.providers) {
+      config.providers = config.providers.filter((p) => p.id !== id);
+    }
+
+    return { id, removed: true };
   });
 
   // ── Connector IPC methods ─────────────────────────────────────
@@ -546,9 +974,35 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!connectors) throw new Error("Connector manager not available");
     const name = params.name as string;
     if (!name) throw new Error("name is required");
-    // ConnectorManager.get() handles lazy initialization
-    const instance = await connectors.get(name);
-    if (!instance) throw new Error(`Connector "${name}" is not available — check configuration`);
+
+    const { getConnectorDef, isConnectorConfigured } = await import("../shared/connector.js");
+    const { getOAuthProvider, isOAuthCapable } = await import("./services/oauth/providers.js");
+
+    const def = getConnectorDef(name);
+    if (!def) throw new Error(`Unknown connector: ${name}`);
+
+    if (isConnectorConfigured(name)) {
+      return { ok: true, name, status: "already_connected" };
+    }
+
+    // OAuth connector — generate state token and return login URL
+    const provider = getOAuthProvider(name);
+    if (provider) {
+      if (!process.env[provider.clientIdVar]) {
+        throw new Error(`${provider.label} OAuth not configured — set ${provider.clientIdVar} and ${provider.clientSecretVar}`);
+      }
+      const { generateState } = await import("./services/oauth/state.js");
+      const { buildOAuthStartUrl } = await import("../shared/urls.js");
+      const stateToken = generateState(provider.name, "cli", "cli");
+      const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
+      return { ok: true, name, status: "oauth_required", loginUrl, label: provider.label };
+    }
+
+    // API-key connector — can't connect from here, needs manual key
+    if (!isOAuthCapable(name)) {
+      throw new Error(`${def.label} requires an API key — use /auth ${name} <key>`);
+    }
+
     return { ok: true, name };
   });
 
@@ -556,9 +1010,36 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!connectors) throw new Error("Connector manager not available");
     const name = params.name as string;
     if (!name) throw new Error("name is required");
-    // No disconnect method on ConnectorManager — shutdown the specific connector
-    // The manager doesn't support individual disconnect; this is a no-op
-    return { ok: true, name };
+
+    const { getConnectorDef, isConnectorConfigured, primaryVarName } = await import("../shared/connector.js");
+    const { getOAuthProvider } = await import("./services/oauth/providers.js");
+    const { deleteSecret } = await import("../shared/secrets.js");
+
+    const def = getConnectorDef(name);
+    if (!def) throw new Error(`Unknown connector: ${name}`);
+
+    if (!isConnectorConfigured(name)) {
+      throw new Error(`${def.label} is not connected`);
+    }
+
+    // OAuth connector — delete token(s)
+    const provider = getOAuthProvider(name);
+    if (provider) {
+      deleteSecret(provider.tokenEnvVar);
+      if (provider.refreshTokenEnvVar) {
+        deleteSecret(provider.refreshTokenEnvVar);
+      }
+    } else {
+      // API-key connector — delete all required vars
+      for (const entry of def.required) {
+        deleteSecret(primaryVarName(entry));
+      }
+    }
+
+    // Evict from connector cache so next get() re-initializes
+    connectors.evict(name);
+
+    return { ok: true, name, label: def.label };
   });
 
   registerMethod("connector_health", async (params) => {
@@ -804,6 +1285,121 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }));
   });
 
+  registerMethod("billing.cancel", async () => {
+    const { isBillingConfigured, cancelSubscription } = await import("./billing/stripe.js");
+    if (!isBillingConfigured()) throw new Error("Billing is not configured");
+
+    const { getLicenseState } = await import("./billing/license.js");
+    const { getSubscription } = await import("./billing/store.js");
+
+    const licState = getLicenseState();
+    const subscription = getSubscription();
+
+    if (!subscription || licState.tier === "free") {
+      throw new Error("No active subscription to cancel");
+    }
+
+    if (subscription.cancel_at_period_end) {
+      const endDate = subscription.current_period_end
+        ? new Date(subscription.current_period_end * 1000).toLocaleDateString()
+        : "end of billing period";
+      return { already_cancelling: true, cancel_at: endDate };
+    }
+
+    const { cancelAt } = await cancelSubscription(subscription.id);
+    const endDisplay = cancelAt
+      ? new Date(cancelAt * 1000).toLocaleDateString()
+      : "end of billing period";
+
+    return { cancelled: true, cancel_at: endDisplay };
+  });
+
+  // ── Session lifecycle IPC methods ─────────────────────────────
+  registerMethod("kill_session", async (params) => {
+    const { deleteSession, createSession } = await import("./agent/session/session.js");
+    const { kvSet } = await import("./storage/kv.js");
+    const sessionId = params.session_id as string;
+    const model = (params.model as string) || state.config!.agent.model;
+    if (!sessionId) throw new Error("session_id is required");
+    deleteSession(sessionId);
+    const newSession = createSession({ model });
+    kvSet("state:last_session_id", newSession.id);
+    return {
+      id: newSession.id,
+      slug: newSession.slug,
+      title: newSession.title,
+      model: newSession.model,
+      token_count: newSession.token_count,
+      updated_at: newSession.updated_at,
+    };
+  });
+
+  registerMethod("archive_session", async (params) => {
+    const { archiveSession, createSession } = await import("./agent/session/session.js");
+    const { kvSet } = await import("./storage/kv.js");
+    const sessionId = params.session_id as string;
+    const model = (params.model as string) || state.config!.agent.model;
+    if (!sessionId) throw new Error("session_id is required");
+    archiveSession(sessionId);
+    const newSession = createSession({ model });
+    kvSet("state:last_session_id", newSession.id);
+    return {
+      id: newSession.id,
+      slug: newSession.slug,
+      title: newSession.title,
+      model: newSession.model,
+      token_count: newSession.token_count,
+      updated_at: newSession.updated_at,
+    };
+  });
+
+  // ── Auth IPC methods ──────────────────────────────────────────
+  registerMethod("auth_status", async () => {
+    const { CONNECTOR_DEFS, isConnectorConfigured, isSlotSet, slotLabel, primaryVarName } = await import("../shared/connector.js");
+    return CONNECTOR_DEFS.map((def) => ({
+      name: def.name,
+      label: def.label,
+      description: def.description,
+      configured: isConnectorConfigured(def.name),
+      required: def.required.map((entry) => ({
+        variable: primaryVarName(entry),
+        label: slotLabel(entry),
+        set: isSlotSet(entry),
+      })),
+      optional: def.optional.map((v) => ({
+        variable: v,
+        set: !!process.env[v],
+      })),
+    }));
+  });
+
+  registerMethod("auth_save", async (params) => {
+    const { getConnectorDef, primaryVarName } = await import("../shared/connector.js");
+    const { saveSecret } = await import("../shared/secrets.js");
+    const connectorName = params.name as string;
+    const keys = params.keys as string[];
+
+    if (!connectorName) throw new Error("name is required");
+    if (!keys || keys.length === 0) throw new Error("keys are required");
+
+    const def = getConnectorDef(connectorName);
+    if (!def) throw new Error(`Unknown connector: ${connectorName}`);
+
+    if (keys.length < def.required.length) {
+      const varNames = def.required.map((e) => primaryVarName(e));
+      throw new Error(`${def.label} requires ${def.required.length} key(s): ${varNames.join(", ")}`);
+    }
+
+    let saved = 0;
+    for (let i = 0; i < def.required.length; i++) {
+      const varName = primaryVarName(def.required[i]);
+      saveSecret(varName, keys[i]);
+      saved++;
+    }
+
+    return { connector: connectorName, label: def.label, saved };
+  });
+
   // ── Forward orchestratorBus events through IPC stream ─────────
   // This is wired into the "ask" stream handler above. The orchestratorBus
   // subscriptions are managed per-request inside the ask handler's stream
@@ -835,14 +1431,16 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
  * Gracefully shut down the daemon. Reverses the boot sequence.
  *
  * Order:
- *  1. Stop accepting new HTTP connections
+ *  1.   Stop accepting new HTTP connections
  *  1.5. Stop socket IPC server
- *  2. Disconnect all channels
- *  3. Stop trigger engine
- *  4. Unload plugins
- *  5. Drain and stop worker pool
- *  6. Close database
- *  7. Close logger
+ *  2.   Disconnect all channels
+ *  2.5. Disconnect relay client
+ *  2.6. Shut down connectors
+ *  3.   Stop trigger engine
+ *  4.   Unload plugins
+ *  5.   Drain and stop worker pool
+ *  6.   Close database
+ *  7.   Close logger
  */
 export async function shutdown(): Promise<void> {
   if (state.phase !== "running" && state.phase !== "booting") {
@@ -868,7 +1466,14 @@ export async function shutdown(): Promise<void> {
     log.info("Shutdown: channels disconnected");
   }
 
-  // 2.5. Shut down connectors
+  // 2.5. Disconnect relay client
+  if (state.relay) {
+    state.relay.disconnect();
+    state.relay = null;
+    log.info("Shutdown: relay client disconnected");
+  }
+
+  // 2.6. Shut down connectors
   if (state.connectors) {
     await state.connectors.shutdownAll();
     state.connectors = null;

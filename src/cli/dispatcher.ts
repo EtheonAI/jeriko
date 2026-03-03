@@ -104,6 +104,7 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: prompt } = await import("./commands/agent/prompt.js");
   const { command: skill } = await import("./commands/agent/skill.js");
   const { command: share } = await import("./commands/agent/share.js");
+  const { command: provider } = await import("./commands/agent/provider.js");
 
   // Automation
   const { command: init } = await import("./commands/automation/init.js");
@@ -129,7 +130,7 @@ async function loadBuiltinCommands(): Promise<void> {
     notes, remind, calendar, contacts, music, clipboard, window, camera, open, location,
     stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, connectors,
     code, create, dev, parallel,
-    ask, memory, discover, prompt, skill, share,
+    ask, memory, discover, prompt, skill, share, provider,
     init, server, task, job, setup, update,
     install, trust, uninstall,
     planCommand, upgradeCommand, billingCommand,

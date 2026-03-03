@@ -14,6 +14,9 @@ export const TIER_LIMITS = {
   enterprise: { connectors: 10, triggers: Infinity,  label: "Enterprise" },
 } as const;
 
+/** Human-readable Pro plan price for display in CLI, channels, and docs. */
+export const PRO_PRICE_DISPLAY = "$19.99/mo";
+
 export type BillingTier = keyof typeof TIER_LIMITS;
 
 /** Type guard for validating a string as a BillingTier. */
@@ -74,6 +77,15 @@ export const GRACE_PERIOD_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Past-due grace period: 7 days in milliseconds. */
 export const PAST_DUE_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * Stored value for unlimited triggers.
+ *
+ * SQLite cannot store `Infinity`, so when a tier has unlimited triggers
+ * we store this sentinel value. All gate checks should compare against
+ * `TIER_LIMITS[tier].triggers === Infinity`, NOT against this number.
+ */
+export const UNLIMITED_TRIGGERS_STORED = 999_999;
 
 // ---------------------------------------------------------------------------
 // Helpers

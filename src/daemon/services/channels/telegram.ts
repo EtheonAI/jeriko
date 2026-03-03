@@ -255,32 +255,28 @@ export class TelegramChannel implements ChannelAdapter {
 
     // Register all slash commands visible in the Telegram menu.
     // Must match the commands handled by the channel router in router.ts.
+    // Register commands visible in Telegram's / menu.
+    // Hub commands appear at the top; sub-commands (/new, /switch, /archive, etc.)
+    // are accessible via their hub buttons and still work when typed directly.
     await this.bot.api.setMyCommands([
-      { command: "help", description: "Show available commands" },
-      { command: "new", description: "Start a new session" },
+      { command: "help", description: "Main menu — all commands" },
+      { command: "sessions", description: "New, switch, delete, archive sessions" },
+      { command: "model", description: "View and switch AI models" },
       { command: "stop", description: "Stop current processing" },
       { command: "clear", description: "Clear session history" },
-      { command: "kill", description: "Delete session and start fresh" },
-      { command: "session", description: "Show session info" },
-      { command: "sessions", description: "List recent sessions" },
-      { command: "switch", description: "Resume a session by ID" },
-      { command: "archive", description: "Archive current session" },
-      { command: "model", description: "Get or set the active model" },
-      { command: "connect", description: "OAuth login (GitHub, X, etc.)" },
-      { command: "disconnect", description: "Remove OAuth token" },
-      { command: "connectors", description: "Show integrations status" },
-      { command: "auth", description: "Configure connector API keys" },
-      { command: "health", description: "Test connector connectivity" },
-      { command: "skill", description: "View and manage skill packages" },
-      { command: "triggers", description: "List and manage triggers" },
-      { command: "tasks", description: "List and manage tasks" },
-      { command: "channels", description: "Show messaging channels" },
-      { command: "notifications", description: "Toggle notifications on/off" },
+      { command: "connectors", description: "Integrations and OAuth" },
+      { command: "connect", description: "Connect a service (OAuth)" },
+      { command: "auth", description: "Configure API keys" },
+      { command: "skill", description: "View and manage skills" },
+      { command: "triggers", description: "Manage automation triggers" },
+      { command: "tasks", description: "Manage tasks" },
+      { command: "channels", description: "Manage messaging channels" },
+      { command: "notifications", description: "Toggle notifications" },
+      { command: "share", description: "Share this conversation" },
+      { command: "billing", description: "Plan, upgrade, manage billing" },
       { command: "history", description: "Show recent messages" },
-      { command: "compact", description: "Compact session context" },
-      { command: "share", description: "Share this conversation via link" },
-      { command: "status", description: "Show daemon status" },
-      { command: "sys", description: "Show system info" },
+      { command: "status", description: "Daemon status" },
+      { command: "sys", description: "System info" },
     ]);
 
     this.bot.start({
@@ -431,7 +427,11 @@ export class TelegramChannel implements ChannelAdapter {
     const kb = new InlineKeyboard();
     for (const row of keyboard) {
       for (const button of row) {
-        kb.text(button.label, button.data);
+        if (button.url) {
+          kb.url(button.label, button.url);
+        } else if (button.data) {
+          kb.text(button.label, button.data);
+        }
       }
       kb.row();
     }

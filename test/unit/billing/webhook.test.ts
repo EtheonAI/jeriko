@@ -338,6 +338,79 @@ describe("billing/webhook", () => {
     });
   });
 
+  // ── Trusted mode (relay-forwarded webhooks) ─────────────────────
+
+  describe("trusted mode", () => {
+    it("skips signature verification when trusted", () => {
+      const body = makeEvent("checkout.session.completed", {
+        subscription: "sub_trusted_test",
+        customer: "cus_trusted",
+        customer_email: "trusted@example.com",
+        metadata: {},
+      });
+
+      // No valid signature — would fail without trusted mode
+      const result = processWebhookEvent(body, "invalid-signature", { trusted: true });
+      expect(result.handled).toBe(true);
+      expect(result.eventType).toBe("checkout.session.completed");
+
+      // Verify the event was actually processed (subscription created)
+      const sub = getSubscriptionById("sub_trusted_test");
+      expect(sub).not.toBeNull();
+      expect(sub!.customer_id).toBe("cus_trusted");
+      expect(sub!.tier).toBe("pro");
+    });
+
+    it("still verifies signature when not trusted", () => {
+      const body = makeEvent("invoice.paid", { subscription: "sub_verify" });
+      const result = processWebhookEvent(body, "invalid-signature");
+      expect(result.handled).toBe(false);
+      expect(result.error).toContain("Invalid signature");
+    });
+
+    it("still verifies signature when trusted is false", () => {
+      const body = makeEvent("invoice.paid", { subscription: "sub_verify2" });
+      const result = processWebhookEvent(body, "invalid-signature", { trusted: false });
+      expect(result.handled).toBe(false);
+      expect(result.error).toContain("Invalid signature");
+    });
+
+    it("processes trusted event with empty signature header", () => {
+      const body = makeEvent("customer.subscription.updated", {
+        id: "sub_trusted_update",
+        customer: "cus_trusted2",
+        status: "active",
+        metadata: { tier: "pro" },
+      });
+
+      const result = processWebhookEvent(body, "", { trusted: true });
+      expect(result.handled).toBe(true);
+    });
+
+    it("rejects invalid JSON even in trusted mode", () => {
+      const result = processWebhookEvent("not valid json", "", { trusted: true });
+      expect(result.handled).toBe(false);
+      expect(result.error).toContain("Invalid JSON");
+    });
+
+    it("preserves idempotency in trusted mode", () => {
+      const eventId = `evt_trusted_idem_${Date.now()}`;
+      const body = makeEvent("invoice.paid", { subscription: "sub_idem_trusted" }, eventId);
+
+      const first = processWebhookEvent(body, "", { trusted: true });
+      expect(first.handled).toBe(true);
+
+      const second = processWebhookEvent(body, "", { trusted: true });
+      expect(second.handled).toBe(true);
+      expect(second.eventId).toBe(eventId);
+
+      // Only one event recorded
+      const events = getRecentEvents(100);
+      const matching = events.filter((e) => e.id === eventId);
+      expect(matching.length).toBe(1);
+    });
+  });
+
   // ── Invalid payloads ───────────────────────────────────────────
 
   describe("invalid payloads", () => {

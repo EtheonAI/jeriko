@@ -181,18 +181,31 @@ export function publicShareRoutes(): Hono {
    * GET /s/:id — Render a public HTML page for the shared conversation.
    */
   router.get("/:id", (c) => {
-    const shareId = c.req.param("id");
-    const share = getShare(shareId);
-
-    if (!share) {
-      return c.html(renderNotFoundPage(), 404);
-    }
-
-    const messages: ShareMessage[] = JSON.parse(share.messages);
-    return c.html(renderSharePage(share.title, share.model, share.created_at, messages));
+    const result = renderShareById(c.req.param("id"));
+    return c.html(result.html, result.statusCode);
   });
 
   return router;
+}
+
+/**
+ * Render a share page by ID. Returns { statusCode, html }.
+ *
+ * Used by both:
+ *   - The daemon's own /s/:id route (direct HTTP)
+ *   - The relay client's share_request handler (forwarded via WebSocket)
+ */
+export function renderShareById(shareId: string): { statusCode: number; html: string } {
+  const share = getShare(shareId);
+  if (!share) {
+    return { statusCode: 404, html: renderNotFoundPage() };
+  }
+
+  const messages: ShareMessage[] = JSON.parse(share.messages);
+  return {
+    statusCode: 200,
+    html: renderSharePage(share.title, share.model, share.created_at, messages),
+  };
 }
 
 // ---------------------------------------------------------------------------

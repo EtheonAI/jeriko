@@ -15,10 +15,11 @@ import {
   GRACE_STATUSES,
   GRACE_PERIOD_MS,
   PAST_DUE_GRACE_MS,
+  UNLIMITED_TRIGGERS_STORED,
   type BillingTier,
   isBillingTier,
 } from "./config.js";
-import { getLicense, getSubscription, updateLicense, type BillingLicense } from "./store.js";
+import { getLicense, getSubscription, getSubscriptionById, updateLicense, type BillingLicense } from "./store.js";
 import { getLogger } from "../../shared/logger.js";
 
 const log = getLogger();
@@ -65,7 +66,13 @@ export interface GateResult {
  */
 export function getLicenseState(): LicenseState {
   const license = getLicense();
-  const subscription = getSubscription();
+
+  // Look up the specific subscription tied to the current license first.
+  // Falls back to latest subscription only when no subscription_id is recorded
+  // on the license (e.g., fresh install before any webhook fires).
+  const subscription = license.subscription_id
+    ? getSubscriptionById(license.subscription_id) ?? getSubscription()
+    : getSubscription();
 
   const status = subscription?.status ?? "none";
   const rawTier = license.tier;
@@ -280,10 +287,14 @@ export async function enforceLicenseLimits(
 // ---------------------------------------------------------------------------
 
 /**
- * Refresh the local license cache from Stripe.
+ * Refresh the local license cache.
  *
  * Called at kernel boot (step 5.5) and periodically when the license is stale.
- * Uses lazy import to avoid loading Stripe SDK at module evaluation time.
+ *
+ * Resolution strategy (tries in order):
+ *   1. Relay API (if userId available) — centralized billing, no Stripe SDK needed
+ *   2. Direct Stripe API (if billing configured locally) — self-hosted mode
+ *   3. Keep current license + extend grace period — offline mode
  */
 export async function refreshFromStripe(): Promise<void> {
   const license = getLicense();
@@ -294,6 +305,11 @@ export async function refreshFromStripe(): Promise<void> {
     return;
   }
 
+  // Strategy 1: Try relay API first (centralized billing)
+  const refreshedViaRelay = await refreshFromRelay(license);
+  if (refreshedViaRelay) return;
+
+  // Strategy 2: Direct Stripe API (self-hosted or relay unavailable)
   try {
     const { getStripeSubscription } = await import("./stripe.js");
     const sub = await getStripeSubscription(license.subscription_id);
@@ -317,7 +333,7 @@ export async function refreshFromStripe(): Promise<void> {
     updateLicense({
       tier,
       connector_limit: limits.connectors,
-      trigger_limit: limits.triggers === Infinity ? 999999 : limits.triggers,
+      trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
       verified_at: now,
       valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),
     });
@@ -333,5 +349,71 @@ export async function refreshFromStripe(): Promise<void> {
         valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),
       });
     }
+  }
+}
+
+/**
+ * Try to refresh the license via the relay server's billing API.
+ *
+ * The relay server caches license state from Stripe webhooks, so the daemon
+ * doesn't need the Stripe SDK or direct Stripe API access.
+ *
+ * @returns true if successfully refreshed via relay, false to fall through
+ */
+async function refreshFromRelay(license: BillingLicense): Promise<boolean> {
+  try {
+    const { getUserId } = await import("../../shared/config.js");
+    const { getRelayApiUrl, isSelfHosted } = await import("../../shared/urls.js");
+    const userId = getUserId();
+
+    // Skip relay if no userId or using self-hosted tunnel
+    if (!userId || isSelfHosted()) return false;
+
+    // Authenticate with relay — same secret used for WebSocket auth
+    const authToken = process.env.NODE_AUTH_SECRET;
+    if (!authToken) return false;
+
+    const relayUrl = `${getRelayApiUrl()}/billing/license/${userId}`;
+    const response = await fetch(relayUrl, {
+      headers: { authorization: `Bearer ${authToken}` },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) return false;
+
+    const result = (await response.json()) as {
+      ok: boolean;
+      data?: {
+        tier: string;
+        status: string;
+        subscriptionId: string | null;
+        customerId: string | null;
+        email: string | null;
+      };
+    };
+
+    if (!result.ok || !result.data) return false;
+
+    const { data } = result;
+    const tier = effectiveTier(data.status, data.tier);
+    const limits = TIER_LIMITS[tier];
+    const now = Math.floor(Date.now() / 1000);
+
+    updateLicense({
+      tier,
+      connector_limit: limits.connectors,
+      trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
+      verified_at: now,
+      valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),
+      ...(data.email ? { email: data.email } : {}),
+      ...(data.subscriptionId ? { subscription_id: data.subscriptionId } : {}),
+      ...(data.customerId ? { customer_id: data.customerId } : {}),
+    });
+
+    log.info(`License refreshed via relay: tier=${tier}, status=${data.status}`);
+    return true;
+  } catch (err) {
+    log.debug(`License refresh via relay failed (will try Stripe directly): ${err}`);
+    return false;
   }
 }

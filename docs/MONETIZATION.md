@@ -62,7 +62,7 @@ A complete AI agent platform. No time limits. No credits. No crippling.
 
 The only limits are connectors (2 of 10) and triggers (3). A solo developer picks GitHub + Stripe, sets up 3 cron jobs, and they're productive. They hit the wall only when they want to connect Gmail + Twilio + PayPal + Vercel and set up 10 automated workflows. That's the "I'm running a business" moment. That's the upgrade.
 
-### Pro ($19/mo)
+### Pro ($19.99/mo)
 
 For people who automate their life.
 
@@ -194,7 +194,7 @@ The 5% free-to-paid conversion is conservative (industry average for dev tools i
 
 | vs Competitor | Jeriko's Edge |
 |--------------|---------------|
-| vs Claude Code ($200/mo) | Free agent + $19/mo for platform features. 10x cheaper. |
+| vs Claude Code ($200/mo) | Free agent + $19.99/mo for platform features. 10x cheaper. |
 | vs Cursor ($20–200/mo) | Not locked to one IDE. BYOK any model. |
 | vs Replit ($20–100/mo) | No credit anxiety. No compute charges. |
 | vs Manus ($39–199/mo) | Free tier exists. No credit burn. Open source. |
@@ -202,7 +202,7 @@ The 5% free-to-paid conversion is conservative (industry average for dev tools i
 | vs OpenCode (free) | Same BYOK model, but Jeriko has platform features worth paying for. |
 | vs OpenClaw (free) | Same free core, but Jeriko has built-in monetization via platform tier. |
 
-**The pitch:** "Free AI agent — unlimited everything. Pay $19/mo only when you need full automation: all 10 connectors + unlimited triggers."
+**The pitch:** "Free AI agent — unlimited everything. Pay $19.99/mo only when you need full automation: all 10 connectors + unlimited triggers."
 
 ---
 

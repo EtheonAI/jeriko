@@ -19,7 +19,7 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE } from "../theme.js";
+import { PALETTE, ICONS } from "../theme.js";
 import type { AutocompleteItem } from "../lib/autocomplete.js";
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
         return (
           <Text key={item.name}>
             <Text color={isSelected ? PALETTE.brand : PALETTE.dim}>
-              {isSelected ? "▸ " : "  "}
+              {isSelected ? `${ICONS.arrow} ` : "  "}
             </Text>
             <Text color={isSelected ? PALETTE.brand : PALETTE.muted} bold={isSelected}>
               {item.name.padEnd(18)}

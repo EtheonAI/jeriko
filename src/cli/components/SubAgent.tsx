@@ -1,27 +1,25 @@
 /**
- * SubAgent — Live sub-agent monitoring display.
+ * SubAgent — Live sub-agent orchestration display with tree structure.
  *
- * Two rendering modes:
+ * Renders sub-agents as a tree branching from the orchestrator,
+ * with connector lines showing parent→child relationships:
  *
- * 1. **Live mode** — renders from SubAgentState (real-time streaming):
- *    ⏺ Research  "Find authentication patterns in the codebase"
- *      ⠙ Running search_files…  3 tool calls
- *      Preview: Found 12 files with auth patterns including…
+ * Live mode (during execution):
+ *   ⏺ Orchestrating
+ *   ├── ⠋ Research      search_files    3 calls  4.2s
+ *   │   └ Searching for auth patterns…
+ *   ├── ✓ Explore       done            2 calls  1.8s
+ *   └── ⠋ CodeReview    read_file       7 calls  6.1s
+ *       └ Reviewing changes…
  *
- *    When completed:
- *    ⏺ Research  Find authentication patterns…
- *      ⎿  Done (8 tool calls · 4.6s)
- *
- * 2. **Static mode** — renders from DisplayToolCall (frozen in message history):
- *    ⏺ Explore  Search for auth patterns…
- *      ⎿  Done (5 tool calls · 4.6k tokens · 8.2s)
- *
- * Live mode takes priority when SubAgentState is provided.
+ * Static mode (frozen in history):
+ *   ⏺ Delegate  Search for auth patterns…
+ *   ⎿  Done (5 tool calls · 4.6k tokens · 8.2s)
  */
 
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Text, Box } from "ink";
-import { PALETTE } from "../theme.js";
+import { PALETTE, ICONS } from "../theme.js";
 import {
   capitalize,
   formatTokens,
@@ -29,93 +27,146 @@ import {
   pluralize,
   safeParseJson,
 } from "../format.js";
-import { Spinner } from "./Spinner.js";
 import { getAgentTypeColor } from "../hooks/useSubAgents.js";
 import type { DisplayToolCall, SubAgentState } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Live sub-agent rendering (from SubAgentState)
+// Tree connector characters
 // ---------------------------------------------------------------------------
 
-interface LiveSubAgentProps {
-  agent: SubAgentState;
+const TREE = {
+  branch:   "├── ",   // middle child
+  last:     "└── ",   // last child
+  pipe:     "│   ",   // continuation line under branch
+  space:    "    ",   // continuation line under last
+  preview:  "└ ",     // stream preview connector
+} as const;
+
+// ---------------------------------------------------------------------------
+// Inline spinner (shared)
+// ---------------------------------------------------------------------------
+
+const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+const SpinnerChar: React.FC<{ color: string }> = ({ color }) => {
+  const [frame, setFrame] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setFrame((f) => (f + 1) % SPINNER_FRAMES.length);
+    }, 80);
+    return () => clearInterval(timer);
+  }, []);
+
+  return <Text color={color}>{SPINNER_FRAMES[frame % SPINNER_FRAMES.length]}</Text>;
+};
+
+// ---------------------------------------------------------------------------
+// Elapsed time hook (shared)
+// ---------------------------------------------------------------------------
+
+function useElapsedTime(startTime: number, phase: SubAgentState["phase"], durationMs?: number): number {
+  const [elapsed, setElapsed] = useState(() => durationMs ?? Date.now() - startTime);
+
+  useEffect(() => {
+    if (phase !== "running") {
+      setElapsed(durationMs ?? Date.now() - startTime);
+      return;
+    }
+    const timer = setInterval(() => {
+      setElapsed(Date.now() - startTime);
+    }, 200);
+    return () => clearInterval(timer);
+  }, [phase, startTime, durationMs]);
+
+  return elapsed;
 }
 
-/**
- * Live sub-agent view — shows real-time status with spinner,
- * tool indicator, stream preview, and completion summary.
- */
-export const LiveSubAgent: React.FC<LiveSubAgentProps> = ({ agent }) => {
+// ---------------------------------------------------------------------------
+// Status icon resolver
+// ---------------------------------------------------------------------------
+
+function resolveStatusIcon(
+  phase: SubAgentState["phase"],
+  color: string,
+): React.ReactNode {
+  switch (phase) {
+    case "running":
+      return <SpinnerChar color={color} />;
+    case "completed":
+      return <Text color={PALETTE.green}>{ICONS.success}</Text>;
+    case "error":
+      return <Text color={PALETTE.red}>{ICONS.error}</Text>;
+  }
+}
+
+function resolveToolLabel(phase: SubAgentState["phase"], currentTool: string | null): string {
+  switch (phase) {
+    case "running":
+      return currentTool ?? "working";
+    case "completed":
+      return "done";
+    case "error":
+      return "failed";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Live sub-agent node (single agent in the tree)
+// ---------------------------------------------------------------------------
+
+interface AgentNodeProps {
+  agent: SubAgentState;
+  /** Tree connector prefix (e.g., "├── " or "└── "). */
+  connector: string;
+  /** Continuation prefix for sub-lines (e.g., "│   " or "    "). */
+  continuation: string;
+  /** Whether to show the stream preview line. */
+  showPreview?: boolean;
+}
+
+const AgentNode: React.FC<AgentNodeProps> = ({
+  agent,
+  connector,
+  continuation,
+  showPreview = true,
+}) => {
   const colorKey = getAgentTypeColor(agent.agentType);
   const badgeColor = (PALETTE as Record<string, string>)[colorKey] ?? PALETTE.text;
   const label = capitalize(agent.agentType);
-  const summary = agent.label.length > 60
-    ? agent.label.slice(0, 60) + "…"
-    : agent.label;
+  const elapsed = useElapsedTime(agent.startTime, agent.phase, agent.durationMs);
+  const statusIcon = resolveStatusIcon(agent.phase, badgeColor);
+  const toolStr = resolveToolLabel(agent.phase, agent.currentTool);
+
+  // Only show preview for running agents with content
+  const previewText = showPreview && agent.phase === "running" && agent.streamPreview.length > 0
+    ? truncatePreview(agent.streamPreview, 60)
+    : null;
 
   return (
     <Box flexDirection="column">
-      {/* Header line: badge + type + prompt summary */}
+      {/* Main agent line */}
       <Text>
-        <Text color={PALETTE.purple}>⏺ </Text>
-        <Text bold color={badgeColor}>{label}</Text>
-        <Text color={PALETTE.muted}>  {summary}</Text>
+        <Text color={PALETTE.dim}>{connector}</Text>
+        {statusIcon}
+        <Text color={badgeColor} bold> {label}</Text>
+        <Text color={PALETTE.muted}>{"  "}{toolStr}</Text>
+        <Text color={PALETTE.dim}>{"  "}{pluralize(agent.toolCallCount, "call")}</Text>
+        <Text color={PALETTE.dim}>{"  "}{formatDuration(elapsed)}</Text>
       </Text>
 
-      {/* Running state: spinner + tool + tool count */}
-      {agent.phase === "running" && (
-        <Box marginLeft={4}>
-          <Spinner
-            label={agent.currentTool ? `Running ${agent.currentTool}` : "Working"}
-            color={badgeColor}
-          />
-          {agent.toolCallCount > 0 && (
-            <Text color={PALETTE.dim}>  {pluralize(agent.toolCallCount, "tool call")}</Text>
-          )}
-        </Box>
-      )}
-
-      {/* Running state: stream preview (if available) */}
-      {agent.phase === "running" && agent.streamPreview.length > 0 && (
-        <Box marginLeft={4}>
-          <Text color={PALETTE.dim}>Preview: </Text>
-          <Text color={PALETTE.muted}>{agent.streamPreview}</Text>
-        </Box>
-      )}
-
-      {/* Completed state */}
-      {agent.phase === "completed" && (
-        <Box marginLeft={2}>
-          <Text color={PALETTE.dim}>⎿  </Text>
-          <Text color={PALETTE.muted}>
-            Done ({pluralize(agent.toolCallCount, "tool call")}
-            {agent.durationMs != null && agent.durationMs > 0
-              ? ` · ${formatDuration(agent.durationMs)}`
-              : ""}
-            )
-          </Text>
-        </Box>
-      )}
-
-      {/* Error state */}
-      {agent.phase === "error" && (
-        <Box marginLeft={2}>
-          <Text color={PALETTE.dim}>⎿  </Text>
-          <Text color={PALETTE.red}>
-            Failed ({pluralize(agent.toolCallCount, "tool call")}
-            {agent.durationMs != null && agent.durationMs > 0
-              ? ` · ${formatDuration(agent.durationMs)}`
-              : ""}
-            )
-          </Text>
-        </Box>
+      {/* Stream preview sub-line */}
+      {previewText && (
+        <Text>
+          <Text color={PALETTE.dim}>{continuation}{TREE.preview}</Text>
+          <Text color={PALETTE.faint}>{previewText}</Text>
+        </Text>
       )}
     </Box>
   );
 };
 
 // ---------------------------------------------------------------------------
-// Live sub-agent list (renders all tracked agents)
+// Live sub-agent list with tree structure
 // ---------------------------------------------------------------------------
 
 interface SubAgentListProps {
@@ -123,17 +174,75 @@ interface SubAgentListProps {
 }
 
 /**
- * Renders a list of live sub-agents.
- * Expects a sorted array (from useSubAgents hook).
+ * Renders live sub-agents as a tree branching from the orchestrator.
+ * Uses box-drawing characters for the parent→child visual.
  */
 export const SubAgentList: React.FC<SubAgentListProps> = ({ agents }) => {
   if (agents.length === 0) return null;
 
+  const runningCount = agents.filter((a) => a.phase === "running").length;
+  const totalCount = agents.length;
+  const headerLabel = runningCount > 0
+    ? `${runningCount}/${totalCount} agents`
+    : `${totalCount} agent${totalCount !== 1 ? "s" : ""}`;
+
   return (
-    <Box flexDirection="column">
-      {agents.map((agent) => (
-        <LiveSubAgent key={agent.childSessionId} agent={agent} />
-      ))}
+    <Box flexDirection="column" marginTop={0}>
+      {/* Tree header */}
+      <Text>
+        <Text color={PALETTE.purple}>{ICONS.tool} </Text>
+        <Text color={PALETTE.muted}>Orchestrating</Text>
+        <Text color={PALETTE.dim}>{"  "}{headerLabel}</Text>
+      </Text>
+
+      {/* Agent nodes with tree connectors */}
+      {agents.map((agent, idx) => {
+        const isLast = idx === agents.length - 1;
+        const connector = isLast ? TREE.last : TREE.branch;
+        const continuation = isLast ? TREE.space : TREE.pipe;
+
+        return (
+          <AgentNode
+            key={agent.childSessionId}
+            agent={agent}
+            connector={connector}
+            continuation={continuation}
+          />
+        );
+      })}
+    </Box>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Legacy single-agent live view (backward compat, used by app.tsx liveToolCalls)
+// ---------------------------------------------------------------------------
+
+interface LiveSubAgentProps {
+  agent: SubAgentState;
+}
+
+/**
+ * Single live agent view — used when only one sub-agent is tracked
+ * (e.g., direct delegate without orchestration context).
+ */
+export const LiveSubAgent: React.FC<LiveSubAgentProps> = ({ agent }) => {
+  const colorKey = getAgentTypeColor(agent.agentType);
+  const badgeColor = (PALETTE as Record<string, string>)[colorKey] ?? PALETTE.text;
+  const label = capitalize(agent.agentType);
+  const elapsed = useElapsedTime(agent.startTime, agent.phase, agent.durationMs);
+  const statusIcon = resolveStatusIcon(agent.phase, badgeColor);
+  const toolStr = resolveToolLabel(agent.phase, agent.currentTool);
+
+  return (
+    <Box marginLeft={2}>
+      <Text>
+        {statusIcon}
+        <Text color={badgeColor} bold> {label}</Text>
+        <Text color={PALETTE.muted}>{"  "}{toolStr}</Text>
+        <Text color={PALETTE.dim}>{"  "}{pluralize(agent.toolCallCount, "call")}</Text>
+        <Text color={PALETTE.dim}>{"  "}{formatDuration(elapsed)}</Text>
+      </Text>
     </Box>
   );
 };
@@ -161,7 +270,7 @@ export const SubAgentView: React.FC<SubAgentViewProps> = ({ toolCall }) => {
 };
 
 // ---------------------------------------------------------------------------
-// Delegate (static)
+// Delegate (static) — tree view for completed delegate calls
 // ---------------------------------------------------------------------------
 
 const DelegateView: React.FC<{ toolCall: DisplayToolCall; isDone: boolean }> = ({
@@ -180,14 +289,14 @@ const DelegateView: React.FC<{ toolCall: DisplayToolCall; isDone: boolean }> = (
   return (
     <Box flexDirection="column">
       <Text>
-        <Text color={PALETTE.purple}>⏺ </Text>
+        <Text color={PALETTE.purple}>{ICONS.tool} </Text>
         <Text bold color={badgeColor}>{label}</Text>
         <Text color={PALETTE.muted}>  {summary}</Text>
       </Text>
 
       {isDone && toolCall.result !== undefined && (
         <Box marginLeft={2}>
-          <Text color={PALETTE.dim}>⎿  </Text>
+          <Text color={PALETTE.dim}>{ICONS.result}  </Text>
           <DelegateResultSummary result={toolCall.result} durationMs={toolCall.durationMs ?? 0} />
         </Box>
       )}
@@ -211,13 +320,13 @@ const DelegateResultSummary: React.FC<{ result: string; durationMs: number }> = 
 
   return (
     <Text color={PALETTE.muted}>
-      Done ({pluralize(toolCount, "tool call")} · {formatTokens(totalTokens)} tokens · {formatDuration(durationMs)})
+      Done ({pluralize(toolCount, "tool call")} {ICONS.dot} {formatTokens(totalTokens)} tokens {ICONS.dot} {formatDuration(durationMs)})
     </Text>
   );
 };
 
 // ---------------------------------------------------------------------------
-// Parallel (static)
+// Parallel (static) — tree view for completed parallel calls
 // ---------------------------------------------------------------------------
 
 const ParallelView: React.FC<{ toolCall: DisplayToolCall; isDone: boolean }> = ({
@@ -231,7 +340,7 @@ const ParallelView: React.FC<{ toolCall: DisplayToolCall; isDone: boolean }> = (
   return (
     <Box flexDirection="column">
       <Text>
-        <Text color={PALETTE.purple}>⏺ </Text>
+        <Text color={PALETTE.purple}>{ICONS.tool} </Text>
         <Text bold color={PALETTE.text}>Parallel</Text>
         <Text color={PALETTE.muted}>  {taskCount} task{taskCount !== 1 ? "s" : ""}</Text>
       </Text>
@@ -258,7 +367,7 @@ const ParallelResultSummary: React.FC<{ result: string }> = ({ result }) => {
   if (parsed.ok === false) {
     return (
       <Box marginLeft={2}>
-        <Text color={PALETTE.dim}>⎿  </Text>
+        <Text color={PALETTE.dim}>{ICONS.result}  </Text>
         <Text color={PALETTE.red}>{(parsed.error as string) ?? "Parallel failed"}</Text>
       </Box>
     );
@@ -268,7 +377,7 @@ const ParallelResultSummary: React.FC<{ result: string }> = ({ result }) => {
   if (results.length === 0) {
     return (
       <Box marginLeft={2}>
-        <Text color={PALETTE.dim}>⎿  Done (no results)</Text>
+        <Text color={PALETTE.dim}>{ICONS.result}  Done (no results)</Text>
       </Box>
     );
   }
@@ -276,7 +385,9 @@ const ParallelResultSummary: React.FC<{ result: string }> = ({ result }) => {
   return (
     <Box flexDirection="column">
       {results.map((r, i) => {
-        const icon = r.status === "success" ? "✓" : "✗";
+        const isLast = i === results.length - 1;
+        const connector = isLast ? TREE.last : TREE.branch;
+        const icon = r.status === "success" ? ICONS.success : ICONS.error;
         const iconColor = r.status === "success" ? PALETTE.green : PALETTE.red;
         const label = capitalize(r.agentType);
         const colorKey = getAgentTypeColor(r.agentType);
@@ -285,14 +396,26 @@ const ParallelResultSummary: React.FC<{ result: string }> = ({ result }) => {
         const totalTokens = (r.tokensIn ?? 0) + (r.tokensOut ?? 0);
 
         return (
-          <Box key={i} marginLeft={2}>
-            <Text color={PALETTE.dim}>⎿  </Text>
+          <Text key={i}>
+            <Text color={PALETTE.dim}>{connector}</Text>
             <Text color={iconColor}>{icon} </Text>
-            <Text color={badgeColor}>{label}</Text>
-            <Text color={PALETTE.muted}>  {pluralize(toolCount, "tool call")} · {formatTokens(totalTokens)} tokens · {formatDuration(r.durationMs)}</Text>
-          </Box>
+            <Text color={badgeColor} bold>{label}</Text>
+            <Text color={PALETTE.muted}>  {pluralize(toolCount, "tool call")} {ICONS.dot} {formatTokens(totalTokens)} tokens {ICONS.dot} {formatDuration(r.durationMs)}</Text>
+          </Text>
         );
       })}
     </Box>
   );
 };
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Truncate a stream preview string to a max length, trimming trailing whitespace. */
+function truncatePreview(preview: string, maxLen: number): string {
+  // Take the last meaningful portion of the preview
+  const cleaned = preview.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return cleaned.slice(-maxLen).trim() + "…";
+}

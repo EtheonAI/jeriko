@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "paths": {
+      "@jeriko/shared/*": ["../../src/shared/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "../../src/shared/relay-protocol.ts"]
+}

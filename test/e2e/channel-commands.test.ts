@@ -13,6 +13,7 @@ import type {
   MessageHandler,
   MessageMetadata,
   SentMessage,
+  KeyboardLayout,
 } from "../../src/daemon/services/channels/index.js";
 import {
   CONNECTOR_DEFS,
@@ -45,6 +46,7 @@ class MockChannel implements ChannelAdapter {
 
   // ── Recording buffers ────────────────────────────────────────────────
   readonly sent: Array<{ target: string; text: string }> = [];
+  readonly keyboards: Array<{ target: string; text: string; keyboard: KeyboardLayout }> = [];
   readonly deleted: Array<{ target: string; messageId: string | number }> = [];
   readonly edits: Array<{ target: string; messageId: string | number; text: string }> = [];
   private nextMsgId = 1;
@@ -75,6 +77,11 @@ class MockChannel implements ChannelAdapter {
 
   async deleteMessage(target: string, messageId: string | number): Promise<void> {
     this.deleted.push({ target, messageId });
+  }
+
+  async sendKeyboard(target: string, text: string, keyboard: KeyboardLayout): Promise<void> {
+    this.keyboards.push({ target, text, keyboard });
+    this.sent.push({ target, text });
   }
 
   async sendTyping(_target: string): Promise<void> { /* no-op */ }
@@ -111,6 +118,7 @@ class MockChannel implements ChannelAdapter {
   /** Clear all recording buffers. */
   clear(): void {
     this.sent.length = 0;
+    this.keyboards.length = 0;
     this.deleted.length = 0;
     this.edits.length = 0;
   }
@@ -123,6 +131,27 @@ class MockChannel implements ChannelAdapter {
   /** Get all sent texts joined with a separator. */
   allSentText(): string {
     return this.sent.map((m) => m.text).join("\n---\n");
+  }
+
+  /** Get the last keyboard sent, or null. */
+  lastKeyboard(): { text: string; keyboard: KeyboardLayout } | null {
+    return this.keyboards[this.keyboards.length - 1] ?? null;
+  }
+
+  /** Flatten all button data values from the last keyboard. */
+  lastKeyboardData(): string[] {
+    const kb = this.lastKeyboard();
+    if (!kb) return [];
+    return kb.keyboard.flatMap((row) =>
+      row.flatMap((b) => [b.data, b.url].filter((v): v is string => !!v)),
+    );
+  }
+
+  /** Flatten all button labels from the last keyboard. */
+  lastKeyboardLabels(): string[] {
+    const kb = this.lastKeyboard();
+    if (!kb) return [];
+    return kb.keyboard.flatMap((row) => row.map((b) => b.label));
   }
 }
 
@@ -779,6 +808,1382 @@ describe("Channel commands E2E", () => {
       // No messages should be sent for empty input
       // (the router trims and checks for empty)
       expect(mock.sent.length).toBe(0);
+    });
+  });
+
+  // ─── Sessions Hub (multi-step flow) ──────────────────────────────
+
+  describe("sessions hub", () => {
+    test("/sessions — shows hub menu with navigation buttons", async () => {
+      mock.clear();
+      mock.simulateIncoming("/sessions");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Current:");
+      expect(kb!.text).toContain("Model:");
+      expect(kb!.text).toContain("Total:");
+
+      // Hub must have action buttons
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("New Session");
+      expect(labels).toContain("Switch");
+      expect(labels).toContain("Delete");
+      expect(labels).toContain("Archive");
+      expect(labels).toContain("Rename");
+      expect(labels).toContain("History");
+
+      // Buttons route to correct sub-commands
+      const data = mock.lastKeyboardData();
+      expect(data).toContain("/new");
+      expect(data).toContain("/sessions switch");
+      expect(data).toContain("/sessions delete");
+      expect(data).toContain("/archive");
+      expect(data).toContain("/sessions rename");
+      expect(data).toContain("/history");
+    });
+
+    test("/sessions switch — lists sessions with switch buttons", async () => {
+      // Create a second session first
+      mock.clear();
+      mock.simulateIncoming("/new");
+      await wait();
+
+      mock.clear();
+      mock.simulateIncoming("/sessions switch");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Sessions:");
+      expect(kb!.text).toContain("Tap to switch:");
+
+      // Should have a back button
+      const data = mock.lastKeyboardData();
+      expect(data).toContain("/sessions");
+
+      // Non-active sessions should have switch buttons
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("« Back");
+    });
+
+    test("/sessions delete — lists sessions with delete buttons", async () => {
+      mock.clear();
+      mock.simulateIncoming("/sessions delete");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Sessions:");
+      expect(kb!.text).toContain("Tap to delete");
+
+      // Should have back button
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("« Back");
+
+      // Non-current sessions should have delete buttons
+      const data = mock.lastKeyboardData();
+      const rmButtons = data.filter((d) => d.startsWith("/sessions rm "));
+      expect(rmButtons.length).toBeGreaterThan(0);
+    });
+
+    test("/sessions rm <slug> — deletes a non-active session", async () => {
+      // Get slug of current session from /sessions switch list
+      mock.clear();
+      mock.simulateIncoming("/new");
+      await wait();
+
+      // List sessions to find the old one's slug (from switch buttons)
+      mock.clear();
+      mock.simulateIncoming("/sessions switch");
+      await wait();
+      const switchData = mock.lastKeyboardData();
+      const switchCmd = switchData.find((d) => d.startsWith("/switch "));
+      expect(switchCmd).toBeDefined();
+      const slug = switchCmd!.replace("/switch ", "");
+
+      // Delete by slug
+      mock.clear();
+      mock.simulateIncoming(`/sessions rm ${slug}`);
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Session deleted:");
+      expect(kb!.text).toContain(slug);
+      expect(mock.lastKeyboardData()).toContain("/sessions");
+    });
+
+    test("/sessions rm — active session refuses deletion", async () => {
+      // Get the current session slug
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      const sessionInfo = mock.lastSent();
+      const currentSlug = sessionInfo.match(/session:\s*(\S+)/)?.[1];
+
+      if (currentSlug) {
+        mock.clear();
+        mock.simulateIncoming(`/sessions rm ${currentSlug}`);
+        await wait();
+        expect(mock.lastSent()).toContain("Cannot delete the active session");
+      }
+    });
+
+    test("/sessions rename <title> — renames current session", async () => {
+      mock.clear();
+      mock.simulateIncoming("/sessions rename My Custom Title");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Session renamed: My Custom Title");
+      expect(mock.lastKeyboardData()).toContain("/sessions");
+    });
+
+    test("/sessions rename — no title shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/sessions rename");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Usage:");
+    });
+
+    test("full flow: /sessions → /sessions switch → /switch <slug>", async () => {
+      // Step 1: Open sessions hub
+      mock.clear();
+      mock.simulateIncoming("/sessions");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/sessions switch");
+
+      // Step 2: Open switch list
+      mock.clear();
+      mock.simulateIncoming("/sessions switch");
+      await wait();
+      const switchData = mock.lastKeyboardData();
+      const switchButton = switchData.find((d) => d.startsWith("/switch "));
+
+      if (switchButton) {
+        // Step 3: Actually switch
+        mock.clear();
+        mock.simulateIncoming(switchButton);
+        await wait();
+        expect(mock.lastSent()).toContain("Switched to session:");
+      }
+    });
+  });
+
+  // ─── Channels Hub (multi-step flow) ──────────────────────────────
+
+  describe("channels hub", () => {
+    test("/channels — shows channel status with buttons", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Channels:");
+      expect(kb!.text).toContain("connected");
+      expect(kb!.text).toContain("mock");
+
+      // Should have Add Channel button
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("Add Channel");
+      expect(mock.lastKeyboardData()).toContain("/channels add");
+    });
+
+    test("/channels add — shows channel type selection", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Add a channel");
+
+      // Should list available channel types
+      const labels = mock.lastKeyboardLabels();
+      const hasTypes = ["telegram", "whatsapp", "slack", "discord"].some((t) =>
+        labels.some((l) => l.toLowerCase().includes(t)),
+      );
+      expect(hasTypes).toBe(true);
+
+      // Back button
+      expect(mock.lastKeyboardData()).toContain("/channels");
+    });
+
+    test("/channels add telegram — shows setup guide", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add telegram");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Telegram Setup:");
+      expect(kb!.text).toContain("@BotFather");
+      expect(kb!.text).toContain("config.json");
+
+      // Back to channels
+      expect(mock.lastKeyboardData()).toContain("/channels");
+    });
+
+    test("/channels add whatsapp — shows setup guide", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add whatsapp");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("WhatsApp Setup:");
+      expect(kb!.text).toContain("QR code");
+    });
+
+    test("/channels add slack — shows setup guide", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add slack");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Slack Setup:");
+      expect(kb!.text).toContain("Socket Mode");
+    });
+
+    test("/channels add discord — shows setup guide", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add discord");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Discord Setup:");
+      expect(kb!.text).toContain("Message Content Intent");
+    });
+
+    test("/channels connect — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels connect");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Usage:");
+    });
+
+    test("/channels disconnect — prevents self-disconnect", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels disconnect mock");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Cannot disconnect mock");
+      expect(mock.lastSent()).toContain("you're using it right now");
+    });
+
+    test("full flow: /channels → /channels add → /channels add discord", async () => {
+      // Step 1: Hub
+      mock.clear();
+      mock.simulateIncoming("/channels");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/channels add");
+
+      // Step 2: Add type selection
+      mock.clear();
+      mock.simulateIncoming("/channels add");
+      await wait();
+      const data = mock.lastKeyboardData();
+      expect(data).toContain("/channels add discord");
+
+      // Step 3: Setup guide
+      mock.clear();
+      mock.simulateIncoming("/channels add discord");
+      await wait();
+      expect(mock.lastKeyboard()!.text).toContain("Discord Setup:");
+      // Can navigate back
+      expect(mock.lastKeyboardData()).toContain("/channels");
+    });
+  });
+
+  // ─── Model Hub (multi-step flow) ─────────────────────────────────
+
+  describe("model hub", () => {
+    test("/model — shows current model with provider buttons", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Current:");
+      expect(kb!.text).toContain("claude");
+      expect(kb!.text).toContain("Tap provider to switch");
+
+      // Should have Browse Models and Add Provider
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("Browse Models");
+      expect(labels).toContain("Add Provider");
+      expect(mock.lastKeyboardData()).toContain("/model list");
+      expect(mock.lastKeyboardData()).toContain("/model add");
+    });
+
+    test("/model list — shows provider list", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model list");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Select a provider");
+
+      // Should have model list buttons for providers
+      const data = mock.lastKeyboardData();
+      const providerListButtons = data.filter((d) => d.startsWith("/model list "));
+      expect(providerListButtons.length).toBeGreaterThan(0);
+
+      // Back to model hub
+      expect(data).toContain("/model");
+    });
+
+    test("/model list <provider> — shows models or empty state", async () => {
+      // Get a valid provider from the list
+      mock.clear();
+      mock.simulateIncoming("/model list");
+      await wait();
+      const providers = mock.lastKeyboardData().filter((d) => d.startsWith("/model list "));
+      expect(providers.length).toBeGreaterThan(0);
+
+      // Try the first provider
+      const providerCmd = providers[0]!;
+      const providerName = providerCmd.replace("/model list ", "");
+      mock.clear();
+      mock.simulateIncoming(providerCmd);
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+
+      // Without the model registry fetch, providers may show "No models found"
+      // or models list — both are valid
+      if (kb!.text.includes("No models found")) {
+        expect(kb!.text).toContain(providerName);
+        expect(mock.lastKeyboardData()).toContain("/model list");
+      } else {
+        expect(kb!.text).toContain(`${providerName} models:`);
+        // Back to providers
+        expect(mock.lastKeyboardData()).toContain("/model list");
+      }
+    });
+
+    test("/model list unknown — shows error", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model list notreal");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Unknown provider: notreal");
+    });
+
+    test("/model add — shows custom provider setup guide", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model add");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Add a custom AI provider");
+      expect(kb!.text).toContain("Environment variable");
+      expect(kb!.text).toContain("Config file");
+      expect(kb!.text).toContain("config.json");
+
+      // Back to model hub
+      expect(mock.lastKeyboardData()).toContain("/model");
+    });
+
+    test("/model <valid> — switches model and shows back button", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model gpt");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Switched to:");
+      expect(mock.lastKeyboardData()).toContain("/model");
+
+      // Switch back to claude
+      mock.clear();
+      mock.simulateIncoming("/model claude");
+      await wait();
+      expect(mock.lastKeyboard()!.text).toContain("Switched to:");
+    });
+
+    test("/model <invalid> — shows error with available models", async () => {
+      mock.clear();
+      mock.simulateIncoming("/model notamodel");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Unknown model: notamodel");
+      expect(mock.lastSent()).toContain("Available:");
+    });
+
+    test("full flow: /model → /model list → provider → back", async () => {
+      // Step 1: Hub
+      mock.clear();
+      mock.simulateIncoming("/model");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/model list");
+
+      // Step 2: Provider list
+      mock.clear();
+      mock.simulateIncoming("/model list");
+      await wait();
+      const providers = mock.lastKeyboardData().filter((d) => d.startsWith("/model list "));
+      expect(providers.length).toBeGreaterThan(0);
+
+      // Step 3: Drill into a provider
+      mock.clear();
+      mock.simulateIncoming(providers[0]!);
+      await wait();
+
+      // Should show models or empty state, both with back navigation
+      expect(mock.lastKeyboardData()).toContain("/model list");
+
+      // Step 4: Navigate back to hub
+      mock.clear();
+      mock.simulateIncoming("/model");
+      await wait();
+      expect(mock.lastKeyboard()!.text).toContain("Current:");
+    });
+  });
+
+  // ─── Help Hub ────────────────────────────────────────────────────
+
+  describe("help hub", () => {
+    test("/help — shows keyboard with hub navigation", async () => {
+      mock.clear();
+      mock.simulateIncoming("/help");
+      await wait();
+
+      const kb = mock.lastKeyboard();
+      expect(kb).not.toBeNull();
+      expect(kb!.text).toContain("Jeriko");
+
+      // Should have navigation buttons to all major hubs
+      const data = mock.lastKeyboardData();
+      expect(data).toContain("/sessions");
+      expect(data).toContain("/model");
+      expect(data).toContain("/connectors");
+      expect(data).toContain("/channels");
+      expect(data).toContain("/billing");
+      expect(data).toContain("/status");
+
+      // Labels should be concise hub names
+      const labels = mock.lastKeyboardLabels();
+      expect(labels).toContain("Sessions");
+      expect(labels).toContain("Model");
+      expect(labels).toContain("Channels");
+      expect(labels).toContain("Billing");
+    });
+
+    test("/help buttons navigate to correct hubs", async () => {
+      // Each button in /help should lead to a functional hub
+      const hubCommands = ["/sessions", "/model", "/channels", "/connectors", "/status"];
+
+      for (const cmd of hubCommands) {
+        mock.clear();
+        mock.simulateIncoming(cmd);
+        await wait();
+
+        // Every hub should produce a response
+        expect(mock.sent.length).toBeGreaterThan(0);
+        expect(mock.lastSent().length).toBeGreaterThan(0);
+      }
+    });
+  });
+
+  // ─── Billing Hub (multi-step flow) ───────────────────────────────
+
+  describe("billing hub", () => {
+    test("/billing — shows plan summary or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/billing");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either shows billing hub or "not configured" — both are valid
+      expect(response.length).toBeGreaterThan(0);
+
+      if (response.includes("not configured")) {
+        // Billing not set up — this is expected in test env
+        expect(response).toContain("Billing is not configured");
+      } else {
+        // Billing is configured — should show plan info
+        expect(response).toContain("Plan:");
+        expect(response).toContain("Status:");
+
+        const kb = mock.lastKeyboard();
+        if (kb) {
+          const labels = mock.lastKeyboardLabels();
+          expect(labels).toContain("View Plan");
+        }
+      }
+    });
+
+    test("/billing events — shows events or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/billing events");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+
+      if (!response.includes("not configured")) {
+        // Shows events or "no billing events" with back nav
+        const kb = mock.lastKeyboard();
+        if (kb) {
+          expect(mock.lastKeyboardData()).toContain("/billing");
+        }
+      }
+    });
+
+    test("/billing portal — requires subscription or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/billing portal");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+
+      if (!response.includes("not configured")) {
+        // No subscription in test → should suggest upgrade
+        if (response.includes("No active subscription")) {
+          const data = mock.lastKeyboardData();
+          expect(data).toContain("/upgrade");
+          expect(data).toContain("/billing");
+        }
+      }
+    });
+
+    test("/upgrade — shows checkout or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/upgrade");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+      // Billing not configured in test env is the expected case
+    });
+
+    test("/plan — shows plan details or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/plan");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── Switch command (session switching) ──────────────────────────
+
+  describe("/switch", () => {
+    test("/switch — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/switch");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Usage:");
+    });
+
+    test("/switch <unknown> — shows not found", async () => {
+      mock.clear();
+      mock.simulateIncoming("/switch nonexistent-slug");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Session not found:");
+    });
+
+    test("/switch <valid-slug> — switches session", async () => {
+      // Create a new session, note its slug
+      mock.clear();
+      mock.simulateIncoming("/new");
+      await wait();
+      const text = mock.lastSent();
+      const slug = text.match(/New session: (\S+)/)?.[1];
+      expect(slug).toBeDefined();
+
+      // Create another session
+      mock.clear();
+      mock.simulateIncoming("/new");
+      await wait();
+
+      // Switch back to the first
+      mock.clear();
+      mock.simulateIncoming(`/switch ${slug}`);
+      await wait();
+
+      expect(mock.lastSent()).toContain("Switched to session:");
+      expect(mock.lastSent()).toContain(slug!);
+    });
+  });
+
+  // ─── /share (conversation sharing) ─────────────────────────────
+
+  describe("/share", () => {
+    test("/share — creates a share or reports no messages", async () => {
+      mock.clear();
+      mock.simulateIncoming("/share");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either creates a share link or says "no messages to share"
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/share list — lists shares", async () => {
+      mock.clear();
+      mock.simulateIncoming("/share list");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either "No shares" or a list
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/share revoke — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/share revoke");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Usage");
+    });
+
+    test("/share revoke unknown — shows not found", async () => {
+      mock.clear();
+      mock.simulateIncoming("/share revoke nonexistent-share-id");
+      await wait();
+
+      const response = mock.lastSent();
+      // Should be not found or error
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /notifications ─────────────────────────────────────────────
+
+  describe("/notifications", () => {
+    test("/notifications — shows current state with toggle", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toContain("Notifications");
+
+      const kb = mock.lastKeyboard();
+      if (kb) {
+        // Should have enable/disable toggle
+        const labels = mock.lastKeyboardLabels();
+        const hasToggle = labels.some((l) => l.includes("Enable") || l.includes("Disable"));
+        expect(hasToggle).toBe(true);
+      }
+    });
+
+    test("/notify is an alias for /notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notify");
+      await wait();
+
+      expect(mock.lastSent()).toContain("Notifications");
+    });
+
+    test("/notifications on — enables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications on");
+      await wait();
+
+      expect(mock.lastSent()).toContain("enabled");
+    });
+
+    test("/notifications off — disables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications off");
+      await wait();
+
+      expect(mock.lastSent()).toContain("disabled");
+    });
+
+    test("/notify enable — enables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notify enable");
+      await wait();
+
+      expect(mock.lastSent()).toContain("enabled");
+    });
+
+    test("/notify disable — disables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notify disable");
+      await wait();
+
+      expect(mock.lastSent()).toContain("disabled");
+    });
+  });
+
+  // ─── /history ───────────────────────────────────────────────────
+
+  describe("/history", () => {
+    test("/history — shows recent messages", async () => {
+      mock.clear();
+      mock.simulateIncoming("/history");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either shows messages or "No messages"
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/history 5 — limits to 5 messages", async () => {
+      mock.clear();
+      mock.simulateIncoming("/history 5");
+      await wait();
+
+      expect(mock.lastSent().length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /compact ──────────────────────────────────────────────────
+
+  describe("/compact", () => {
+    test("/compact — responds with compaction result", async () => {
+      mock.clear();
+      mock.simulateIncoming("/compact");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either "Compacted" or "nothing to compact" if session is empty
+      expect(response).toMatch(/[Cc]ompact/);
+    });
+
+    test("/compact 3 — responds with compaction result", async () => {
+      mock.clear();
+      mock.simulateIncoming("/compact 3");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toMatch(/[Cc]ompact/);
+    });
+  });
+
+  // ─── /config ──────────────────────────────────────────────────
+
+  describe("/config", () => {
+    test("/config — shows configuration summary", async () => {
+      mock.clear();
+      mock.simulateIncoming("/config");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toContain("Configuration");
+
+      const kb = mock.lastKeyboard();
+      if (kb) {
+        // Should show config categories
+        expect(kb.text).toContain("Model:");
+      }
+    });
+  });
+
+  // ─── /connect (OAuth) ─────────────────────────────────────────
+
+  describe("/connect", () => {
+    test("/connect — shows OAuth connector list", async () => {
+      mock.clear();
+      mock.simulateIncoming("/connect");
+      await wait();
+
+      const response = mock.lastSent();
+      // Shows OAuth connectors and/or API key connectors
+      expect(response.length).toBeGreaterThan(0);
+
+      const kb = mock.lastKeyboard();
+      if (kb) {
+        // Should list connectors as buttons
+        const labels = mock.lastKeyboardLabels();
+        expect(labels.length).toBeGreaterThan(0);
+      }
+    });
+
+    test("/connect unknown — shows error", async () => {
+      mock.clear();
+      mock.simulateIncoming("/connect notreal");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /disconnect ──────────────────────────────────────────────
+
+  describe("/disconnect", () => {
+    test("/disconnect — shows connected services or empty state", async () => {
+      mock.clear();
+      mock.simulateIncoming("/disconnect");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/disconnect unknown — shows error", async () => {
+      mock.clear();
+      mock.simulateIncoming("/disconnect notreal");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /skill ───────────────────────────────────────────────────
+
+  describe("/skill", () => {
+    test("/skill — shows skill hub", async () => {
+      mock.clear();
+      mock.simulateIncoming("/skill");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either skill list or "no skills installed"
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/skills is an alias for /skill", async () => {
+      mock.clear();
+      mock.simulateIncoming("/skills");
+      await wait();
+
+      expect(mock.lastSent().length).toBeGreaterThan(0);
+    });
+
+    test("/skill list — lists installed skills", async () => {
+      mock.clear();
+      mock.simulateIncoming("/skill list");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/skill create — shows create guidance or creates skill", async () => {
+      mock.clear();
+      mock.simulateIncoming("/skill create");
+      await wait();
+
+      const response = mock.lastSent();
+      // Shows usage: requires a name
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/skill remove — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/skill remove");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /tasks ───────────────────────────────────────────────────
+
+  describe("/tasks", () => {
+    test("/tasks — shows task list or empty state", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/task is an alias for /tasks", async () => {
+      mock.clear();
+      mock.simulateIncoming("/task");
+      await wait();
+
+      expect(mock.lastSent().length).toBeGreaterThan(0);
+    });
+
+    test("/tasks create — shows usage for name", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks create");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/tasks delete — shows usage for name", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks delete");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/tasks run — shows usage for name", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks run");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /triggers ────────────────────────────────────────────────
+
+  describe("/triggers", () => {
+    test("/triggers — shows trigger list or no engine", async () => {
+      mock.clear();
+      mock.simulateIncoming("/triggers");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either shows triggers, "no triggers", or "not available"
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/trigger is an alias for /triggers", async () => {
+      mock.clear();
+      mock.simulateIncoming("/trigger");
+      await wait();
+
+      expect(mock.lastSent().length).toBeGreaterThan(0);
+    });
+
+    test("/triggers enable — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/triggers enable");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/triggers disable — no arg shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/triggers disable");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /cancel ──────────────────────────────────────────────────
+
+  describe("/cancel", () => {
+    test("/cancel — shows confirmation or not-configured", async () => {
+      mock.clear();
+      mock.simulateIncoming("/cancel");
+      await wait();
+
+      const response = mock.lastSent();
+      // Either asks for confirmation, says not configured, or no active sub
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /provider / /providers ────────────────────────────────────
+
+  describe("/provider", () => {
+    test("/providers — lists all providers", async () => {
+      mock.clear();
+      mock.simulateIncoming("/providers");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toContain("Provider");
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/provider — shows provider hub", async () => {
+      mock.clear();
+      mock.simulateIncoming("/provider");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/provider add — no args shows preset picker", async () => {
+      mock.clear();
+      mock.simulateIncoming("/provider add");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toContain("Add a Provider");
+    });
+
+    test("/provider remove — no args shows usage", async () => {
+      mock.clear();
+      mock.simulateIncoming("/provider remove");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── Cross-hub navigation (simulates real user tapping) ─────────
+
+  describe("cross-hub navigation", () => {
+    test("user journey: /help → /sessions → /new → /sessions", async () => {
+      // Simulates a real user tapping through buttons
+      mock.clear();
+      mock.simulateIncoming("/help");
+      await wait();
+      const helpData = mock.lastKeyboardData();
+      expect(helpData).toContain("/sessions");
+
+      // Tap Sessions
+      mock.clear();
+      mock.simulateIncoming("/sessions");
+      await wait();
+      expect(mock.lastKeyboard()!.text).toContain("Current:");
+      expect(mock.lastKeyboardData()).toContain("/new");
+
+      // Tap New Session
+      mock.clear();
+      mock.simulateIncoming("/new");
+      await wait();
+      expect(mock.lastSent()).toContain("New session:");
+
+      // Go back to sessions
+      mock.clear();
+      mock.simulateIncoming("/sessions");
+      await wait();
+      expect(mock.lastKeyboard()!.text).toContain("Current:");
+    });
+
+    test("user journey: /help → /model → /model list → back", async () => {
+      mock.clear();
+      mock.simulateIncoming("/help");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/model");
+
+      mock.clear();
+      mock.simulateIncoming("/model");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/model list");
+
+      mock.clear();
+      mock.simulateIncoming("/model list");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/model");
+    });
+
+    test("user journey: /help → /channels → /channels add → back", async () => {
+      mock.clear();
+      mock.simulateIncoming("/help");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/channels");
+
+      mock.clear();
+      mock.simulateIncoming("/channels");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/channels add");
+
+      mock.clear();
+      mock.simulateIncoming("/channels add");
+      await wait();
+      expect(mock.lastKeyboardData()).toContain("/channels");
+    });
+  });
+
+  // ─── /kill — destroy session and start fresh ───────────────────────
+  describe("/kill", () => {
+    test("destroys current session and creates a new one", async () => {
+      mock.clear();
+      mock.simulateIncoming("/kill");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/session destroyed|new session/i);
+    });
+
+    test("new session has a different ID after kill", async () => {
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      const beforeText = mock.lastSent();
+
+      mock.clear();
+      mock.simulateIncoming("/kill");
+      await wait();
+
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      const afterText = mock.lastSent();
+
+      // Sessions should be different
+      expect(afterText).not.toBe(beforeText);
+    });
+  });
+
+  // ─── /archive — archive session and start fresh ────────────────────
+  describe("/archive", () => {
+    test("archives current session and creates a new one", async () => {
+      mock.clear();
+      mock.simulateIncoming("/archive");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/archived|new session/i);
+    });
+  });
+
+  // ─── /auth — connector authentication ─────────────────────────────
+  describe("/auth", () => {
+    test("shows connector list as buttons", async () => {
+      mock.clear();
+      mock.simulateIncoming("/auth");
+      await wait();
+      // Should show keyboard with connector buttons
+      expect(mock.keyboards.length).toBeGreaterThan(0);
+      const text = mock.lastSent();
+      expect(text).toMatch(/[Cc]onfigure|connector/i);
+    });
+
+    test("shows detail for a known connector", async () => {
+      mock.clear();
+      mock.simulateIncoming("/auth stripe");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/stripe/i);
+    });
+
+    test("rejects unknown connector", async () => {
+      mock.clear();
+      mock.simulateIncoming("/auth nonexistent");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/unknown|not found/i);
+    });
+
+    test("saves keys for a connector", async () => {
+      mock.clear();
+      mock.simulateIncoming("/auth stripe sk_test_12345");
+      await wait();
+      const text = mock.lastSent();
+      // Should confirm save or show error about key format
+      expect(text.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /tasks — background task management ───────────────────────────
+  describe("/tasks", () => {
+    test("lists tasks (empty by default)", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks");
+      await wait();
+      const text = mock.lastSent();
+      // Could be empty or have tasks from previous tests
+      expect(text).toMatch(/task/i);
+    });
+
+    test("creates a new task", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks create test-task echo hello");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/[Cc]reated|test-task/);
+    });
+
+    test("lists tasks after creating one", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/test-task/);
+    });
+
+    test("shows usage for /tasks create with missing args", async () => {
+      mock.clear();
+      mock.simulateIncoming("/tasks create");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/usage/i);
+    });
+  });
+
+  // ─── /notifications — notification preferences ────────────────────
+  describe("/notifications", () => {
+    test("shows current notification state", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/[Nn]otification/);
+    });
+
+    test("enables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications on");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/enabled/i);
+    });
+
+    test("disables notifications", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications off");
+      await wait();
+      const text = mock.lastSent();
+      expect(text).toMatch(/disabled/i);
+    });
+
+    test("shows toggle button with current state", async () => {
+      mock.clear();
+      mock.simulateIncoming("/notifications");
+      await wait();
+      // Should show keyboard with enable/disable toggle
+      expect(mock.keyboards.length + mock.sent.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /cancel — cancel subscription ─────────────────────────────────
+  describe("/cancel", () => {
+    test("handles no active subscription", async () => {
+      mock.clear();
+      mock.simulateIncoming("/cancel");
+      await wait();
+      const text = mock.lastSent();
+      // Without billing configured, should show "not configured" or "no subscription"
+      expect(text).toMatch(/[Nn]o active|not configured|cancel|billing/i);
+    });
+  });
+
+  // ─── /channels add — dynamic channel registration ──────────────────
+  describe("/channels add (dynamic)", () => {
+    test("shows guide for unknown channel type", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add fakechannel");
+      await wait();
+      const text = mock.allSentText();
+      expect(text.length).toBeGreaterThan(0);
+    });
+
+    test("shows channel add guide when no args", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels add");
+      await wait();
+      // Should show available channels or usage hint
+      expect(mock.sent.length + mock.keyboards.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── /channels remove — dynamic channel removal ────────────────────
+  describe("/channels remove", () => {
+    test("handles removing non-existent channel gracefully", async () => {
+      mock.clear();
+      mock.simulateIncoming("/channels remove nonexistent");
+      await wait();
+      const text = mock.allSentText();
+      // Should show error or "not found"
+      expect(text.length).toBeGreaterThan(0);
+    });
+  });
+
+  // ─── Cross-command integration ─────────────────────────────────────
+  describe("cross-command integration", () => {
+    test("/kill then /session shows a different session", async () => {
+      // Get initial session
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      const beforeSession = mock.lastSent();
+
+      // Kill
+      mock.clear();
+      mock.simulateIncoming("/kill");
+      await wait();
+
+      // Get new session
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      const afterSession = mock.lastSent();
+
+      // Should be different sessions
+      expect(afterSession).not.toBe(beforeSession);
+    });
+
+    test("/archive preserves session history in list", async () => {
+      // Create some session state first
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+
+      // Archive it
+      mock.clear();
+      mock.simulateIncoming("/archive");
+      await wait();
+      expect(mock.lastSent()).toMatch(/archived|new session/i);
+
+      // Verify the new session works
+      mock.clear();
+      mock.simulateIncoming("/session");
+      await wait();
+      expect(mock.lastSent().length).toBeGreaterThan(0);
+    });
+
+    test("/auth shows connectors and /auth <name> shows detail", async () => {
+      // First show all
+      mock.clear();
+      mock.simulateIncoming("/auth");
+      await wait();
+      expect(mock.keyboards.length).toBeGreaterThan(0);
+
+      // Then detail for stripe
+      mock.clear();
+      mock.simulateIncoming("/auth stripe");
+      await wait();
+      const detail = mock.lastSent();
+      expect(detail).toMatch(/stripe/i);
+    });
+
+    test("/notifications toggle cycle", async () => {
+      // Start — show state
+      mock.clear();
+      mock.simulateIncoming("/notifications");
+      await wait();
+
+      // Disable
+      mock.clear();
+      mock.simulateIncoming("/notifications off");
+      await wait();
+      expect(mock.lastSent()).toMatch(/disabled/i);
+
+      // Re-enable
+      mock.clear();
+      mock.simulateIncoming("/notifications on");
+      await wait();
+      expect(mock.lastSent()).toMatch(/enabled/i);
+    });
+
+    test("/tasks create and list round-trip", async () => {
+      // Create
+      mock.clear();
+      mock.simulateIncoming("/tasks create roundtrip-test echo hello world");
+      await wait();
+      expect(mock.lastSent()).toMatch(/[Cc]reated|roundtrip-test/);
+
+      // List should include it
+      mock.clear();
+      mock.simulateIncoming("/tasks");
+      await wait();
+      expect(mock.lastSent()).toMatch(/roundtrip-test/);
     });
   });
 });

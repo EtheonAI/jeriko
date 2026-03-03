@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync, cpSync, 
 import { join, dirname } from "node:path";
 import { homedir, platform } from "node:os";
 import { execSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -399,6 +400,56 @@ export function setupAgentPrompt(): void {
   }
 
   warn("AGENT.md not found — agent will have no system prompt until configured");
+}
+
+/**
+ * Ensure a stable user ID exists in ~/.config/jeriko/.env.
+ *
+ * The user ID is a globally unique identifier for this Jeriko installation.
+ * Used for relay routing: webhooks, OAuth callbacks, and billing are scoped
+ * to this ID so the relay server can forward events to the correct machine.
+ *
+ * Idempotent — preserves the existing ID if one is already set.
+ */
+export function setupUserId(): void {
+  info("Checking user identity...");
+
+  const envFile = join(CONFIG_DIR, ".env");
+
+  // Check if JERIKO_USER_ID already exists in env or the secrets file
+  if (process.env.JERIKO_USER_ID) {
+    success(`User ID exists: ${process.env.JERIKO_USER_ID.slice(0, 8)}...`);
+    return;
+  }
+
+  // Check the .env file directly (process.env may not have loaded it yet)
+  if (existsSync(envFile)) {
+    const content = readFileSync(envFile, "utf-8");
+    const match = content.match(/^JERIKO_USER_ID=(.+)$/m);
+    if (match?.[1]) {
+      process.env.JERIKO_USER_ID = match[1].trim().replace(/^["']|["']$/g, "");
+      success(`User ID exists: ${process.env.JERIKO_USER_ID.slice(0, 8)}...`);
+      return;
+    }
+  }
+
+  // Generate and persist a new user ID
+  const userId = randomUUID();
+
+  mkdirSync(CONFIG_DIR, { recursive: true });
+
+  // Append to .env (same pattern as saveSecret in shared/secrets.ts)
+  const existingContent = existsSync(envFile) ? readFileSync(envFile, "utf-8") : "";
+  const lines = existingContent.split("\n").filter((l) => l.trim() !== "");
+  lines.push(`JERIKO_USER_ID=${userId}`);
+  writeFileSync(envFile, lines.join("\n") + "\n", { mode: 0o600 });
+
+  try {
+    chmodSync(envFile, 0o600);
+  } catch { /* best-effort on some filesystems */ }
+
+  process.env.JERIKO_USER_ID = userId;
+  success(`User ID generated: ${userId.slice(0, 8)}...`);
 }
 
 export function verifyInstallation(): void {

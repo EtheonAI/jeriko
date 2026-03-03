@@ -71,6 +71,10 @@ export function billingRoutes(): Hono {
   /**
    * POST /billing/checkout — Create Stripe Checkout session.
    *
+   * Resolution strategy (tries in order):
+   *   1. Relay proxy (works for all distributed users — no local Stripe keys)
+   *   2. Direct Stripe SDK (self-hosted users with STRIPE_BILLING_SECRET_KEY)
+   *
    * Body: { email: string, terms_accepted?: boolean }
    */
   router.post("/checkout", async (c) => {
@@ -83,16 +87,39 @@ export function billingRoutes(): Hono {
       return c.json({ ok: false, error: "email is required" }, 400);
     }
 
+    const email = body.email;
+    const termsAccepted = body.terms_accepted ?? false;
+
+    // Strategy 1: Try relay proxy first (distributed users)
     try {
+      const { createCheckoutViaRelay } = await import("../../billing/relay-proxy.js");
+      const relayResult = await createCheckoutViaRelay(email, termsAccepted);
+      if (relayResult) {
+        return c.json({
+          ok: true,
+          data: { url: relayResult.url, session_id: relayResult.sessionId },
+        });
+      }
+    } catch (err) {
+      log.debug(`Relay checkout proxy unavailable: ${err}`);
+    }
+
+    // Strategy 2: Direct Stripe SDK (self-hosted fallback)
+    try {
+      const { isBillingConfigured } = await import("../../billing/stripe.js");
+      if (!isBillingConfigured()) {
+        return c.json({
+          ok: false,
+          error: "Unable to create checkout session — billing server unavailable. Check your internet connection.",
+        }, 503);
+      }
+
       const { createCheckoutSession } = await import("../../billing/stripe.js");
-      const result = await createCheckoutSession(body.email, body.terms_accepted ?? false);
+      const result = await createCheckoutSession(email, termsAccepted);
 
       return c.json({
         ok: true,
-        data: {
-          url: result.url,
-          session_id: result.sessionId,
-        },
+        data: { url: result.url, session_id: result.sessionId },
       });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
@@ -103,6 +130,10 @@ export function billingRoutes(): Hono {
 
   /**
    * POST /billing/portal — Create Stripe Customer Portal session.
+   *
+   * Resolution strategy (tries in order):
+   *   1. Relay proxy (works for all distributed users — no local Stripe keys)
+   *   2. Direct Stripe SDK (self-hosted users with STRIPE_BILLING_SECRET_KEY)
    *
    * Body: { customer_id?: string }
    * If no customer_id, uses the one from the current subscription.
@@ -127,7 +158,27 @@ export function billingRoutes(): Hono {
       }, 400);
     }
 
+    // Strategy 1: Try relay proxy first (distributed users)
     try {
+      const { createPortalViaRelay } = await import("../../billing/relay-proxy.js");
+      const relayResult = await createPortalViaRelay(customerId);
+      if (relayResult) {
+        return c.json({ ok: true, data: { url: relayResult.url } });
+      }
+    } catch (err) {
+      log.debug(`Relay portal proxy unavailable: ${err}`);
+    }
+
+    // Strategy 2: Direct Stripe SDK (self-hosted fallback)
+    try {
+      const { isBillingConfigured } = await import("../../billing/stripe.js");
+      if (!isBillingConfigured()) {
+        return c.json({
+          ok: false,
+          error: "Unable to open billing portal — billing server unavailable. Check your internet connection.",
+        }, 503);
+      }
+
       const { createPortalSession } = await import("../../billing/stripe.js");
       const result = await createPortalSession(customerId);
 

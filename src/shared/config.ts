@@ -153,6 +153,23 @@ const DEFAULTS: JerikoConfig = {
 };
 
 // ---------------------------------------------------------------------------
+// User identity
+// ---------------------------------------------------------------------------
+
+/**
+ * Get the stable user ID for this Jeriko installation.
+ *
+ * Generated at install time and persisted in ~/.config/jeriko/.env.
+ * Used for relay routing (webhooks, OAuth callbacks, billing).
+ *
+ * Returns undefined when no user ID has been generated yet (fresh install
+ * that hasn't run `jeriko install` or `jeriko init`).
+ */
+export function getUserId(): string | undefined {
+  return process.env.JERIKO_USER_ID || undefined;
+}
+
+// ---------------------------------------------------------------------------
 // Directory helpers
 // ---------------------------------------------------------------------------
 

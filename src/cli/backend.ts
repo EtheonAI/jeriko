@@ -19,11 +19,33 @@ import type {
   SkillInfo,
   ModelInfo,
   HistoryEntry,
+  ProviderInfo,
+  PlanInfo,
+  ShareInfo,
+  TaskDef,
+  NotificationPref,
+  AuthStatus,
 } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** Result of a /connect command — either already connected, OAuth required, or error. */
+export interface ConnectResult {
+  ok: boolean;
+  status?: "already_connected" | "oauth_required";
+  loginUrl?: string;
+  label?: string;
+  error?: string;
+}
+
+/** Result of a /disconnect command. */
+export interface DisconnectResult {
+  ok: boolean;
+  label?: string;
+  error?: string;
+}
 
 /** Callbacks invoked during a streaming agent response. */
 export interface BackendCallbacks {
@@ -59,6 +81,10 @@ export interface Backend {
   newSession(): Promise<SessionInfo>;
   listSessions(limit?: number): Promise<SessionInfo[]>;
   resumeSession(slugOrId: string): Promise<SessionInfo | null>;
+  getSessionDetail(): Promise<SessionInfo | null>;
+  updateSessionModel(model: string): Promise<void>;
+  deleteSessionById(slugOrId: string): Promise<boolean>;
+  renameSession(title: string): Promise<boolean>;
   getHistory(limit?: number): Promise<HistoryEntry[]>;
   clearHistory(): Promise<void>;
   compact(): Promise<{ before: number; after: number }>;
@@ -68,13 +94,15 @@ export interface Backend {
 
   // Channel management (daemon only — no-ops in-process)
   listChannels(): Promise<ChannelInfo[]>;
-  connectChannel(name: string): Promise<boolean>;
-  disconnectChannel(name: string): Promise<boolean>;
+  connectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
+  disconnectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
+  addChannel(name: string, config?: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
+  removeChannel(name: string): Promise<{ ok: boolean; error?: string }>;
 
   // Connectors (daemon only — returns [] in-process)
   listConnectors(): Promise<ConnectorInfo[]>;
-  connectService(name: string): Promise<boolean>;
-  disconnectService(name: string): Promise<boolean>;
+  connectService(name: string): Promise<ConnectResult>;
+  disconnectService(name: string): Promise<DisconnectResult>;
   checkHealth(name?: string): Promise<Array<{ name: string; healthy: boolean; latencyMs: number; error?: string }>>;
 
   // Triggers (daemon only)
@@ -85,6 +113,36 @@ export interface Backend {
   // Skills
   listSkills(): Promise<SkillInfo[]>;
   getSkill(name: string): Promise<{ name: string; description: string; body: string } | null>;
+
+  // Shares
+  createShare(): Promise<ShareInfo>;
+  listShares(): Promise<ShareInfo[]>;
+  revokeShare(shareId: string): Promise<boolean>;
+
+  // Providers
+  listProviders(): Promise<ProviderInfo[]>;
+  addProvider(config: { id: string; name?: string; baseUrl: string; apiKey: string; defaultModel?: string }): Promise<{ id: string; name: string; baseUrl: string }>;
+  removeProvider(id: string): Promise<{ id: string; removed: boolean }>;
+
+  // Billing
+  getPlan(): Promise<PlanInfo>;
+  startUpgrade(email: string): Promise<{ url: string }>;
+  openBillingPortal(): Promise<{ url: string }>;
+  cancelSubscription(): Promise<{ cancelled?: boolean; already_cancelling?: boolean; cancel_at: string }>;
+
+  // Session lifecycle
+  killSession(): Promise<SessionInfo>;
+  archiveSession(): Promise<SessionInfo>;
+
+  // Tasks
+  listTasks(): Promise<TaskDef[]>;
+
+  // Notifications
+  listNotifications(): Promise<NotificationPref[]>;
+
+  // Auth
+  getAuthStatus(): Promise<AuthStatus[]>;
+  saveAuth(connectorName: string, keys: string[]): Promise<{ connector: string; label: string; saved: number }>;
 
   // System
   getStatus(): Promise<{ phase: string; uptime: number; memoryMb?: number; sessionCount?: number; activeChannels?: number }>;
@@ -191,6 +249,44 @@ export async function createDaemonBackend(): Promise<Backend> {
       return null;
     },
 
+    async getSessionDetail() {
+      if (!currentSessionId) return null;
+      try {
+        const sessions = await backend.listSessions(100);
+        return sessions.find((s) => s.id === currentSessionId) ?? null;
+      } catch { return null; }
+    },
+
+    async updateSessionModel(model) {
+      if (!currentSessionId) return;
+      currentModel = model;
+      try {
+        await sendRequest("update_session", { session_id: currentSessionId, model });
+      } catch { /* best effort — local state already updated */ }
+    },
+
+    async deleteSessionById(slugOrId) {
+      try {
+        // Resume to validate it exists, then we'd need a delete method.
+        // For now, use the session list to verify existence.
+        const sessions = await backend.listSessions(100);
+        const target = sessions.find((s) => s.slug === slugOrId || s.id === slugOrId);
+        if (!target) return false;
+        if (target.id === currentSessionId) return false;
+        // Delete via update_session with archived flag
+        await sendRequest("update_session", { session_id: target.id, title: "[deleted]" });
+        return true;
+      } catch { return false; }
+    },
+
+    async renameSession(title) {
+      if (!currentSessionId) return false;
+      try {
+        await sendRequest("update_session", { session_id: currentSessionId, title });
+        return true;
+      } catch { return false; }
+    },
+
     async getHistory(limit = 50) {
       try {
         const response = await sendRequest("history" as any, { limit, session_id: currentSessionId });
@@ -241,15 +337,41 @@ export async function createDaemonBackend(): Promise<Backend> {
     async connectChannel(name) {
       try {
         const response = await sendRequest("channel_connect", { name });
-        return response.ok;
-      } catch { return false; }
+        if (response.ok) return { ok: true };
+        return { ok: false, error: response.error ?? `Failed to connect "${name}"` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
 
     async disconnectChannel(name) {
       try {
         const response = await sendRequest("channel_disconnect", { name });
-        return response.ok;
-      } catch { return false; }
+        if (response.ok) return { ok: true };
+        return { ok: false, error: response.error ?? `Failed to disconnect "${name}"` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    async addChannel(name, channelConfig) {
+      try {
+        const response = await sendRequest("channel_add" as any, { name, config: channelConfig });
+        if (response.ok) return { ok: true };
+        return { ok: false, error: response.error ?? `Failed to add "${name}"` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+
+    async removeChannel(name) {
+      try {
+        const response = await sendRequest("channel_remove" as any, { name });
+        if (response.ok) return { ok: true };
+        return { ok: false, error: response.error ?? `Failed to remove "${name}"` };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
     },
 
     async listConnectors() {
@@ -265,15 +387,28 @@ export async function createDaemonBackend(): Promise<Backend> {
     async connectService(name) {
       try {
         const response = await sendRequest("connector_connect" as any, { name });
-        return response.ok;
-      } catch { return false; }
+        if (!response.ok) return { ok: false, error: response.error ?? "Unknown error" };
+        const data = response.data as Record<string, unknown>;
+        return {
+          ok: true,
+          status: data.status as ConnectResult["status"],
+          loginUrl: data.loginUrl as string | undefined,
+          label: data.label as string | undefined,
+        };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Connection failed" };
+      }
     },
 
     async disconnectService(name) {
       try {
         const response = await sendRequest("connector_disconnect" as any, { name });
-        return response.ok;
-      } catch { return false; }
+        if (!response.ok) return { ok: false, error: response.error ?? "Unknown error" };
+        const data = response.data as Record<string, unknown>;
+        return { ok: true, label: data.label as string | undefined };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : "Disconnect failed" };
+      }
     },
 
     async checkHealth(name?) {
@@ -330,6 +465,159 @@ export async function createDaemonBackend(): Promise<Backend> {
       return loadSkillDirect(name);
     },
 
+    // Shares
+    async createShare() {
+      const response = await sendRequest("share", { session_id: currentSessionId });
+      if (!response.ok) throw new Error(response.error ?? "Failed to create share");
+      const data = response.data as Record<string, unknown>;
+      return mapDaemonShare(data);
+    },
+
+    async listShares() {
+      try {
+        const response = await sendRequest("shares", { session_id: currentSessionId });
+        if (response.ok && Array.isArray(response.data)) {
+          return (response.data as Record<string, unknown>[]).map(mapDaemonShare);
+        }
+      } catch { /* daemon may not support */ }
+      return [];
+    },
+
+    async revokeShare(shareId) {
+      try {
+        const response = await sendRequest("share_revoke", { share_id: shareId });
+        return response.ok;
+      } catch { return false; }
+    },
+
+    // Providers
+    async listProviders() {
+      try {
+        const response = await sendRequest("providers.list", {});
+        if (response.ok && Array.isArray(response.data)) {
+          return response.data as ProviderInfo[];
+        }
+      } catch { /* fall through */ }
+      return loadProvidersDirect();
+    },
+
+    async addProvider(cfg) {
+      try {
+        const response = await sendRequest("providers.add", {
+          id: cfg.id,
+          name: cfg.name,
+          base_url: cfg.baseUrl,
+          api_key: cfg.apiKey,
+          default_model: cfg.defaultModel,
+        });
+        if (response.ok && response.data) {
+          return response.data as { id: string; name: string; baseUrl: string };
+        }
+      } catch (err) {
+        throw new Error(err instanceof Error ? err.message : String(err));
+      }
+      throw new Error("Failed to add provider");
+    },
+
+    async removeProvider(id) {
+      try {
+        const response = await sendRequest("providers.remove", { id });
+        if (response.ok && response.data) {
+          return response.data as { id: string; removed: boolean };
+        }
+      } catch (err) {
+        throw new Error(err instanceof Error ? err.message : String(err));
+      }
+      throw new Error("Failed to remove provider");
+    },
+
+    // Billing
+    async getPlan() {
+      try {
+        const response = await sendRequest("billing.plan" as any, {});
+        if (response.ok && response.data) {
+          return response.data as PlanInfo;
+        }
+      } catch { /* fall through */ }
+      return getDefaultPlan();
+    },
+
+    async startUpgrade(email) {
+      const response = await sendRequest("billing.checkout" as any, { email, terms_accepted: true });
+      if (!response.ok) throw new Error(response.error ?? "Failed to create checkout");
+      return response.data as { url: string };
+    },
+
+    async openBillingPortal() {
+      const response = await sendRequest("billing.portal" as any, {});
+      if (!response.ok) throw new Error(response.error ?? "Failed to open portal");
+      return response.data as { url: string };
+    },
+
+    async cancelSubscription() {
+      const response = await sendRequest("billing.cancel" as any, {});
+      if (!response.ok) throw new Error(response.error ?? "Failed to cancel subscription");
+      return response.data as { cancelled?: boolean; already_cancelling?: boolean; cancel_at: string };
+    },
+
+    // Session lifecycle
+    async killSession() {
+      if (!currentSessionId) throw new Error("No active session");
+      const response = await sendRequest("kill_session" as any, { session_id: currentSessionId, model: currentModel });
+      if (!response.ok) throw new Error(response.error ?? "Failed to kill session");
+      const row = response.data as DaemonSessionRow;
+      currentSessionId = row.id;
+      return mapDaemonSession(row);
+    },
+
+    async archiveSession() {
+      if (!currentSessionId) throw new Error("No active session");
+      const response = await sendRequest("archive_session" as any, { session_id: currentSessionId, model: currentModel });
+      if (!response.ok) throw new Error(response.error ?? "Failed to archive session");
+      const row = response.data as DaemonSessionRow;
+      currentSessionId = row.id;
+      return mapDaemonSession(row);
+    },
+
+    // Tasks
+    async listTasks() {
+      try {
+        const response = await sendRequest("tasks" as any, {});
+        if (response.ok && Array.isArray(response.data)) {
+          return response.data as TaskDef[];
+        }
+      } catch { /* daemon may not support */ }
+      return [];
+    },
+
+    // Notifications
+    async listNotifications() {
+      try {
+        const response = await sendRequest("notifications" as any, {});
+        if (response.ok && Array.isArray(response.data)) {
+          return response.data as NotificationPref[];
+        }
+      } catch { /* daemon may not support */ }
+      return [];
+    },
+
+    // Auth
+    async getAuthStatus() {
+      try {
+        const response = await sendRequest("auth_status" as any, {});
+        if (response.ok && Array.isArray(response.data)) {
+          return response.data as AuthStatus[];
+        }
+      } catch { /* fall through to direct */ }
+      return loadAuthStatusDirect();
+    },
+
+    async saveAuth(connectorName, keys) {
+      const response = await sendRequest("auth_save" as any, { name: connectorName, keys });
+      if (!response.ok) throw new Error(response.error ?? "Failed to save auth");
+      return response.data as { connector: string; label: string; saved: number };
+    },
+
     async getStatus() {
       try {
         const response = await sendRequest("status", {});
@@ -377,7 +665,7 @@ export async function createInProcessBackend(): Promise<Backend> {
     listSessions: dbListSessions,
   } = await import("../daemon/agent/session/session.js");
   const { addMessage, getMessages } = await import("../daemon/agent/session/message.js");
-  const { kvGet, kvSet } = await import("../daemon/storage/kv.js");
+  const { kvGet, kvSet, kvList } = await import("../daemon/storage/kv.js");
   const { runAgent } = await import("../daemon/agent/agent.js");
 
   type DriverMessage = import("../daemon/agent/drivers/index.js").DriverMessage;
@@ -534,6 +822,30 @@ export async function createInProcessBackend(): Promise<Backend> {
       return mapSessionRow(session);
     },
 
+    async getSessionDetail() {
+      return mapSessionRow(session);
+    },
+
+    async updateSessionModel(model) {
+      currentModel = model;
+      const { updateSession: dbUpdate } = await import("../daemon/agent/session/session.js");
+      dbUpdate(session.id, { model });
+    },
+
+    async deleteSessionById(slugOrId) {
+      const target = getSessionBySlug(slugOrId) ?? getSession(slugOrId);
+      if (!target || target.id === session.id) return false;
+      const { deleteSession: dbDelete } = await import("../daemon/agent/session/session.js");
+      dbDelete(target.id);
+      return true;
+    },
+
+    async renameSession(title) {
+      const { updateSession: dbUpdate } = await import("../daemon/agent/session/session.js");
+      dbUpdate(session.id, { title });
+      return true;
+    },
+
     async getHistory(limit = 50) {
       const rows = getMessages(session.id);
       const entries: HistoryEntry[] = rows.slice(-limit).map((m) => ({
@@ -563,13 +875,15 @@ export async function createInProcessBackend(): Promise<Backend> {
 
     // Channels require the daemon
     async listChannels() { return []; },
-    async connectChannel() { return false; },
-    async disconnectChannel() { return false; },
+    async connectChannel() { return { ok: false, error: "Channels require the daemon" }; },
+    async disconnectChannel() { return { ok: false, error: "Channels require the daemon" }; },
+    async addChannel() { return { ok: false, error: "Channels require the daemon" }; },
+    async removeChannel() { return { ok: false, error: "Channels require the daemon" }; },
 
     // Connectors require the daemon
     async listConnectors() { return []; },
-    async connectService() { return false; },
-    async disconnectService() { return false; },
+    async connectService() { return { ok: false, error: "Connectors require the daemon" }; },
+    async disconnectService() { return { ok: false, error: "Connectors require the daemon" }; },
     async checkHealth() { return []; },
 
     // Triggers require the daemon
@@ -584,6 +898,124 @@ export async function createInProcessBackend(): Promise<Backend> {
 
     async getSkill(name) {
       return loadSkillDirect(name);
+    },
+
+    // Shares — direct DB access
+    async createShare() {
+      const { createShare: dbCreate } = await import("../daemon/storage/share.js");
+      const { buildShareLink } = await import("../shared/urls.js");
+      const msgs = getMessages(session.id);
+      if (msgs.length === 0) throw new Error("Session has no messages to share");
+      const snapshot = msgs.map((m) => ({ role: m.role, content: m.content, created_at: m.created_at }));
+      const share = dbCreate({
+        sessionId: session.id,
+        title: session.title,
+        model: currentModel,
+        messages: JSON.stringify(snapshot),
+      });
+      return {
+        shareId: share.share_id,
+        url: buildShareLink(share.share_id),
+        sessionId: share.session_id,
+        title: share.title,
+        model: share.model,
+        messageCount: snapshot.length,
+        createdAt: share.created_at,
+        expiresAt: share.expires_at,
+      } satisfies ShareInfo;
+    },
+
+    async listShares() {
+      const { listSharesBySession: dbList } = await import("../daemon/storage/share.js");
+      const { buildShareLink } = await import("../shared/urls.js");
+      const shares = dbList(session.id);
+      return shares.map((s) => ({
+        shareId: s.share_id,
+        url: buildShareLink(s.share_id),
+        sessionId: s.session_id,
+        title: s.title,
+        model: s.model,
+        messageCount: JSON.parse(s.messages).length,
+        createdAt: s.created_at,
+        expiresAt: s.expires_at,
+      })) satisfies ShareInfo[];
+    },
+
+    async revokeShare(shareId) {
+      const { revokeShare: dbRevoke } = await import("../daemon/storage/share.js");
+      return dbRevoke(shareId);
+    },
+
+    // Providers — direct config access
+    async listProviders() {
+      return loadProvidersDirect();
+    },
+
+    async addProvider(cfg) {
+      return addProviderDirect(cfg);
+    },
+
+    async removeProvider(id) {
+      return removeProviderDirect(id);
+    },
+
+    // Billing — direct access
+    async getPlan() {
+      return getDefaultPlan();
+    },
+
+    async startUpgrade(_email) {
+      throw new Error("Upgrade requires the daemon. Start with: jeriko server start");
+    },
+
+    async openBillingPortal() {
+      throw new Error("Billing portal requires the daemon. Start with: jeriko server start");
+    },
+
+    async cancelSubscription() {
+      throw new Error("Cancellation requires the daemon. Start with: jeriko server start");
+    },
+
+    // Session lifecycle — direct DB access
+    async killSession() {
+      const { deleteSession: dbDelete, createSession: dbCreate } = await import("../daemon/agent/session/session.js");
+      dbDelete(session.id);
+      session = dbCreate({ model: currentModel });
+      history = [];
+      kvSet("state:last_session_id", session.id);
+      return mapSessionRow(session);
+    },
+
+    async archiveSession() {
+      const { archiveSession: dbArchive, createSession: dbCreate } = await import("../daemon/agent/session/session.js");
+      dbArchive(session.id);
+      session = dbCreate({ model: currentModel });
+      history = [];
+      kvSet("state:last_session_id", session.id);
+      return mapSessionRow(session);
+    },
+
+    // Tasks — direct file access
+    async listTasks() {
+      return loadTasksDirect();
+    },
+
+    // Notifications — direct KV access
+    async listNotifications() {
+      const entries = kvList("notify:");
+      return entries.map((e) => {
+        const parts = e.key.split(":");
+        return { channel: parts[1], chatId: parts[2], enabled: e.value as boolean };
+      }) satisfies NotificationPref[];
+    },
+
+    // Auth — direct connector access
+    async getAuthStatus() {
+      return loadAuthStatusDirect();
+    },
+
+    async saveAuth(connectorName, keys) {
+      return saveAuthDirect(connectorName, keys);
     },
 
     async getStatus() {
@@ -674,6 +1106,19 @@ function mapDaemonChannel(row: DaemonChannelRow): ChannelInfo {
     status: row.status,
     error: row.error,
     connectedAt: row.connected_at,
+  };
+}
+
+function mapDaemonShare(row: Record<string, unknown>): ShareInfo {
+  return {
+    shareId: row.share_id as string,
+    url: row.url as string,
+    sessionId: row.session_id as string,
+    title: row.title as string,
+    model: row.model as string,
+    messageCount: row.message_count as number,
+    createdAt: row.created_at as number,
+    expiresAt: (row.expires_at as number | null) ?? null,
   };
 }
 
@@ -883,11 +1328,261 @@ async function loadConfigDirect(): Promise<Record<string, unknown>> {
 
 /**
  * Static model list for in-process mode (no daemon to query).
+ * Uses the model registry if available, falls back to well-known defaults.
  */
-function getStaticModelList(currentModel: string): ModelInfo[] {
+function getStaticModelList(_currentModel: string): ModelInfo[] {
+  try {
+    const { listModels: registryListModels, getCapabilities } = require("../daemon/agent/drivers/models.js");
+    const all = registryListModels() as import("../daemon/agent/drivers/models.js").ModelCapabilities[];
+
+    if (all.length > 0) {
+      // Return a subset (top models per provider) to keep the list manageable
+      const seen = new Set<string>();
+      const results: ModelInfo[] = [];
+      for (const caps of all) {
+        const key = `${caps.provider}:${caps.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push({
+          id: caps.id,
+          name: caps.id,
+          provider: caps.provider,
+          contextWindow: caps.context,
+          maxOutput: caps.maxOutput,
+          supportsTools: caps.toolCall,
+          supportsReasoning: caps.reasoning,
+          costInput: caps.costInput,
+          costOutput: caps.costOutput,
+        });
+      }
+      return results;
+    }
+  } catch {
+    // Registry not loaded — fall through to defaults
+  }
+
   return [
-    { id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsVision: true },
-    { id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true, supportsVision: true },
-    { id: "local", name: "Local (Ollama)", provider: "ollama", supportsTools: false, supportsVision: false },
+    { id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true },
+    { id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true },
+    { id: "local", name: "Local (Ollama)", provider: "ollama" },
   ];
+}
+
+/**
+ * Load provider list directly from config + presets (no daemon needed).
+ *
+ * Mirrors the daemon's providers.list IPC method: returns built-in,
+ * custom, discovered (env var set), and available (preset, not configured).
+ */
+function loadProvidersDirect(): ProviderInfo[] {
+  try {
+    const { loadConfig: loadCfg } = require("../shared/config.js");
+    const { PROVIDER_PRESETS } = require("../daemon/agent/drivers/presets.js");
+    const cfg = loadCfg();
+
+    const registered = new Set<string>();
+    const providers: ProviderInfo[] = [];
+
+    // Built-in drivers
+    for (const id of ["anthropic", "openai", "local"] as const) {
+      registered.add(id);
+      providers.push({
+        id,
+        name: id.charAt(0).toUpperCase() + id.slice(1),
+        type: "built-in",
+      });
+    }
+
+    // Custom providers from config
+    for (const p of cfg.providers ?? []) {
+      registered.add(p.id);
+      providers.push({
+        id: p.id,
+        name: p.name,
+        type: "custom",
+        baseUrl: p.baseUrl,
+        defaultModel: p.defaultModel,
+        modelCount: p.models ? Object.keys(p.models).length : undefined,
+      });
+    }
+
+    // Presets: discovered (env var set) or available (not set)
+    for (const preset of PROVIDER_PRESETS as ReadonlyArray<{ id: string; name: string; baseUrl: string; envKey: string; envKeyAlt?: string; defaultModel?: string }>) {
+      if (registered.has(preset.id)) continue;
+      const hasKey = !!(
+        process.env[preset.envKey] ??
+        (preset.envKeyAlt ? process.env[preset.envKeyAlt] : undefined)
+      );
+      providers.push({
+        id: preset.id,
+        name: preset.name,
+        type: hasKey ? "discovered" : "available",
+        baseUrl: preset.baseUrl,
+        defaultModel: preset.defaultModel,
+        envKey: preset.envKey,
+      });
+    }
+
+    return providers;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Add a provider directly to config file (no daemon needed).
+ */
+function addProviderDirect(cfg: {
+  id: string;
+  name?: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel?: string;
+}): { id: string; name: string; baseUrl: string } {
+  const { readFileSync: readFs, writeFileSync: writeFs, existsSync: exists } = require("node:fs");
+  const { join: pathJ } = require("node:path");
+  const { getConfigDir } = require("../shared/config.js");
+
+  const configDir = getConfigDir();
+  const configPath = pathJ(configDir, "config.json");
+
+  let fileConfig: Record<string, unknown> = {};
+  if (exists(configPath)) {
+    fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+  }
+
+  const providers = (fileConfig.providers as Array<Record<string, unknown>> | undefined) ?? [];
+  if (providers.some((p) => p.id === cfg.id)) {
+    throw new Error(`Provider "${cfg.id}" already exists`);
+  }
+
+  const displayName = cfg.name ?? cfg.id.charAt(0).toUpperCase() + cfg.id.slice(1);
+  const newProvider = {
+    id: cfg.id,
+    name: displayName,
+    baseUrl: cfg.baseUrl,
+    apiKey: cfg.apiKey,
+    type: "openai-compatible",
+    ...(cfg.defaultModel ? { defaultModel: cfg.defaultModel } : {}),
+  };
+
+  providers.push(newProvider);
+  fileConfig.providers = providers;
+
+  if (!exists(configDir)) {
+    const { mkdirSync } = require("node:fs");
+    mkdirSync(configDir, { recursive: true });
+  }
+  writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+  return { id: cfg.id, name: displayName, baseUrl: cfg.baseUrl };
+}
+
+/**
+ * Remove a provider directly from config file (no daemon needed).
+ */
+function removeProviderDirect(id: string): { id: string; removed: boolean } {
+  const { readFileSync: readFs, writeFileSync: writeFs, existsSync: exists } = require("node:fs");
+  const { join: pathJ } = require("node:path");
+  const { getConfigDir } = require("../shared/config.js");
+
+  const configPath = pathJ(getConfigDir(), "config.json");
+  if (!exists(configPath)) {
+    throw new Error(`Provider "${id}" not found`);
+  }
+
+  const fileConfig = JSON.parse(readFs(configPath, "utf-8"));
+  const providers = (fileConfig.providers as Array<Record<string, unknown>> | undefined) ?? [];
+  const idx = providers.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error(`Provider "${id}" not found`);
+
+  providers.splice(idx, 1);
+  fileConfig.providers = providers;
+  writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+
+  return { id, removed: true };
+}
+
+/**
+ * Default plan info when billing is not configured.
+ */
+function getDefaultPlan(): PlanInfo {
+  return {
+    tier: "free",
+    label: "Free",
+    status: "active",
+    connectors: { used: 0, limit: 2 },
+    triggers: { used: 0, limit: 3 },
+  };
+}
+
+/**
+ * Load tasks directly from the filesystem (no daemon needed).
+ */
+function loadTasksDirect(): TaskDef[] {
+  try {
+    const { existsSync: exists, readdirSync, readFileSync: readFs } = require("node:fs");
+    const { join: pathJ } = require("node:path");
+    const { homedir: hDir } = require("node:os");
+    const tasksDir = pathJ(hDir(), ".jeriko", "data", "tasks");
+    if (!exists(tasksDir)) return [];
+    const files = readdirSync(tasksDir).filter((f: string) => f.endsWith(".json"));
+    return files.map((f: string) => JSON.parse(readFs(pathJ(tasksDir, f), "utf-8"))) as TaskDef[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Load auth status directly from connector definitions (no daemon needed).
+ */
+function loadAuthStatusDirect(): AuthStatus[] {
+  try {
+    const { CONNECTOR_DEFS, isConnectorConfigured, isSlotSet, slotLabel, primaryVarName } = require("../shared/connector.js");
+    return CONNECTOR_DEFS.map((def: any) => ({
+      name: def.name,
+      label: def.label,
+      description: def.description,
+      configured: isConnectorConfigured(def.name),
+      required: def.required.map((entry: string | string[]) => ({
+        variable: primaryVarName(entry),
+        label: slotLabel(entry),
+        set: isSlotSet(entry),
+      })),
+      optional: def.optional.map((v: string) => ({
+        variable: v,
+        set: !!process.env[v],
+      })),
+    })) as AuthStatus[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Save auth credentials directly (no daemon needed).
+ */
+function saveAuthDirect(
+  connectorName: string,
+  keys: string[],
+): { connector: string; label: string; saved: number } {
+  const { getConnectorDef, primaryVarName } = require("../shared/connector.js");
+  const { saveSecret } = require("../shared/secrets.js");
+
+  const def = getConnectorDef(connectorName);
+  if (!def) throw new Error(`Unknown connector: ${connectorName}`);
+
+  if (keys.length < def.required.length) {
+    const varNames = def.required.map((e: string | string[]) => primaryVarName(e));
+    throw new Error(`${def.label} requires ${def.required.length} key(s): ${varNames.join(", ")}`);
+  }
+
+  let saved = 0;
+  for (let i = 0; i < def.required.length; i++) {
+    const varName = primaryVarName(def.required[i]);
+    saveSecret(varName, keys[i]);
+    saved++;
+  }
+
+  return { connector: connectorName, label: def.label, saved };
 }

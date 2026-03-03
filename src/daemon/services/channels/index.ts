@@ -19,7 +19,9 @@ export interface InlineButton {
   /** Button text shown to the user. */
   label: string;
   /** Callback data sent when pressed — typically a slash command (e.g. "/connect github"). */
-  data: string;
+  data?: string;
+  /** URL opened in browser when pressed. Use for external links (Stripe, OAuth, etc.). */
+  url?: string;
 }
 
 /** Rows of inline buttons. Each inner array is one row. */

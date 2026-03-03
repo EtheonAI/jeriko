@@ -136,12 +136,22 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
         return;
       }
 
-      // ── Enter → submit or newline ─────────────────────────────
+      // ── Enter → accept autocomplete selection or submit ──────
       if (key.return) {
-        // If autocomplete is visible and an item is selected, Tab accepts (Enter submits)
-        // Multi-line: Shift+Enter would insert newline, but Ink doesn't
-        // distinguish shift+enter. Instead, if we detect the buffer has
-        // unbalanced backticks (code block), treat Enter as newline.
+        // If autocomplete is visible with a selection, accept it into the
+        // input buffer (don't submit yet — user may want to add arguments).
+        if (autocomplete.visible && autocomplete.selectedIndex >= 0) {
+          const selected = autocomplete.items[autocomplete.selectedIndex];
+          if (selected) {
+            const completed = selected.name + " ";
+            setLines([completed]);
+            setCursorLine(0);
+            setCursorCol(completed.length);
+            setAutocomplete({ items: [], selectedIndex: -1, visible: false });
+          }
+          return;
+        }
+
         const fullText = getFullText().trim();
         if (!fullText) return;
 

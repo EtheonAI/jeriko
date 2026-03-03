@@ -14,16 +14,18 @@ jeriko init --yes
 jeriko sys --format text          # verify it works
 ```
 
-## Architecture (3 layers)
+## Architecture (4 layers)
 
 ```
-Layer 3: Server    → server/index.js (Express + WS + Telegram + WhatsApp + Triggers)
-Layer 2: CLI       → bin/jeriko (dispatcher) → bin/jeriko-* (36 commands)
-Layer 1: Libraries → tools/*.js (reusable functions, also used by Telegram slash cmds)
+Layer 4: Relay     → apps/relay/ (Bun, local dev) + apps/relay-worker/ (CF Worker, production)
+Layer 3: Daemon    → src/daemon/kernel.ts (16-step boot) → agent, API, services, storage
+Layer 2: CLI       → src/cli/dispatcher.ts → 51 commands, Ink-based interactive REPL
+Layer 1: Shared    → src/shared/ (config, urls, relay-protocol, output, escape, skills)
 ```
 
-Shared infra: `lib/cli.js` (parseArgs, ok, fail, readStdin, run, escapeAppleScript)
-Plugin SDK: `lib/plugins.js` (registry, trust, env isolation, audit)
+Relay: `apps/relay/` (local) + `apps/relay-worker/` (prod) — routes webhooks/OAuth to user daemon
+Daemon: `src/daemon/` — agent loop, triggers, connectors, channels, storage
+Shared: `src/shared/` — pure types, relay protocol, URL builders, config
 
 ## Output Contract
 
@@ -143,35 +145,61 @@ jeriko paypal webhooks create --url "https://..." --events "PAYMENT.CAPTURE.COMP
 jeriko paypal webhooks delete --id WEBHOOK_ID
 ```
 
-## Webhook Infrastructure
+## Relay Infrastructure (Multi-User Webhook/OAuth Routing)
 
-Named Cloudflare Tunnel: `bot.jeriko.ai` → `localhost:3000` (tunnel name: `Jeriko`, permanent URL)
+External services (Stripe, GitHub, PayPal) send webhooks to `bot.jeriko.ai`. The relay server routes them to the correct user's daemon via WebSocket.
 
-**Tunnel Config:** `~/.cloudflared/config.yml` — run with `cloudflared tunnel run Jeriko`
-**Tunnel Setup:** `jeriko init` Step 4/6 — supports: cloudflare-named (recommended), cloudflare-quick, localtunnel
-
-**Active Webhook Triggers (data/triggers.json):**
-
-| Service | Trigger ID | Hook Formatter | Registered On Service |
-|---------|-----------|----------------|----------------------|
-| Stripe | ff87d788 | `jeriko stripe hook` | Yes (we_1T4f45...) |
-| PayPal | 8a7f8e3f | `jeriko paypal hook` | Yes (6FR0275...) |
-| GitHub | 4eae23a1 | `jeriko github hook` | Manual (add in repo Settings → Webhooks) |
-| Twilio | 3f896c67 | `jeriko twilio hook` | Use `--status-callback` flag on calls/SMS |
-
-**Webhook Flow:**
+**Architecture:**
 ```
-External Service → POST https://bot.jeriko.ai/hooks/<id>
-  → server/triggers/webhooks.js (signature verification, fail-closed)
-  → server/triggers/engine.js fireTrigger()
-  → server/triggers/executor.js executeShell() with JERIKO_FORMAT=json
-  → jeriko <service> hook --no-notify (formats event, returns JSON)
-  → engine.js notifyUser() → Telegram message + macOS notification
+External Service → POST https://bot.jeriko.ai/hooks/:userId/:triggerId
+  → Relay server (apps/relay/) validates trigger ownership
+  → Forwards over WebSocket to user's daemon
+  → Daemon TriggerEngine.handleWebhook() processes locally
+  → Signature verification on daemon (secrets never leave user's machine)
 ```
 
-**Hook formatters** (model-agnostic, no AI): `jeriko stripe hook`, `jeriko paypal hook`, `jeriko github hook`, `jeriko twilio hook`. Each reads `TRIGGER_EVENT` env var and outputs `{"ok":true,"data":{"message":"FORMATTED TEXT"}}`.
+**Relay Server — Two implementations** (same wire protocol, same routes):
+- `apps/relay/` — Bun + Hono (local dev, testing)
+- `apps/relay-worker/` — Cloudflare Worker + Durable Object (production at `bot.jeriko.ai`)
 
-**Adding new webhook services:** Create a `hook` resource handler in `bin/jeriko-<service>` that reads `TRIGGER_EVENT`, formats the payload, and returns `ok({ type, message, id })`. Then create a trigger with `actionType: "shell"` pointing to it.
+**Bun Relay** (`apps/relay/`): Local dev and test suite
+- `relay.ts` — createRelayApp() + createRelayServer(opts) factory (testable, no side effects)
+- `connections.ts` — module-level Maps, HMAC timing-safe auth (node:crypto)
+
+**CF Worker Relay** (`apps/relay-worker/`): Production deployment
+- `index.ts` — Worker entry, routes all requests to single global DO (`idFromName("global")`)
+- `relay-do.ts` — RelayDO Durable Object (Hibernatable WebSockets + Hono HTTP)
+- `connections.ts` — ConnectionManager class (async Web Crypto auth, hibernation-safe attachments)
+- `crypto.ts` — Web Crypto API helpers (hmacSHA256, safeCompare, verifyStripeSignature)
+- `routes/` — webhook.ts, oauth.ts, billing.ts, health.ts (same logic, dependency-injected)
+
+**Shared routes** (both relays):
+- POST /hooks/:userId/:triggerId (validates trigger ownership)
+- POST /hooks/:triggerId (legacy — looks up trigger owner)
+- GET /oauth/:userId/:provider/callback (forwards to daemon, waits for HTML)
+- POST /billing/webhook (Stripe centralized), GET /billing/license/:userId
+- GET /health (public), GET /health/status (authenticated)
+
+**Relay Client** (`src/daemon/services/relay/client.ts`): Outbound WebSocket
+- Connects at kernel step 10.6 (non-fatal — works offline)
+- Exponential backoff reconnection (1s → 2s → 4s → ... 60s max)
+- Auth timeout (15s), heartbeat (30s ping, 10s pong timeout)
+- Skipped when: no user ID, no auth secret, or JERIKO_PUBLIC_URL set (self-hosted)
+
+**Wire Protocol** (`src/shared/relay-protocol.ts`): Single source of truth
+- Outbound: auth, register_triggers, unregister_triggers, webhook_ack, oauth_result, ping
+- Inbound: auth_ok, auth_fail, webhook, oauth_callback, pong, error
+
+**URL Builders** (`src/shared/urls.ts`): Mode-aware URL generation
+- Relay mode (default): `https://bot.jeriko.ai/hooks/:userId/:triggerId`
+- Self-hosted (JERIKO_PUBLIC_URL): `https://my-tunnel.com/hooks/:triggerId`
+- Local dev: `http://127.0.0.1:3000/hooks/:triggerId`
+
+**User ID**: `getUserId()` in `src/shared/config.ts`, generated at `jeriko install`, persisted as `JERIKO_USER_ID` in `~/.config/jeriko/.env`
+
+**Key env vars**: `JERIKO_USER_ID`, `RELAY_AUTH_SECRET`, `NODE_AUTH_SECRET`, `JERIKO_RELAY_URL`, `JERIKO_PUBLIC_URL`, `JERIKO_BILLING_URL`
+
+See `docs/ARCHITECTURE.md` → Relay Infrastructure for full technical details.
 
 ## Web Development (Pre-Built Templates)
 

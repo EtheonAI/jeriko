@@ -252,40 +252,43 @@ Chalk wrappers: `t.brand`, `t.text`, `t.muted`, `t.dim`, `t.success`, `t.error`,
 
 ### Kernel Boot Sequence (`kernel.ts`)
 
-The daemon boots in 15 steps. Each step depends on previous steps completing.
+The daemon boots in 16 steps. Each step depends on previous steps completing.
 
 ```
-Step 0:  Load secrets         ~/.config/jeriko/.env → process.env
-Step 1:  Load configuration   defaults → config.json → env overrides
-Step 2:  Initialize logger    JSONL file rotation + console transport
-Step 3:  Open database        SQLite at ~/.jeriko/data/jeriko.db
-Step 4:  Run migrations       0001_init → 0002_orchestrator → 0003_trigger → 0004_share
-Step 5:  Security policies    Path allowlisting, command blocklisting
-Step 6:  Register tools       Import all 15 tool files (self-register on import)
-Step 7:  Initialize drivers   Load model registry (models.dev) + register custom providers
-Step 8:  Create worker pool   Max 4 concurrent workers
-Step 9:  Create channels      Telegram, WhatsApp, Slack, Discord (config-conditional)
-         Load system prompt   ~/.config/jeriko/agent.md + skill summary injection
-         Wire channel router  Slash commands + agent message routing
-Step 10: Create trigger engine
+Step 0:    Load secrets         ~/.config/jeriko/.env → process.env
+Step 1:    Load configuration   defaults → config.json → env overrides
+Step 2:    Initialize logger    JSONL file rotation + console transport
+Step 3:    Open database        SQLite at ~/.jeriko/data/jeriko.db
+Step 4:    Run migrations       0001_init → 0002_orchestrator → 0003_trigger → 0004_share
+Step 5:    Security policies    Path allowlisting, command blocklisting
+Step 5.5:  License refresh      Billing license check (Stripe or relay API)
+Step 6:    Register tools       Import all 15 tool files (self-register on import)
+Step 7:    Initialize drivers   Load model registry (models.dev) + register custom providers
+Step 8:    Create worker pool   Max 4 concurrent workers
+Step 9:    Create channels      Telegram, WhatsApp, Slack, Discord (config-conditional)
+           Load system prompt   ~/.config/jeriko/agent.md + skill summary injection
+           Wire channel router  Slash commands + agent message routing
+Step 10:   Create trigger engine
 Step 10.5: Create ConnectorManager + wire into triggers and agent tools
-Step 11: Load plugins         ~/.jeriko/plugins/
-Step 12: Start trigger engine  Activate enabled cron/webhook/file/http triggers
-Step 13: Connect channels      Establish platform connections
-Step 14: Start socket IPC     Unix domain socket at ~/.jeriko/daemon.sock
-Step 15: Start HTTP server     Hono on Bun.serve(), port 3000 (or JERIKO_PORT)
+Step 10.6: Connect relay client (non-fatal — see Relay Infrastructure below)
+Step 11:   Load plugins         ~/.jeriko/plugins/
+Step 12:   Start trigger engine  Activate enabled cron/webhook/file/http triggers
+Step 13:   Connect channels      Establish platform connections
+Step 14:   Start socket IPC     Unix domain socket at ~/.jeriko/daemon.sock
+Step 15:   Start HTTP server     Hono on Bun.serve(), port 3000 (or JERIKO_PORT)
 ```
 
 **Shutdown sequence** (reverse order):
 1. Stop HTTP server
-2. Stop socket IPC server
-3. Disconnect channels
-4. Shut down connectors
-5. Stop trigger engine
-6. Unload plugins
-7. Drain worker pool
-8. Close database
-9. Close logger
+1.5. Stop socket IPC server
+2. Disconnect channels
+2.5. Disconnect relay client
+2.6. Shut down connectors
+3. Stop trigger engine
+4. Unload plugins
+5. Drain worker pool
+6. Close database
+7. Close logger
 
 **KernelState interface:**
 ```typescript
@@ -822,11 +825,11 @@ The `ask` method is a streaming method — it subscribes to `orchestratorBus` ev
 
 ## Shared Layer (`src/shared/`)
 
-16 TypeScript files with zero internal dependencies (only Node/Bun builtins + types).
+17 TypeScript files with zero internal dependencies (only Node/Bun builtins + types).
 
 | File | Exports | Purpose |
 |------|---------|---------|
-| `config.ts` | `JerikoConfig`, `loadConfig()`, `getConfigDir()`, `getDataDir()` | Configuration loading with merge cascade |
+| `config.ts` | `JerikoConfig`, `loadConfig()`, `getConfigDir()`, `getDataDir()`, `getUserId()` | Configuration loading, merge cascade, user identity |
 | `args.ts` | `parseArgs()`, `flagStr()`, `flagBool()`, `requireFlag()` | Argument parsing (`--flag value`, `-f`, `--no-*`) |
 | `output.ts` | `ok()`, `fail()`, `EXIT`, `setOutputFormat()` | Output envelope + exit codes (0,1,2,3,5,7) |
 | `logger.ts` | `getLogger()`, `Logger` class | JSONL file rotation + console logger |
@@ -836,7 +839,8 @@ The `ask` method is a streaming method — it subscribes to `orchestratorBus` ev
 | `skill-loader.ts` | `loadSkill()`, `listSkills()`, `validateSkill()`, `scaffoldSkill()`, `removeSkill()`, `formatSkillSummaries()` | Skill CRUD with hand-rolled YAML parser |
 | `connector.ts` | `CONNECTOR_DEFS`, `getConnectorDef()`, `resolveMethod()`, `collectFlags()` | Connector metadata + CLI helpers |
 | `env-ref.ts` | `resolveEnvRef()`, `isEnvRef()` | `{env:VAR}` syntax resolution |
-| `urls.ts` | `getPublicUrl()`, `getShareUrl()`, `buildShareLink()` | Public URL resolution for OAuth/webhooks/shares |
+| `relay-protocol.ts` | `RelayOutboundMessage`, `RelayInboundMessage`, `RelayConnection`, constants | Relay wire protocol types + constants (single source of truth) |
+| `urls.ts` | `getPublicUrl()`, `buildWebhookUrl()`, `buildOAuthCallbackUrl()`, `buildOAuthStartUrl()`, `buildShareLink()` | Relay-aware URL builders for webhooks, OAuth, shares |
 | `bus.ts` | `Bus<EventMap>`, `globalBus` | Type-safe event bus with `on`, `once`, `emit`, `waitFor` |
 | `tokens.ts` | `estimateTokens()`, `shouldCompact()`, `contextUsagePercent()` | Token estimation heuristics |
 | `secrets.ts` | `loadSecrets()`, `saveSecret()`, `deleteSecret()` | Persistent secret storage (`.env`, mode 0o600) |
@@ -1033,9 +1037,315 @@ All scaffolded projects live at `~/.jeriko/projects/<name>/`.
 
 ---
 
+## Relay Infrastructure (`apps/relay/` + `apps/relay-worker/` + `src/daemon/services/relay/`)
+
+### Problem
+
+Jeriko is a personal AI assistant — one daemon per user, on their own machine. External services (Stripe, GitHub, PayPal, etc.) send webhooks and OAuth callbacks to a public URL. When thousands of users each run their own daemon behind NAT/firewall, a relay server at `jeriko.ai` must route external events to the correct user's machine.
+
+### Architecture
+
+```
+External Service (Stripe, GitHub, etc.)
+  │
+  POST https://bot.jeriko.ai/hooks/:userId/:triggerId
+  │
+  ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Relay Server (apps/relay/)                                   │
+│  Bun + Hono — WebSocket + HTTP                                │
+│                                                                │
+│  connections.ts: Map<userId, ManagedConnection>                │
+│  routes/webhook.ts:  POST /hooks/:userId/:triggerId            │
+│  routes/oauth.ts:    GET  /oauth/:userId/:provider/callback    │
+│  routes/billing.ts:  POST /billing/webhook (centralized)       │
+│  routes/health.ts:   GET  /health, /health/status              │
+│                                                                │
+│  relay.ts: createRelayApp() + createRelayServer(opts)          │
+│  server.ts: thin entry point (no module-level side effects)    │
+└────────────────────────┬─────────────────────────────────────┘
+                         │ WebSocket (wss://bot.jeriko.ai/relay)
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│  Daemon (on user's machine, behind NAT)                       │
+│                                                                │
+│  services/relay/client.ts: RelayClient class                   │
+│  ┌─ Connects outbound to relay on boot (kernel step 10.6)     │
+│  ├─ Authenticates with userId + NODE_AUTH_SECRET               │
+│  ├─ Registers webhook trigger IDs                              │
+│  ├─ Receives forwarded webhooks → TriggerEngine.handleWebhook  │
+│  ├─ Receives OAuth callbacks → local token exchange            │
+│  └─ Exponential backoff reconnection (1s → 2s → 4s → ... 60s) │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### User ID System
+
+Every Jeriko install gets a globally unique, stable user ID (UUID v4).
+
+- **Generation**: `setupUserId()` in `src/cli/commands/automation/install-utils.ts` — runs during `jeriko install`
+- **Storage**: `JERIKO_USER_ID` in `~/.config/jeriko/.env` via `saveSecret()`
+- **Retrieval**: `getUserId()` in `src/shared/config.ts` — reads `process.env.JERIKO_USER_ID`
+- **Exposure**: Health endpoint returns `user_id` for verification
+
+### Wire Protocol (`src/shared/relay-protocol.ts`)
+
+Single source of truth for all messages exchanged between daemons and relay.
+
+**Outbound (daemon → relay):**
+
+| Message | Fields | Purpose |
+|---------|--------|---------|
+| `auth` | `userId`, `token`, `version?` | Authenticate after WebSocket connect |
+| `register_triggers` | `triggerIds[]` | Register webhook triggers for routing |
+| `unregister_triggers` | `triggerIds[]` | Remove triggers (deleted/disabled) |
+| `webhook_ack` | `requestId`, `status` | Acknowledge forwarded webhook |
+| `oauth_result` | `requestId`, `statusCode`, `html` | Return OAuth callback HTML to browser |
+| `ping` | — | Client heartbeat |
+
+**Inbound (relay → daemon):**
+
+| Message | Fields | Purpose |
+|---------|--------|---------|
+| `auth_ok` | — | Authentication succeeded |
+| `auth_fail` | `error` | Authentication rejected |
+| `webhook` | `requestId`, `triggerId`, `headers`, `body` | Forwarded webhook from external service |
+| `oauth_callback` | `requestId`, `provider`, `params` | Forwarded OAuth callback from provider |
+| `pong` | — | Server heartbeat response |
+| `error` | `message` | Server-initiated error |
+
+**Constants:**
+
+| Constant | Value | Purpose |
+|----------|-------|---------|
+| `DEFAULT_RELAY_URL` | `wss://bot.jeriko.ai/relay` | Default WebSocket endpoint |
+| `RELAY_HEARTBEAT_INTERVAL_MS` | 30,000 | Heartbeat ping every 30s |
+| `RELAY_HEARTBEAT_TIMEOUT_MS` | 10,000 | Max wait for pong before disconnect |
+| `RELAY_MAX_BACKOFF_MS` | 60,000 | Max reconnection delay |
+| `RELAY_INITIAL_BACKOFF_MS` | 1,000 | First reconnection delay |
+| `RELAY_BACKOFF_MULTIPLIER` | 2 | Exponential backoff factor |
+| `RELAY_AUTH_TIMEOUT_MS` | 15,000 | Close if auth not received in 15s |
+| `RELAY_MAX_PENDING_OAUTH` | 10 | Max concurrent OAuth callbacks per user |
+| `RELAY_MAX_TRIGGERS_PER_CONNECTION` | 10,000 | Max triggers a single daemon can register |
+
+### Relay Server — Two Implementations
+
+The relay has two implementations sharing the same wire protocol (`src/shared/relay-protocol.ts`):
+
+1. **Bun relay** (`apps/relay/`) — for local development and testing
+2. **CF Worker relay** (`apps/relay-worker/`) — production deployment at `bot.jeriko.ai`
+
+The daemon client (`src/daemon/services/relay/client.ts`) is unchanged — same URL, same protocol, regardless of which relay implementation serves it.
+
+#### Bun Relay (`apps/relay/`) — Local Development
+
+Lightweight Bun + Hono server. Used for `bun test` and local `JERIKO_RELAY_URL=ws://localhost:8080/relay`.
+
+**File structure:**
+```
+apps/relay/
+  src/
+    relay.ts           — createRelayApp() + createRelayServer(opts) factory
+    server.ts          — thin entry point (calls createRelayServer(), signal handlers)
+    connections.ts     — WebSocket connection manager (Map<userId, ManagedConnection>)
+    routes/
+      webhook.ts       — POST /hooks/:userId/:triggerId + POST /hooks/:triggerId (legacy)
+      oauth.ts         — GET /oauth/:userId/:provider/callback
+      billing.ts       — POST /billing/webhook + GET /billing/license/:userId
+      health.ts        — GET /health (public) + GET /health/status (authenticated)
+  package.json
+  tsconfig.json
+```
+
+#### CF Worker Relay (`apps/relay-worker/`) — Production
+
+Cloudflare Worker + Durable Object deployed at `bot.jeriko.ai`. Uses a single global Durable Object (`idFromName("global")`) with Hibernatable WebSockets API.
+
+**File structure:**
+```
+apps/relay-worker/
+  wrangler.toml        — Worker + DO binding, bot.jeriko.ai custom domain, secrets
+  package.json         — hono, @cloudflare/workers-types, wrangler
+  tsconfig.json        — ESNext strict, CF Workers types
+  src/
+    index.ts           — Worker entry (routes all requests to global DO)
+    relay-do.ts        — RelayDO class (Hibernatable WebSocket + Hono HTTP)
+    connections.ts     — ConnectionManager class (adapted from Bun relay)
+    crypto.ts          — Web Crypto API helpers (replaces node:crypto)
+    lib/
+      types.ts         — Env bindings, WebSocketAttachment type
+      html.ts          — OAuth error/success HTML templates
+    routes/
+      webhook.ts       — POST /hooks/:userId/:triggerId + legacy
+      oauth.ts         — GET /oauth/:userId/:provider/callback
+      billing.ts       — POST /billing/webhook + GET /billing/license/:userId
+      health.ts        — GET /health + GET /health/status
+```
+
+**Key adaptations from Bun relay:**
+
+| Bun (node:crypto) | CF Worker (Web Crypto) |
+|---|---|
+| `createHmac("sha256", key).update(data).digest()` | `crypto.subtle.sign("HMAC", importedKey, data)` (async) |
+| `timingSafeEqual(a, b)` | HMAC both values + XOR-accumulate bytes (constant-time) |
+| `randomUUID()` from node:crypto | `crypto.randomUUID()` (native in Workers) |
+| Module-level Maps | ConnectionManager class (instance per DO) |
+| `ws.data = { userId }` | `ws.serializeAttachment({ userId })` (survives hibernation) |
+| `process.env.X` | `env.X` (wrangler bindings) |
+| `Bun.serve({ websocket: {...} })` | `DurableObject.webSocketMessage/Close/Error()` |
+
+**Hibernation resilience:** WebSocket attachments (`serializeAttachment`/`deserializeAttachment`) store userId, triggerIds, auth state. On DO wake-up, the constructor iterates `state.getWebSockets()` and calls `ConnectionManager.restore()` to rebuild the in-memory Maps.
+
+**Deployment:**
+```bash
+cd apps/relay-worker
+npx wrangler secret put RELAY_AUTH_SECRET
+npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
+npx wrangler deploy
+```
+
+**CF Account:** `fcbfb5e1eedee3ce3651c3b263e5c0dd` (Khaleelmusleh@gmail.com)
+
+**Route table:**
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| GET | `/health` | No | Basic health check (load balancers, monitoring) |
+| GET | `/health/status` | Yes | Detailed status (connection count, user list, memory) |
+| POST | `/hooks/:userId/:triggerId` | No | Forward webhook to user's daemon |
+| POST | `/hooks/:triggerId` | No | Legacy format — looks up trigger owner |
+| GET | `/oauth/:userId/:provider/callback` | No | Forward OAuth callback to daemon, return HTML |
+| POST | `/billing/webhook` | Stripe sig | Centralized Stripe billing webhook |
+| GET | `/billing/license/:userId` | Yes | Daemon license check (cached from Stripe events) |
+
+**Connection manager** (`connections.ts`):
+- `addPending(ws)` — register unauthenticated WebSocket
+- `authenticate(ws, userId, token, version?)` — HMAC timing-safe auth, evicts existing connection for same userId
+- `registerTriggers(userId, triggerIds[])` — map trigger IDs to user (limit: 10,000 per connection)
+- `unregisterTriggers(userId, triggerIds[])` — remove triggers
+- `getConnection(userId)` — lookup by user ID
+- `findByTriggerId(triggerId)` — reverse lookup for legacy webhook route
+- `sendTo(userId, message)` — forward message over WebSocket
+- `removeByWs(ws)` — race-safe cleanup (only deletes if stored WS matches — prevents superseded connection eviction)
+- `getStats()` — connection count, user list with versions
+
+**Security:**
+- HMAC-based timing-safe string comparison (prevents length oracle attacks)
+- Auth timeout: connections closed after 15s without auth
+- Max 3 auth failures before connection is force-closed
+- Trigger ownership validation: webhooks only forwarded if trigger is registered for the target user
+- Authenticated endpoints use HMAC comparison on Bearer token vs RELAY_AUTH_SECRET
+- 10MB max request body size (Bun.serve `maxRequestBodySize`)
+
+**Server factory** (`relay.ts`):
+```typescript
+createRelayApp(): Hono          // HTTP app without side effects (testable)
+createRelayServer(opts): RelayServer  // Start server, return handle
+
+interface RelayServer {
+  app: Hono;                    // For route testing via app.fetch()
+  server: ReturnType<typeof Bun.serve>;
+  port: number;                 // Actual port (useful when port=0 for tests)
+  url: string;                  // http://host:port
+  wsUrl: string;                // ws://host:port/relay
+  stop(): void;                 // Graceful shutdown
+}
+```
+
+### Relay Client (`src/daemon/services/relay/client.ts`)
+
+Outbound WebSocket connection from daemon to relay. Entirely non-fatal — Jeriko works fully offline. Only needed for receiving webhooks from external services and OAuth callbacks.
+
+**RelayClient class:**
+- `connect()` — connect to relay, auto-reconnect with exponential backoff
+- `disconnect()` — clean disconnect
+- `registerTrigger(id)` / `unregisterTrigger(id)` — dynamic trigger management
+- `onWebhook(callback)` — register handler for forwarded webhooks
+- `isConnected` — connection state
+
+**Connection lifecycle:**
+1. Boot → connect to `wss://bot.jeriko.ai/relay`
+2. Auth → send `{type:"auth", userId, token, version}`
+3. Auth timeout → close if `auth_ok`/`auth_fail` not received within 15s
+4. Register → send trigger IDs for all enabled webhook triggers
+5. Heartbeat → ping every 30s, close if pong not received within 10s
+6. Receive → relay forwards webhooks and OAuth callbacks
+7. Reconnect → exponential backoff (1s, 2s, 4s, 8s, ... max 60s)
+
+**Kernel wiring (step 10.6):**
+```typescript
+// Skipped when:
+//   - No user ID (run `jeriko install` first)
+//   - No NODE_AUTH_SECRET (security token not configured)
+//   - JERIKO_PUBLIC_URL is set (self-hosted tunnel — webhooks go directly)
+
+relay.onWebhook(async (triggerId, headers, body) => {
+  triggers.handleWebhook(triggerId, JSON.parse(body), headers, body);
+});
+
+triggers.bus.on("trigger:added", (t) => relay.registerTrigger(t.id));
+triggers.bus.on("trigger:removed", ({ id }) => relay.unregisterTrigger(id));
+```
+
+### URL Routing (`src/shared/urls.ts`)
+
+Three routing modes for public-facing URLs:
+
+| Mode | Condition | Webhook URL | OAuth URL |
+|------|-----------|-------------|-----------|
+| **Relay** (default) | No `JERIKO_PUBLIC_URL` | `https://bot.jeriko.ai/hooks/:userId/:triggerId` | `https://bot.jeriko.ai/oauth/:userId/:provider/callback` |
+| **Self-hosted** | `JERIKO_PUBLIC_URL` set | `https://my-tunnel.com/hooks/:triggerId` | `https://my-tunnel.com/oauth/:provider/callback` |
+| **Local dev** | No userId | `http://127.0.0.1:3000/hooks/:triggerId` | `http://127.0.0.1:3000/oauth/:provider/callback` |
+
+**URL builder functions:**
+- `buildWebhookUrl(triggerId, localBaseUrl?)` — webhook URL with mode-aware routing
+- `buildOAuthCallbackUrl(provider)` — OAuth redirect_uri with mode-aware routing
+- `buildOAuthStartUrl(provider, stateToken)` — OAuth authorization start URL (state token URI-encoded)
+- `getPublicUrl()` — base URL (`JERIKO_PUBLIC_URL` or `https://bot.jeriko.ai`)
+- `isSelfHosted()` — whether `JERIKO_PUBLIC_URL` is set
+- `getShareUrl()` — share link base URL
+- `buildShareLink(shareId)` — full share link URL
+
+### Centralized Billing
+
+Stripe sends billing webhooks to ONE endpoint — you cannot configure per-user endpoints.
+
+**Relay handles billing centrally:**
+1. `POST /billing/webhook` — receives Stripe events, verifies signature, extracts `jeriko_user_id` from subscription metadata
+2. Updates in-memory license cache (30-day TTL eviction)
+3. Forwards event to connected daemon (if online)
+4. `GET /billing/license/:userId` — daemons check subscription status via authenticated API
+
+**Daemon billing integration:**
+- `stripe.ts`: includes `jeriko_user_id` in Stripe checkout session metadata
+- `license.ts`: `refreshFromRelay()` fetches license from relay API (authenticated with `NODE_AUTH_SECRET`)
+- Billing URLs configurable via `JERIKO_BILLING_URL` env var
+- Falls through to direct Stripe API if relay unavailable
+
+### Environment Variables
+
+| Variable | Required By | Purpose |
+|----------|------------|---------|
+| `JERIKO_USER_ID` | Daemon | Globally unique user identifier (UUID v4) |
+| `RELAY_AUTH_SECRET` | Relay server | Shared secret for daemon authentication |
+| `NODE_AUTH_SECRET` | Daemon | Auth token sent to relay (same as daemon HTTP auth) |
+| `JERIKO_RELAY_URL` | Daemon | Override relay WebSocket URL (default: `wss://bot.jeriko.ai/relay`) |
+| `JERIKO_PUBLIC_URL` | Daemon | Self-hosted tunnel URL (bypasses relay entirely) |
+| `JERIKO_BILLING_URL` | Daemon | Override billing API base URL |
+| `STRIPE_BILLING_WEBHOOK_SECRET` | Relay server | Stripe signature verification for billing webhooks |
+
+### Backward Compatibility
+
+- **Self-hosted tunnel**: Set `JERIKO_PUBLIC_URL=https://your-tunnel.example.com`. Webhooks go directly to daemon. Relay client does not connect.
+- **Offline mode**: Works fully without relay. Cron, file, HTTP poll triggers fire locally. Only webhook triggers need relay.
+- **Local dev**: `localhost:3000` still works. URLs fall back to `http://127.0.0.1:3000/hooks/:triggerId`.
+- **Legacy webhook route**: `POST /hooks/:triggerId` (no userId) still works — relay looks up trigger owner via `findByTriggerId()`.
+
+---
+
 ## Testing
 
-**57 test files · 816 test cases**
+**72 test files · 1876 test cases**
 
 Framework: `bun:test` with `describe`/`it`/`expect`.
 
@@ -1044,8 +1354,36 @@ Framework: `bun:test` with `describe`/`it`/`expect`.
 | Category | Location | Coverage |
 |----------|----------|----------|
 | CLI unit | `test/unit/cli/` | Format, autocomplete, backend, commands, types, spinner, chat, components (messages, context-bar, tool-call), hooks (reducer, sub-agents) |
-| Daemon unit | `test/unit/` | Security, dispatcher, database, bus, env-ref, skill-loader, skill-tool, webdev-tool, browser-scripts, share |
+| Daemon unit | `test/unit/` | Security, dispatcher, database, bus, env-ref, skill-loader, skill-tool, webdev-tool, browser-scripts, share, relay-connections, relay-protocol, urls, install-user-id |
+| Billing unit | `test/unit/billing/` | Config, store, license, webhook |
+| Relay integration | `test/integration/relay-e2e.test.ts` | Full pipeline E2E — real server, real WebSocket, real HTTP (20 tests) |
+| Commands integration | `test/integration/commands.test.ts` | Channel router slash commands (81 tests) |
 | Integration | `test/live/` | Live agent, browser actions, browser scenarios, skills |
+
+**Relay E2E tests** (`test/integration/relay-e2e.test.ts`):
+
+Starts a REAL relay server on a random port, connects REAL WebSocket clients simulating daemons, sends REAL HTTP requests. Verifies the full pipeline:
+
+| Test | Description |
+|------|-------------|
+| Health (public) | `GET /health` returns service status |
+| Health (auth) | `GET /health/status` requires auth, returns connection details |
+| WebSocket auth | Valid credentials → `auth_ok`, invalid → `auth_fail` |
+| Webhook forwarding | `POST /hooks/:userId/:triggerId` → WebSocket → daemon receives payload |
+| Webhook 503 | Returns 503 when daemon is not connected |
+| Webhook 404 | Returns 404 for unregistered trigger (ownership validation) |
+| Legacy webhook | `POST /hooks/:triggerId` fallback route (backward compatibility) |
+| OAuth proxy | Full round-trip: browser → relay → daemon → relay → browser HTML |
+| OAuth 503 | Returns 503 when daemon is not connected for OAuth |
+| Multi-user isolation | Webhooks route to correct user, other users unaffected |
+| Cross-user rejection | User A cannot receive webhooks for user B's triggers |
+| Trigger registration | Dynamic add/remove verified via HTTP |
+| Connection superseding | New connection evicts old, webhooks route to new |
+| Heartbeat | Ping/pong round-trip |
+| Billing license auth | `GET /billing/license/:userId` requires auth |
+| Billing free tier | Unknown users default to free tier |
+| 404 handling | Unknown routes return 404 |
+| Status reflection | Connected daemons appear in `/health/status` |
 
 **Test setup** (`test/preload.ts`):
 ```typescript
@@ -1058,6 +1396,7 @@ chalk.level = 3; // force 24-bit color in all environments
 - Tool registry cleanup between tests
 - Mock `HOME` for skill/config tests
 - `bun:sqlite` in-memory databases for storage tests
+- Real WebSocket servers on port 0 for relay integration tests
 
 ---
 
@@ -1067,7 +1406,7 @@ chalk.level = 3; // force 24-bit color in all environments
 ~/.config/jeriko/
   config.json          # JerikoConfig
   agent.md             # System prompt (AGENT.md copy)
-  .env                 # Secrets (mode 0o600)
+  .env                 # Secrets (mode 0o600) — includes JERIKO_USER_ID
 
 ~/.jeriko/
   data/
@@ -1111,18 +1450,45 @@ User types message
   → Phase: idle → thinking → streaming/tool-executing → idle
 ```
 
-### Webhook → Agent
+### Webhook → Agent (via Relay)
 
 ```
-External service POST → /hooks/:triggerId
-  → TriggerEngine.handleWebhook()
-  → Signature verification (service-specific)
+External service POST → https://bot.jeriko.ai/hooks/:userId/:triggerId
+  → Relay server receives request
+  → Looks up userId in connections map
+  → Validates trigger ownership (triggerIds.has(triggerId))
+  → Returns 200 to external service immediately
+  → Forwards {type:"webhook", triggerId, headers, body} over WebSocket
+  → Daemon relay client receives webhook message
+  → RelayClient.onWebhook callback fires
+  → TriggerEngine.handleWebhook(triggerId, payload, headers, rawBody)
+  → Signature verification (service-specific — secrets stay on daemon)
   → TriggerAction dispatch:
       ├─ type: "shell" → spawnSync(command) with TRIGGER_EVENT env
       └─ type: "agent" → runAgent() with payload context
   → Update run_count, error_count in SQLite
   → Notify admin via Telegram (if configured)
   → Auto-disable on 5 consecutive errors or max_runs
+```
+
+**Direct mode** (self-hosted with JERIKO_PUBLIC_URL):
+```
+External service POST → https://my-tunnel.example.com/hooks/:triggerId
+  → Daemon HTTP server receives directly (no relay)
+  → Same TriggerEngine.handleWebhook() flow as above
+```
+
+### OAuth Callback (via Relay)
+
+```
+Provider redirects browser → https://bot.jeriko.ai/oauth/:userId/:provider/callback?code=...&state=...
+  → Relay server receives GET request
+  → Looks up userId in connections map
+  → Forwards {type:"oauth_callback", provider, params, requestId} over WebSocket
+  → Daemon relay client receives callback
+  → Daemon performs token exchange locally (secrets stay on daemon)
+  → Daemon sends {type:"oauth_result", requestId, statusCode, html} over WebSocket
+  → Relay returns HTML to browser
 ```
 
 ### Channel Message → Agent

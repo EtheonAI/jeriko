@@ -24,11 +24,15 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     commands: [
       ["/help",           "Show available commands"],
       ["/new",            "Start a new session"],
+      ["/session",        "Show current session details"],
       ["/sessions",       "List recent sessions"],
       ["/resume <slug>",  "Resume a previous session"],
       ["/history",        "Show message history"],
       ["/clear",          "Clear session messages"],
       ["/compact",        "Trigger context compaction"],
+      ["/share",          "Share current session"],
+      ["/kill",           "Destroy session and start fresh"],
+      ["/archive",        "Archive session and start fresh"],
     ],
   },
   {
@@ -42,7 +46,15 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     label: "Channels",
     commands: [
       ["/channels",       "List messaging channels"],
-      ["/channel …",      "connect <name> | disconnect <name>"],
+      ["/channel …",      "connect | disconnect | add | remove <name>"],
+    ],
+  },
+  {
+    label: "Providers",
+    commands: [
+      ["/providers",        "List AI providers"],
+      ["/provider add",     "Add a provider (interactive picker)"],
+      ["/provider rm <id>", "Remove a provider"],
     ],
   },
   {
@@ -51,9 +63,22 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/connectors",     "List connector status"],
       ["/connect <name>", "Connect a service"],
       ["/disconnect <n>", "Disconnect a service"],
+      ["/auth [name]",    "Connector authentication"],
       ["/triggers",       "List active triggers"],
+      ["/tasks",          "List background tasks"],
       ["/skills",         "List installed skills"],
       ["/skill <name>",   "Show skill details"],
+      ["/notifications",  "Notification preferences"],
+    ],
+  },
+  {
+    label: "Billing",
+    commands: [
+      ["/plan",            "Show billing plan and usage"],
+      ["/upgrade",         "Upgrade to Pro plan"],
+      ["/billing",         "Manage billing and invoices"],
+      ["/cancel",          "Cancel subscription"],
+      ["/cost",            "Session cost breakdown"],
     ],
   },
   {
@@ -77,35 +102,53 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
  */
 export const SLASH_COMMANDS = new Map<string, string>([
   // Session
-  ["/help",        "Show available commands"],
-  ["/new",         "Start a new session"],
-  ["/sessions",    "List recent sessions"],
-  ["/resume",      "Resume a previous session"],
-  ["/history",     "Show message history"],
-  ["/clear",       "Clear session messages"],
-  ["/compact",     "Trigger context compaction"],
+  ["/help",           "Show available commands"],
+  ["/new",            "Start a new session"],
+  ["/session",        "Show current session details"],
+  ["/sessions",       "List recent sessions"],
+  ["/resume",         "Resume a previous session"],
+  ["/history",        "Show message history"],
+  ["/clear",          "Clear session messages"],
+  ["/compact",        "Trigger context compaction"],
+  ["/share",          "Share current session"],
+  ["/kill",           "Destroy session and start fresh"],
+  ["/archive",        "Archive session and start fresh"],
 
   // Model
-  ["/model",       "Show or switch the active model"],
-  ["/models",      "List available models"],
+  ["/model",          "Show or switch the active model"],
+  ["/models",         "List available models"],
 
   // Channels
-  ["/channels",    "List messaging channels"],
-  ["/channel",     "Connect or disconnect a channel"],
+  ["/channels",       "List messaging channels"],
+  ["/channel",        "Connect or disconnect a channel"],
+
+  // Providers
+  ["/providers",      "List AI providers"],
+  ["/provider",       "Manage AI providers"],
 
   // Management
-  ["/connectors",  "List connector status"],
-  ["/connect",     "Connect a service"],
-  ["/disconnect",  "Disconnect a service"],
-  ["/triggers",    "List active triggers"],
-  ["/skills",      "List installed skills"],
-  ["/skill",       "Show skill details"],
+  ["/connectors",     "List connector status"],
+  ["/connect",        "Connect a service"],
+  ["/disconnect",     "Disconnect a service"],
+  ["/auth",           "Connector authentication"],
+  ["/triggers",       "List active triggers"],
+  ["/tasks",          "List background tasks"],
+  ["/skills",         "List installed skills"],
+  ["/skill",          "Show skill details"],
+  ["/notifications",  "Notification preferences"],
+
+  // Billing
+  ["/plan",           "Show billing plan and usage"],
+  ["/upgrade",        "Upgrade to Pro plan"],
+  ["/billing",        "Manage billing and invoices"],
+  ["/cancel",         "Cancel subscription"],
+  ["/cost",           "Session cost breakdown"],
 
   // System
-  ["/status",      "Daemon status and stats"],
-  ["/health",      "Check connector health"],
-  ["/sys",         "System info"],
-  ["/config",      "Show configuration"],
+  ["/status",         "Daemon status and stats"],
+  ["/health",         "Check connector health"],
+  ["/sys",            "System info"],
+  ["/config",         "Show configuration"],
 ]);
 
 /**

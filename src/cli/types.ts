@@ -16,7 +16,8 @@ export type Phase =
   | "streaming"
   | "tool-executing"
   | "sub-executing"
-  | "setup";
+  | "setup"
+  | "provider-add";
 
 /** Type guard for valid phase values. */
 export function isPhase(value: unknown): value is Phase {
@@ -26,7 +27,8 @@ export function isPhase(value: unknown): value is Phase {
     value === "streaming" ||
     value === "tool-executing" ||
     value === "sub-executing" ||
-    value === "setup"
+    value === "setup" ||
+    value === "provider-add"
   );
 }
 
@@ -180,8 +182,60 @@ export interface ModelInfo {
   name: string;
   provider: string;
   contextWindow?: number;
+  maxOutput?: number;
   supportsTools?: boolean;
   supportsVision?: boolean;
+  supportsReasoning?: boolean;
+  costInput?: number;
+  costOutput?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Providers
+// ---------------------------------------------------------------------------
+
+/** Provider info for the /provider command. */
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  type: "built-in" | "custom" | "discovered" | "available";
+  baseUrl?: string;
+  defaultModel?: string;
+  modelCount?: number;
+  envKey?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Billing
+// ---------------------------------------------------------------------------
+
+/** Billing plan info for the /plan command. */
+export interface PlanInfo {
+  tier: string;
+  label: string;
+  status: string;
+  email?: string;
+  connectors: { used: number; limit: number | string };
+  triggers: { used: number; limit: number | string };
+  pastDue?: boolean;
+  gracePeriod?: boolean;
+  validUntil?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Shares
+// ---------------------------------------------------------------------------
+
+/** Share info for the /share command. */
+export interface ShareInfo {
+  shareId: string;
+  url: string;
+  sessionId: string;
+  title: string;
+  model: string;
+  messageCount: number;
+  createdAt: number;
+  expiresAt: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +247,45 @@ export interface HistoryEntry {
   role: string;
   content: string;
   timestamp?: number;
+}
+
+// ---------------------------------------------------------------------------
+// Tasks
+// ---------------------------------------------------------------------------
+
+/** Task definition for the /tasks command. */
+export interface TaskDef {
+  id: string;
+  name: string;
+  type: string;
+  command: string;
+  enabled: boolean;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+/** Notification preference entry. */
+export interface NotificationPref {
+  channel: string;
+  chatId: string;
+  enabled: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+/** Connector auth status for the /auth command. */
+export interface AuthStatus {
+  name: string;
+  label: string;
+  description: string;
+  configured: boolean;
+  required: Array<{ variable: string; label: string; set: boolean }>;
+  optional: Array<{ variable: string; set: boolean }>;
 }
 
 // ---------------------------------------------------------------------------
