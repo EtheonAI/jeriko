@@ -6,6 +6,16 @@ import { getLogger } from "../../../shared/logger.js";
 
 const log = getLogger();
 
+/** Parse JSON safely — returns empty object on corrupt data instead of crashing. */
+function safeParse(json: string): Record<string, unknown> {
+  try {
+    return JSON.parse(json);
+  } catch {
+    log.warn(`Corrupt JSON in trigger store: ${json.slice(0, 80)}`);
+    return {};
+  }
+}
+
 // ---------------------------------------------------------------------------
 // DDL
 // ---------------------------------------------------------------------------
@@ -241,8 +251,8 @@ export class TriggerStore {
       id: row.id,
       type: row.type as TriggerConfig["type"],
       enabled: row.enabled === 1,
-      config: JSON.parse(row.config),
-      action: JSON.parse(row.action),
+      config: safeParse(row.config),
+      action: safeParse(row.action),
       label: row.label ?? undefined,
       run_count: row.run_count ?? 0,
       error_count: row.error_count ?? 0,

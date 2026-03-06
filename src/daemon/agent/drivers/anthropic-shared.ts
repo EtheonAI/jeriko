@@ -5,6 +5,15 @@
 
 import type { DriverConfig, DriverMessage } from "./index.js";
 
+/** Parse tool call arguments safely — malformed JSON becomes empty object. */
+function safeParseArgs(json: string): Record<string, unknown> {
+  try {
+    return JSON.parse(json);
+  } catch {
+    return {};
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Anthropic API shapes
 // ---------------------------------------------------------------------------
@@ -84,7 +93,7 @@ export function convertToAnthropicMessages(messages: DriverMessage[]): {
           type: "tool_use",
           id: tc.id,
           name: tc.name,
-          input: JSON.parse(tc.arguments),
+          input: safeParseArgs(tc.arguments),
         });
       }
       converted.push({ role: "assistant", content: blocks });

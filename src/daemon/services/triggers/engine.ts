@@ -601,6 +601,7 @@ export class TriggerEngine {
           }
         };
 
+        poll(); // fire immediately, don't wait for first interval
         const timer = setInterval(poll, interval);
         this.httpTimers.set(trigger.id, timer);
         break;
