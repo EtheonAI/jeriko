@@ -1,15 +1,15 @@
+# Windows install test — PowerShell on Debian for CI validation.
+#
+# For REAL Windows testing, use GitHub Actions `windows-latest` runner.
+# This container validates PowerShell script syntax and basic logic only.
+# See .github/workflows/install-test.yml for true Windows E2E tests.
+
 FROM mcr.microsoft.com/powershell:lts-debian-bookworm
 
-# Install Node.js 22 + curl
 RUN apt-get update && \
-    apt-get install -y curl && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y nodejs && \
+    apt-get install -y --no-install-recommends curl ca-certificates python3 && \
     rm -rf /var/lib/apt/lists/*
 
-# Copy test script and install script
 COPY run.ps1 /test/run.ps1
-COPY run-cmd-sim.sh /test/run-cmd-sim.sh
-RUN chmod +x /test/run-cmd-sim.sh
 
 ENTRYPOINT ["pwsh", "-File", "/test/run.ps1"]

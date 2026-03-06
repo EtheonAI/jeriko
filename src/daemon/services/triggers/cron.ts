@@ -9,6 +9,7 @@ export class CronTrigger {
   private job: Cron | null = null;
   private expression: string;
   private timezone: string | undefined;
+  private executing = false;
 
   constructor(expression: string, timezone?: string) {
     this.expression = expression;
@@ -17,8 +18,9 @@ export class CronTrigger {
 
   /**
    * Start the cron job. Calls `onTick` each time the schedule fires.
+   * Skips tick if the previous execution is still running (overlap protection).
    */
-  start(onTick: () => void): void {
+  start(onTick: () => void | Promise<void>): void {
     if (this.job) {
       this.stop();
     }
@@ -28,11 +30,18 @@ export class CronTrigger {
       opts.timezone = this.timezone;
     }
 
-    this.job = new Cron(this.expression, opts, () => {
+    this.job = new Cron(this.expression, opts, async () => {
+      if (this.executing) {
+        log.warn(`Cron tick skipped (previous still running): "${this.expression}"`);
+        return;
+      }
+      this.executing = true;
       try {
-        onTick();
+        await onTick();
       } catch (err) {
         log.error(`Cron tick error (${this.expression}): ${err}`);
+      } finally {
+        this.executing = false;
       }
     });
 

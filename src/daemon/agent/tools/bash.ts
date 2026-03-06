@@ -31,13 +31,24 @@ async function execute(args: Record<string, unknown>): Promise<string> {
       stdio: ["ignore", "pipe", "pipe"],
     });
 
+    const MAX_CAPTURE = 110_000; // cap accumulation during streaming
     let stdout = "";
     let stderr = "";
-    proc.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    proc.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    let truncated = false;
+    proc.stdout.on("data", (chunk: Buffer) => {
+      if (stdout.length + stderr.length < MAX_CAPTURE) {
+        stdout += chunk.toString().slice(0, MAX_CAPTURE - stdout.length - stderr.length);
+      } else { truncated = true; }
+    });
+    proc.stderr.on("data", (chunk: Buffer) => {
+      if (stdout.length + stderr.length < MAX_CAPTURE) {
+        stderr += chunk.toString().slice(0, MAX_CAPTURE - stdout.length - stderr.length);
+      } else { truncated = true; }
+    });
 
     proc.on("close", (code) => {
-      const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : "");
+      const output = stdout + (stderr ? `\n[stderr]\n${stderr}` : "")
+        + (truncated ? "\n[output truncated]" : "");
       resolve(output.slice(0, 100_000) || `(exit code ${code ?? 0})`);
     });
 

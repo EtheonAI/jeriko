@@ -1,63 +1,71 @@
 /**
  * CLI Theme — Color palette, semantic chalk wrappers, and visual helpers.
  *
- * Design system for Jeriko's terminal UI. Professional dark-terminal
- * aesthetic with high-contrast hierarchy and rich semantic tokens.
+ * Design system for Jeriko's terminal UI. Supports multiple themes
+ * via ThemeContext (see hooks/useTheme.ts). This module provides:
  *
- * Palette philosophy:
- *   - Brand: Warm amber (#e8a468) — distinctive but not loud
- *   - Primary text: Near-white (#e4e4e7) — high readability
- *   - Tool/code: Blue (#7aa2f7) — technical actions
- *   - Success/error/warning: Clear semantic colors
- *   - Muted layers: Three gray tiers for visual depth
+ *   1. PALETTE — Mutable color map (updates when theme changes)
+ *   2. t.*     — Chalk formatters that use current PALETTE values
+ *   3. ICONS   — Unicode symbols (theme-independent)
+ *   4. Helpers — sectionHeader, treeItem, kvPair, etc.
+ *
+ * Components in Ink use `useTheme().colors` directly for <Text color={}>.
+ * Non-React code (format.ts, channels) uses `t.*` chalk wrappers.
  *
  * Chalk automatically respects NO_COLOR, FORCE_COLOR, and TERM=dumb.
  */
 
-import chalk from "chalk";
+import chalk, { type ChalkInstance } from "chalk";
+import type { ThemeColors, ThemePreset } from "./themes.js";
+import { THEMES, DEFAULT_THEME } from "./themes.js";
 
 // ---------------------------------------------------------------------------
-// Color palette
+// Color palette — mutable, tracks active theme
 // ---------------------------------------------------------------------------
 
 /**
- * Centralized color constants for all CLI output.
- *
- * Four-tier text hierarchy:
- *   text    → primary content (messages, labels)
- *   muted   → secondary info (metadata, timestamps)
- *   dim     → tertiary chrome (borders, separators)
- *   faint   → barely visible (background accents)
+ * Active color palette. Updates when `setActiveTheme()` is called.
+ * Use in Ink components via `useTheme().colors` instead of importing directly.
+ * Use via `t.*` chalk wrappers in non-React code (format.ts, channels).
  */
-export const PALETTE = {
-  // Brand
-  brand:     "#e8a468",    // warm amber — headers, prompt marker, branding
-  brandDim:  "#b07840",    // dimmed brand — inactive accents
+type PaletteKeys = ThemeColors & {
+  blue: string;
+  green: string;
+  red: string;
+  yellow: string;
+  cyan: string;
+  [key: string]: string;
+};
 
-  // Semantic
-  blue:      "#7aa2f7",    // tool calls, code, links, assistant markers
-  green:     "#73daca",    // success, connected, complete
-  red:       "#f7768e",    // errors, disconnected, failed
-  yellow:    "#e0af68",    // warnings, caution
-  cyan:      "#89ddff",    // info, hints, spinners
-  purple:    "#bb9af7",    // sub-agents, parallel tasks
+export const PALETTE: PaletteKeys = { ...THEMES[DEFAULT_THEME].colors } as PaletteKeys;
 
-  // Extended semantic
-  teal:      "#2dd4bf",    // skills, interactive markers
-  orange:    "#fb923c",    // cost warnings, budget alerts
-  pink:      "#f472b6",    // highlights, special emphasis
+/** Backward-compat aliases for format.ts consumers that use `PALETTE.blue` etc. */
+Object.defineProperties(PALETTE, {
+  blue:   { get: () => PALETTE.tool,    enumerable: true },
+  green:  { get: () => PALETTE.success, enumerable: true },
+  red:    { get: () => PALETTE.error,   enumerable: true },
+  yellow: { get: () => PALETTE.warning, enumerable: true },
+  cyan:   { get: () => PALETTE.info,    enumerable: true },
+});
 
-  // Diff colors
-  diffAdd:   "#73daca",    // added lines (matches green)
-  diffRm:    "#f7768e",    // removed lines (matches red)
-  diffCtx:   "#4b5563",    // context lines (matches dim)
+/** Current active theme name. */
+let activeTheme: ThemePreset = DEFAULT_THEME;
 
-  // Text hierarchy
-  text:      "#e4e4e7",    // primary content
-  muted:     "#9ca3af",    // secondary metadata
-  dim:       "#4b5563",    // tertiary chrome, borders, separators
-  faint:     "#374151",    // barely visible, background accents
-} as const;
+/** Switch the active theme — updates PALETTE and rebuilds chalk formatters. */
+export function setActiveTheme(theme: ThemePreset): void {
+  const resolved = THEMES[theme] ?? THEMES[DEFAULT_THEME];
+  activeTheme = resolved.name;
+  const colors = resolved.colors;
+  for (const key of Object.keys(colors) as Array<keyof ThemeColors>) {
+    PALETTE[key] = colors[key];
+  }
+  rebuildChalkFormatters();
+}
+
+/** Get the current active theme name. */
+export function getActiveTheme(): ThemePreset {
+  return activeTheme;
+}
 
 // ---------------------------------------------------------------------------
 // Semantic chalk functions
@@ -72,47 +80,84 @@ export const PALETTE = {
  *   console.log(t.error("Something went wrong"));
  *   console.log(t.muted("1.2k tokens"));
  */
-export const t = {
-  // Brand
-  brand:     chalk.hex(PALETTE.brand),
-  brandDim:  chalk.hex(PALETTE.brandDim),
-  brandBold: chalk.hex(PALETTE.brand).bold,
+interface ThemeFormatters {
+  brand: ChalkInstance;
+  brandDim: ChalkInstance;
+  brandBold: ChalkInstance;
+  blue: ChalkInstance;
+  green: ChalkInstance;
+  red: ChalkInstance;
+  yellow: ChalkInstance;
+  cyan: ChalkInstance;
+  purple: ChalkInstance;
+  teal: ChalkInstance;
+  orange: ChalkInstance;
+  pink: ChalkInstance;
+  success: ChalkInstance;
+  error: ChalkInstance;
+  warning: ChalkInstance;
+  info: ChalkInstance;
+  diffAdd: ChalkInstance;
+  diffRm: ChalkInstance;
+  diffCtx: ChalkInstance;
+  text: ChalkInstance;
+  muted: ChalkInstance;
+  dim: ChalkInstance;
+  faint: ChalkInstance;
+  bold: ChalkInstance;
+  header: ChalkInstance;
+  underline: ChalkInstance;
+}
 
-  // Semantic
-  blue:      chalk.hex(PALETTE.blue),
-  green:     chalk.hex(PALETTE.green),
-  red:       chalk.hex(PALETTE.red),
-  yellow:    chalk.hex(PALETTE.yellow),
-  cyan:      chalk.hex(PALETTE.cyan),
-  purple:    chalk.hex(PALETTE.purple),
+export const t = {} as ThemeFormatters;
 
-  // Extended semantic
-  teal:      chalk.hex(PALETTE.teal),
-  orange:    chalk.hex(PALETTE.orange),
-  pink:      chalk.hex(PALETTE.pink),
+/** Rebuild all chalk formatters from current PALETTE values. */
+function rebuildChalkFormatters(): void {
+  Object.assign(t, {
+    // Brand
+    brand:     chalk.hex(PALETTE.brand),
+    brandDim:  chalk.hex(PALETTE.brandDim),
+    brandBold: chalk.hex(PALETTE.brand).bold,
 
-  // Semantic aliases (used throughout components)
-  success:   chalk.hex(PALETTE.green),
-  error:     chalk.hex(PALETTE.red),
-  warning:   chalk.hex(PALETTE.yellow),
-  info:      chalk.hex(PALETTE.cyan),
+    // Semantic
+    blue:      chalk.hex(PALETTE.blue),
+    green:     chalk.hex(PALETTE.green),
+    red:       chalk.hex(PALETTE.red),
+    yellow:    chalk.hex(PALETTE.yellow),
+    cyan:      chalk.hex(PALETTE.cyan),
+    purple:    chalk.hex(PALETTE.purple),
 
-  // Diff formatters
-  diffAdd:   chalk.hex(PALETTE.diffAdd),
-  diffRm:    chalk.hex(PALETTE.diffRm),
-  diffCtx:   chalk.hex(PALETTE.diffCtx),
+    // Extended semantic
+    teal:      chalk.hex(PALETTE.teal),
+    orange:    chalk.hex(PALETTE.orange),
+    pink:      chalk.hex(PALETTE.pink),
 
-  // Text hierarchy
-  text:      chalk.hex(PALETTE.text),
-  muted:     chalk.hex(PALETTE.muted),
-  dim:       chalk.hex(PALETTE.dim),
-  faint:     chalk.hex(PALETTE.faint),
+    // Semantic aliases (used throughout components)
+    success:   chalk.hex(PALETTE.success),
+    error:     chalk.hex(PALETTE.error),
+    warning:   chalk.hex(PALETTE.warning),
+    info:      chalk.hex(PALETTE.info),
 
-  // Emphasis
-  bold:      chalk.bold,
-  header:    chalk.hex(PALETTE.text).bold,
-  underline: chalk.underline,
-} as const;
+    // Diff formatters
+    diffAdd:   chalk.hex(PALETTE.diffAdd),
+    diffRm:    chalk.hex(PALETTE.diffRm),
+    diffCtx:   chalk.hex(PALETTE.diffCtx),
+
+    // Text hierarchy
+    text:      chalk.hex(PALETTE.text),
+    muted:     chalk.hex(PALETTE.muted),
+    dim:       chalk.hex(PALETTE.dim),
+    faint:     chalk.hex(PALETTE.faint),
+
+    // Emphasis
+    bold:      chalk.bold,
+    header:    chalk.hex(PALETTE.text).bold,
+    underline: chalk.underline,
+  });
+}
+
+// Initialize formatters with default theme
+rebuildChalkFormatters();
 
 // ---------------------------------------------------------------------------
 // Unicode symbols — consistent icons for all CLI output

@@ -148,6 +148,16 @@ export function isConnectorConfigured(name: string): boolean {
 }
 
 /**
+ * Count how many connectors have their required env vars configured.
+ *
+ * Single source of truth for connector usage count across all surfaces
+ * (CLI, channels, API, IPC). This is the number that billing limits gate against.
+ */
+export function getConfiguredConnectorCount(): number {
+  return CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+}
+
+/**
  * Get the primary env var name for a required slot.
  * For alternatives like ["GITHUB_TOKEN", "GH_TOKEN"], returns the first one.
  */

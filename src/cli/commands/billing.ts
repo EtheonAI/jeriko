@@ -68,6 +68,7 @@ export const planCommand: CommandHandler = {
       // Direct access — no daemon. Load secrets so billing env vars are available.
       loadSecrets();
       const { getLicenseState } = await import("../../daemon/billing/license.js");
+      const { getConfiguredConnectorCount } = await import("../../shared/connector.js");
       const state = getLicenseState();
       ok({
         tier: state.tier,
@@ -75,11 +76,11 @@ export const planCommand: CommandHandler = {
         status: state.status,
         email: state.email,
         connectors: {
-          used: 0, // Can't count without daemon
+          used: getConfiguredConnectorCount(),
           limit: state.connectorLimit,
         },
         triggers: {
-          used: 0,
+          used: 0, // Trigger count requires daemon (TriggerEngine)
           limit: state.triggerLimit === Infinity ? "unlimited" : state.triggerLimit,
         },
         pastDue: state.pastDue,
@@ -103,16 +104,15 @@ export const upgradeCommand: CommandHandler = {
     if (flagBool(parsed, "help")) {
       console.log("Usage: jeriko upgrade --email <email>");
       console.log(`\nStart the upgrade flow to Jeriko Pro (${PRO_PRICE_DISPLAY}).`);
-      console.log("Opens Stripe Checkout in your browser.");
+      console.log("Opens Stripe Checkout in your browser where you can review");
+      console.log("and accept Terms of Service before completing payment.");
       console.log("\nFlags:");
       console.log("  --email <email>     Your email address (required)");
-      console.log("  --terms-accepted    Accept Terms of Service");
       console.log("  --help              Show this help");
       process.exit(0);
     }
 
     const email = flagStr(parsed, "email", "");
-    const termsAccepted = flagBool(parsed, "terms-accepted");
 
     if (!email) {
       fail("Email is required. Usage: jeriko upgrade --email you@example.com");
@@ -125,13 +125,25 @@ export const upgradeCommand: CommandHandler = {
       return;
     }
 
+    // Capture client metadata for chargeback defense evidence.
+    // In CLI context, we use the local machine's network info.
+    const { networkInterfaces } = await import("node:os");
+    const nets = networkInterfaces();
+    const localIp = Object.values(nets).flat()
+      .find((n) => n && !n.internal && n.family === "IPv4")?.address ?? "127.0.0.1";
+    const clientMeta = {
+      clientIp: localIp,
+      userAgent: `jeriko-cli/${process.env.npm_package_version ?? "2.0.0"} (${process.platform})`,
+    };
+
     let url: string;
 
     if (isDaemonRunning()) {
       const { sendRequest } = await import("../../daemon/api/socket.js");
       const response = await sendRequest("billing.checkout", {
         email,
-        terms_accepted: termsAccepted,
+        client_ip: clientMeta.clientIp,
+        user_agent: clientMeta.userAgent,
       });
       if (!response.ok) fail(response.error ?? "Failed to create checkout session");
       url = (response.data as { url: string }).url;
@@ -141,7 +153,7 @@ export const upgradeCommand: CommandHandler = {
 
       // Strategy 1: Relay proxy (distributed users — no local Stripe keys)
       const { createCheckoutViaRelay } = await import("../../daemon/billing/relay-proxy.js");
-      const relayResult = await createCheckoutViaRelay(email, termsAccepted);
+      const relayResult = await createCheckoutViaRelay(email, clientMeta);
 
       if (relayResult) {
         url = relayResult.url;
@@ -149,7 +161,7 @@ export const upgradeCommand: CommandHandler = {
         // Strategy 2: Direct Stripe SDK (self-hosted users with local keys)
         try {
           const { createCheckoutSession } = await import("../../daemon/billing/stripe.js");
-          const result = await createCheckoutSession(email, termsAccepted);
+          const result = await createCheckoutSession(email, clientMeta);
           url = result.url;
         } catch {
           fail(

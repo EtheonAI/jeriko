@@ -15,12 +15,19 @@ async function listRecursive(
   pattern: string,
   maxDepth: number,
   depth: number = 0,
+  visitedInodes: Set<string> = new Set(),
 ): Promise<string[]> {
   if (depth > maxDepth) return [];
 
   const results: string[] = [];
 
   try {
+    // Detect symlink loops by tracking visited directory inodes
+    const dirStat = await stat(dir);
+    const inode = `${dirStat.dev}:${dirStat.ino}`;
+    if (visitedInodes.has(inode)) return [];
+    visitedInodes.add(inode);
+
     const entries = await readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
@@ -31,7 +38,7 @@ async function listRecursive(
       const fullPath = join(dir, entry.name);
 
       if (entry.isDirectory()) {
-        const sub = await listRecursive(fullPath, pattern, maxDepth, depth + 1);
+        const sub = await listRecursive(fullPath, pattern, maxDepth, depth + 1, visitedInodes);
         results.push(...sub);
       } else if (entry.isFile()) {
         if (matchesPattern(entry.name, pattern)) {

@@ -48,19 +48,23 @@ function printHelp(): void {
   console.log("                                    Add a custom provider");
   console.log("  remove <id>                       Remove a custom provider");
   console.log("  test <id>                         Test provider connectivity");
+  console.log("  models <id>                       List available models from a provider");
   console.log("\nOptions:");
   console.log("  --url <base-url>     API base URL (required for add)");
   console.log("  --key <api-key>      API key (required for add)");
   console.log("  --name <display>     Display name (default: capitalized id)");
   console.log("  --default-model <m>  Default model for this provider");
+  console.log("  --type <protocol>    Protocol type: openai-compatible (default) or anthropic");
   console.log("  --help               Show this help");
   console.log("\nExamples:");
   console.log("  jeriko provider list                              # list all providers");
   console.log("  jeriko provider add groq                          # add from preset (if GROQ_API_KEY is set)");
   console.log("  jeriko provider add openrouter --key sk-or-...    # add from preset with explicit key");
   console.log('  jeriko provider add custom --url https://api.example.com/v1 --key sk-...');
+  console.log('  jeriko provider add my-proxy --url https://proxy.example.com --key sk-... --type anthropic');
   console.log("  jeriko provider remove openrouter");
   console.log("  jeriko provider test groq");
+  console.log("  jeriko provider models groq                       # list models from Groq");
   console.log("\nKnown presets: openrouter, groq, deepseek, google, xai, mistral,");
   console.log("  together, fireworks, deepinfra, cerebras, perplexity, cohere,");
   console.log("  github-models, nvidia, nebius, huggingface, and more.");
@@ -156,6 +160,12 @@ async function actionAdd(parsed: ReturnType<typeof parseArgs>): Promise<void> {
   let apiKey = flagStr(parsed, "key", "");
   const name = flagStr(parsed, "name", "");
   const defaultModel = flagStr(parsed, "default-model", "");
+  const providerType = flagStr(parsed, "type", "") as "" | "openai-compatible" | "anthropic";
+
+  // Validate --type if provided
+  if (providerType && providerType !== "openai-compatible" && providerType !== "anthropic") {
+    fail(`Invalid --type "${providerType}". Supported: openai-compatible, anthropic`);
+  }
 
   // If no --url/--key provided, check if this is a known preset
   if (!baseUrl || !apiKey) {
@@ -226,12 +236,13 @@ async function actionAdd(parsed: ReturnType<typeof parseArgs>): Promise<void> {
     fail(`Provider "${id}" already exists. Remove it first with: jeriko provider remove ${id}`);
   }
 
+  const resolvedType = providerType || "openai-compatible";
   const newProvider: ProviderConfig = {
     id,
     name: resolvedName,
     baseUrl,
     apiKey,
-    type: "openai-compatible",
+    type: resolvedType,
     ...(resolvedDefaultModel ? { defaultModel: resolvedDefaultModel } : {}),
   };
 
@@ -239,7 +250,7 @@ async function actionAdd(parsed: ReturnType<typeof parseArgs>): Promise<void> {
   fileConfig.providers = providers;
   writeConfigFile(fileConfig);
 
-  ok({ id, name: newProvider.name, baseUrl, message: `Provider "${id}" added successfully` });
+  ok({ id, name: newProvider.name, baseUrl, type: resolvedType, message: `Provider "${id}" added successfully` });
 }
 
 async function actionRemove(parsed: ReturnType<typeof parseArgs>): Promise<void> {
@@ -265,6 +276,108 @@ async function actionRemove(parsed: ReturnType<typeof parseArgs>): Promise<void>
   writeConfigFile(fileConfig);
 
   ok({ id, removed: true, message: `Provider "${id}" removed` });
+}
+
+async function actionModels(parsed: ReturnType<typeof parseArgs>): Promise<void> {
+  const id = parsed.positional[1];
+  if (!id) fail("Provider ID is required. Usage: jeriko provider models <id>");
+
+  // Handle local/ollama — query Ollama's /api/tags directly
+  if (id === "local" || id === "ollama") {
+    const { fetchOllamaModels } = await import("../../../daemon/agent/drivers/models.js");
+    const models = await fetchOllamaModels();
+
+    if (models.length === 0) {
+      fail("No local models found. Is Ollama running? Pull a model with: ollama pull llama3");
+    }
+
+    ok({
+      provider: "local",
+      name: "Ollama",
+      count: models.length,
+      models: models.map((m) => ({
+        id: m.id,
+        ...(m.owned_by ? { family: m.owned_by } : {}),
+        ...(m.parameter_size ? { parameters: m.parameter_size } : {}),
+        ...(m.quantization ? { quantization: m.quantization } : {}),
+        ...(m.size ? { size_mb: Math.round((m.size ?? 0) / 1_048_576) } : {}),
+      })),
+    });
+    return;
+  }
+
+  const config = loadConfig();
+  const provider = config.providers?.find((p) => p.id === id);
+
+  if (!provider) {
+    // Check if it's a known preset with env var set
+    const { getPreset } = await import("../../../daemon/agent/drivers/presets.js");
+    const preset = getPreset(id);
+    if (!preset) {
+      fail(`Provider "${id}" not found. Use 'jeriko provider list' to see available providers.`);
+    }
+    // Check env var
+    const envVal = process.env[preset.envKey]
+      ?? (preset.envKeyAlt ? process.env[preset.envKeyAlt] : undefined);
+    if (!envVal) {
+      fail(`Provider "${id}" is a known preset but ${preset.envKey} is not set. Set it or add the provider first.`);
+    }
+    // Use preset config for fetching
+    const { fetchProviderModels } = await import("../../../daemon/agent/drivers/models.js");
+    const models = await fetchProviderModels(preset.baseUrl, envVal, preset.headers);
+
+    if (models.length === 0) {
+      fail(`No models found from ${preset.name}. The provider may not support the /models endpoint.`);
+    }
+
+    ok({
+      provider: id,
+      name: preset.name,
+      count: models.length,
+      models: models.map((m) => ({
+        id: m.id,
+        ...(m.owned_by ? { owned_by: m.owned_by } : {}),
+      })),
+    });
+    return;
+  }
+
+  // Resolve API key from provider config
+  let resolvedKey = provider.apiKey;
+  const envMatch = resolvedKey.match(/^\{env:(\w+)\}$/);
+  if (envMatch) {
+    resolvedKey = process.env[envMatch[1]!] ?? "";
+    if (!resolvedKey) {
+      fail(`Environment variable ${envMatch[1]} is not set`);
+    }
+  }
+
+  const { fetchProviderModels } = await import("../../../daemon/agent/drivers/models.js");
+
+  // Resolve custom headers
+  const headers: Record<string, string> = {};
+  if (provider.headers) {
+    for (const [key, value] of Object.entries(provider.headers)) {
+      const hdrMatch = value.match(/^\{env:(\w+)\}$/);
+      headers[key] = hdrMatch ? (process.env[hdrMatch[1]!] ?? value) : value;
+    }
+  }
+
+  const models = await fetchProviderModels(provider.baseUrl, resolvedKey, headers);
+
+  if (models.length === 0) {
+    fail(`No models found from ${provider.name}. The provider may not support the /models endpoint.`);
+  }
+
+  ok({
+    provider: id,
+    name: provider.name,
+    count: models.length,
+    models: models.map((m) => ({
+      id: m.id,
+      ...(m.owned_by ? { owned_by: m.owned_by } : {}),
+    })),
+  });
 }
 
 async function actionTest(parsed: ReturnType<typeof parseArgs>): Promise<void> {
@@ -350,6 +463,8 @@ export const command: CommandHandler = {
         return actionRemove(parsed);
       case "test":
         return actionTest(parsed);
+      case "models":
+        return actionModels(parsed);
       default:
         fail(`Unknown action: "${action}". Run 'jeriko provider --help' for usage.`);
     }

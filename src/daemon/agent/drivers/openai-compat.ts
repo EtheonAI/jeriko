@@ -115,21 +115,28 @@ export class OpenAICompatibleDriver implements LLMDriver {
     messages: DriverMessage[],
     config: DriverConfig,
   ): AsyncGenerator<StreamChunk> {
-    // Dynamic reasoning detection from capabilities
+    // Dynamic capability detection
     const isReasoning = config.capabilities?.reasoning ?? false;
+    const hasToolCall = config.capabilities?.toolCall ?? false;
+
+    // Reasoning-only models (no tool calling) can't use system role.
+    // Dual-capability models (reasoning + tools) like Qwen3, Kimi-K2
+    // support system role via their tool-calling API path.
+    const reasoningOnly = isReasoning && !hasToolCall;
+
     const converted = this.convertMessages(messages);
     const tools = this.convertTools(config);
 
-    // Inject system prompt — reasoning models don't support system role
-    if (config.system_prompt && !isReasoning) {
+    // Inject system prompt — skip only for reasoning-only models
+    if (config.system_prompt && !reasoningOnly) {
       const hasSystem = converted.some((m) => m.role === "system");
       if (!hasSystem) {
         converted.unshift({ role: "system", content: config.system_prompt });
       }
     }
 
-    // Reasoning models: convert system messages to user messages
-    if (isReasoning) {
+    // Reasoning-only models: convert system messages to user messages
+    if (reasoningOnly) {
       for (const msg of converted) {
         if (msg.role === "system") {
           msg.role = "user";
@@ -157,16 +164,19 @@ export class OpenAICompatibleDriver implements LLMDriver {
       stream_options: { include_usage: true },
     };
 
-    // Reasoning models use different parameter names
-    if (isReasoning) {
+    // Reasoning-only models use max_completion_tokens instead of max_tokens
+    if (reasoningOnly) {
       body.max_completion_tokens = config.max_tokens;
     } else {
       body.max_tokens = config.max_tokens;
       body.temperature = config.temperature;
     }
 
-    // Tools only if model supports them
-    if (tools && !isReasoning) {
+    // Send tools if model supports tool calling — even reasoning models.
+    // The toolCall capability is independently detected by Ollama probe
+    // (template analysis) and models.dev registry. Dual-capability models
+    // (Qwen3, Kimi-K2) support both reasoning and tool calling.
+    if (tools) {
       body.tools = tools;
       body.tool_choice = "auto";
     }

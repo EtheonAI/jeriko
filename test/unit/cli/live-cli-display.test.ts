@@ -162,7 +162,7 @@ describe("Channel List", () => {
   const channels = [
     { name: "telegram", status: "connected", connected_at: new Date().toISOString() },
     { name: "whatsapp", status: "disconnected" },
-    { name: "slack", status: "failed", error: "Token expired" },
+    { name: "imessage", status: "failed", error: "Server unreachable" },
   ];
 
   test("renders tree connectors", () => {
@@ -180,7 +180,7 @@ describe("Channel List", () => {
 
   test("shows error message", () => {
     const c = clean(formatChannelList(channels));
-    expect(c).toContain("Token expired");
+    expect(c).toContain("Server unreachable");
   });
 
   test("shows status icons", () => {
@@ -307,8 +307,8 @@ describe("Channel Help", () => {
     const c = clean(formatChannelHelp());
     expect(c).toContain("telegram");
     expect(c).toContain("whatsapp");
-    expect(c).toContain("slack");
-    expect(c).toContain("discord");
+    expect(c).toContain("imessage");
+    expect(c).toContain("googlechat");
   });
 
   test("shows command usage", () => {
@@ -334,14 +334,14 @@ describe("Channel Setup Hints", () => {
     expect(c).toContain("QR");
   });
 
-  test("slack hint mentions tokens", () => {
-    const c = clean(formatChannelSetupHint("slack"));
-    expect(c).toContain("Bot Token");
+  test("imessage hint mentions BlueBubbles", () => {
+    const c = clean(formatChannelSetupHint("imessage"));
+    expect(c).toContain("BlueBubbles");
   });
 
-  test("discord hint mentions intent", () => {
-    const c = clean(formatChannelSetupHint("discord"));
-    expect(c).toContain("MESSAGE CONTENT");
+  test("googlechat hint mentions Service Account", () => {
+    const c = clean(formatChannelSetupHint("googlechat"));
+    expect(c).toContain("Service Account");
   });
 
   test("unknown channel returns generic", () => {

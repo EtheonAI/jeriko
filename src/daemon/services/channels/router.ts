@@ -961,9 +961,22 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
+        // Billing gate: check if the tier allows a new connector
+        if (process.env.STRIPE_BILLING_SECRET_KEY) {
+          try {
+            const { canActivateConnector } = await import("../../billing/license.js");
+            const check = canActivateConnector();
+            if (!check.allowed) {
+              await safeSend(metadata, check.reason!);
+              return;
+            }
+          } catch { /* billing module not available — allow */ }
+        }
+
         // Generate state token and send the login link.
-        // Uses the shared URL builder for relay-aware routing.
-        const stateToken = generateState(provider.name, chatId, metadata.channel);
+        // userId is embedded in the composite state for relay routing.
+        const { getUserId } = await import("../../../shared/config.js");
+        const stateToken = generateState(provider.name, chatId, metadata.channel, getUserId());
         const { buildOAuthStartUrl } = await import("../../../shared/urls.js");
         const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
 
@@ -1215,6 +1228,18 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             `${def.label} requires ${def.required.length} key(s):\n${varNames.join("\n")}\n\nUsage: /auth ${def.name} ${varNames.map((v) => `<${v}>`).join(" ")}`,
           );
           return;
+        }
+
+        // Billing gate: check if the tier allows a new connector (skip if already configured)
+        if (!isConnectorConfigured(def.name) && process.env.STRIPE_BILLING_SECRET_KEY) {
+          try {
+            const { canActivateConnector } = await import("../../billing/license.js");
+            const check = canActivateConnector();
+            if (!check.allowed) {
+              await safeSend(metadata, check.reason!);
+              return;
+            }
+          } catch { /* billing module not available — allow */ }
         }
 
         // Save each required key using the primary env var name
@@ -1634,10 +1659,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           let channelConfig: Record<string, unknown> | undefined;
           if (channelArg === "telegram") {
             channelConfig = { token: tokens[0] };
-          } else if (channelArg === "discord") {
-            channelConfig = { token: tokens[0] };
-          } else if (channelArg === "slack") {
-            channelConfig = { botToken: tokens[0], appToken: tokens[1] };
+          } else if (channelArg === "imessage") {
+            channelConfig = { serverUrl: tokens[0], password: tokens[1] };
+          } else if (channelArg === "googlechat") {
+            channelConfig = { serviceAccountKeyPath: tokens[0] };
           } else if (channelArg === "whatsapp") {
             channelConfig = { enabled: true };
           }
@@ -1937,50 +1962,58 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       }
 
       case "tasks":
-      case "task": {
-        const tasksDir = join(homedir(), ".jeriko", "data", "tasks");
+      case "task":
+      case "triggers":
+      case "trigger": {
+        // Unified task handler — backed by TriggerEngine (SQLite).
+        // /tasks and /triggers are merged into one command surface.
+        const engine = opts.getTriggerEngine?.();
+        if (!engine) {
+          await safeSend(metadata, "Task engine not available.");
+          return;
+        }
+
         const subCommand = rest[0]?.toLowerCase();
 
-        // /tasks enable <id>
-        if (subCommand === "enable") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks enable <task-id>"); return; }
-          const updated = updateTaskField(tasksDir, taskId, "enabled", true);
-          if (!updated) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          await safeSend(metadata, `Task enabled: ${updated.name ?? taskId}`);
-          return;
-        }
-
-        // /tasks disable <id>
-        if (subCommand === "disable") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks disable <task-id>"); return; }
-          const updated = updateTaskField(tasksDir, taskId, "enabled", false);
-          if (!updated) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          await safeSend(metadata, `Task disabled: ${updated.name ?? taskId}`);
-          return;
-        }
-
-        // /tasks create <name> <command>
+        // /tasks create <name> <shell command...>
         if (subCommand === "create") {
           const taskName = rest[1];
-          const taskCommand = rest.slice(2).join(" ").trim();
-          if (!taskName || !taskCommand) {
-            await safeSend(metadata, "Usage: /tasks create <name> <command>\n\nExample: /tasks create backup tar -czf ~/backup.tar.gz ~/data");
+          if (!taskName || rest.length < 3) {
+            await safeSend(metadata, "Usage: /tasks create <name> <shell command>\n\nExample: /tasks create my-backup tar -czf backup.tar.gz ~/docs");
             return;
           }
-          const { randomUUID } = await import("node:crypto");
-          mkdirSync(tasksDir, { recursive: true });
-          const taskDef = {
-            id: randomUUID().slice(0, 8),
-            name: taskName,
-            type: "once",
-            command: taskCommand,
-            enabled: true,
-            created_at: new Date().toISOString(),
-          };
-          writeFileSync(join(tasksDir, `${taskDef.id}.json`), JSON.stringify(taskDef, null, 2) + "\n");
-          await safeSend(metadata, `Task created: ${taskDef.name} (${taskDef.id})\nCommand: ${taskCommand}\n\nUse /tasks to manage.`);
+          const shellCmd = rest.slice(2).join(" ");
+          try {
+            const id = engine.add({
+              type: "cron",
+              enabled: false,
+              config: { expression: "0 0 * * *" } as import("../triggers/engine.js").CronConfig,
+              action: { type: "shell", command: shellCmd, notify: true },
+              label: taskName,
+            });
+            await safeSend(metadata, `Created task: ${taskName} (${id})\nAction: ${shellCmd}\nNote: task is paused — use /tasks resume ${id} to enable.\nSet schedule via CLI: jeriko task create "${taskName}" --schedule "0 9 * * *" --shell "${shellCmd}"`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Failed to create task: ${msg}`);
+          }
+          return;
+        }
+
+        // /tasks pause <id> | /tasks disable <id>
+        if (subCommand === "pause" || subCommand === "disable") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks pause <task-id>"); return; }
+          const result = engine.disable(taskId);
+          await safeSend(metadata, result ? `Task paused: ${taskId}` : `Task not found: ${taskId}`);
+          return;
+        }
+
+        // /tasks resume <id> | /tasks enable <id>
+        if (subCommand === "resume" || subCommand === "enable") {
+          const taskId = rest[1];
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks resume <task-id>"); return; }
+          const result = engine.enable(taskId);
+          await safeSend(metadata, result ? `Task resumed: ${taskId}` : `Task not found: ${taskId}`);
           return;
         }
 
@@ -1988,56 +2021,61 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         if (subCommand === "delete" || subCommand === "remove") {
           const taskId = rest[1];
           if (!taskId) { await safeSend(metadata, "Usage: /tasks delete <task-id>"); return; }
-          const taskPath = join(tasksDir, `${taskId}.json`);
-          if (!existsSync(taskPath)) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          unlinkSync(taskPath);
-          await safeSend(metadata, `Task deleted: ${taskId}`);
+          const result = engine.remove(taskId);
+          await safeSend(metadata, result ? `Task deleted: ${taskId}` : `Task not found: ${taskId}`);
           return;
         }
 
-        // /tasks run <id>
-        if (subCommand === "run") {
+        // /tasks test <id> | /tasks run <id>
+        if (subCommand === "test" || subCommand === "run") {
           const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks run <task-id>"); return; }
-          const task = loadTaskSafe(tasksDir, taskId);
+          if (!taskId) { await safeSend(metadata, "Usage: /tasks test <task-id>"); return; }
+          const task = engine.get(taskId);
           if (!task) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          await safeSend(metadata, `Running: ${task.name}...`);
+          await safeSend(metadata, `Firing: ${task.label ?? taskId}...`);
           try {
-            const { execSync } = await import("node:child_process");
-            const output = execSync(task.command, { encoding: "utf-8", timeout: 60_000 });
-            // Update last_run timestamp
-            updateTaskField(tasksDir, taskId, "last_run", new Date().toISOString());
-            const preview = output.trim().slice(0, 500) || "(no output)";
-            await safeSend(metadata, `Task completed: ${task.name}\n\n${preview}`);
+            await engine.fire(taskId, { test: true, timestamp: new Date().toISOString() });
+            await safeSend(metadata, `Task fired: ${task.label ?? taskId} (run #${(task.run_count ?? 0) + 1})`);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            await safeSend(metadata, `Task failed: ${task.name}\n\n${msg.slice(0, 500)}`);
+            await safeSend(metadata, `Task failed: ${msg.slice(0, 500)}`);
           }
           return;
         }
 
         // /tasks <id> — show single task detail
         if (subCommand && subCommand !== "list") {
-          const task = loadTaskSafe(tasksDir, subCommand);
+          const task = engine.get(subCommand);
           if (task) {
-            const taskDetailLines = [
-              `${task.name} (${task.id})`,
-              `type: ${task.type}`,
+            // Map internal type to user-facing type
+            const taskType = task.type === "cron" ? "schedule" : task.type;
+            const configSummary = task.type === "cron"
+              ? `schedule: ${(task.config as { expression: string }).expression}`
+              : task.type === "once"
+              ? `at: ${(task.config as { at: string }).at}`
+              : task.type === "webhook"
+              ? `source: ${(task.config as { service?: string }).service ?? "generic"}`
+              : `type: ${task.type}`;
+
+            const detailLines = [
+              `${task.label ?? task.id} (${task.id})`,
+              `type: ${taskType}`,
               `enabled: ${task.enabled}`,
-              `command: ${task.command}`,
+              configSummary,
+              `action: ${task.action.type}${task.action.prompt ? ` — ${task.action.prompt.slice(0, 60)}` : ""}${task.action.command ? ` — ${task.action.command.slice(0, 60)}` : ""}`,
+              `runs: ${task.run_count ?? 0}${task.max_runs ? ` / ${task.max_runs}` : ""}`,
+              task.last_fired ? `last fired: ${formatAge(new Date(task.last_fired).getTime())}` : "last fired: never",
               `created: ${task.created_at}`,
-              task.last_run ? `last run: ${formatAge(new Date(task.last_run).getTime())}` : "last run: never",
-              task.schedule ? `schedule: ${task.schedule}` : "",
-            ].filter(Boolean);
+            ];
             await safeKeyboard(
               metadata,
-              taskDetailLines.join("\n"),
+              detailLines.join("\n"),
               [
                 [
                   task.enabled
-                    ? { label: "Disable", data: `/tasks disable ${task.id}` }
-                    : { label: "Enable", data: `/tasks enable ${task.id}` },
-                  { label: "Run Now", data: `/tasks run ${task.id}` },
+                    ? { label: "Pause", data: `/tasks pause ${task.id}` }
+                    : { label: "Resume", data: `/tasks resume ${task.id}` },
+                  { label: "Test", data: `/tasks test ${task.id}` },
                   { label: "Delete", data: `/tasks delete ${task.id}` },
                 ],
               ],
@@ -2048,88 +2086,27 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         // /tasks or /tasks list — show all tasks
-        const tasks = loadAllTasksSafe(tasksDir);
-        if (tasks.length === 0) {
-          await safeSend(metadata, "No tasks configured.\nCreate one: /tasks create <name> <command>");
+        const allTasks = engine.listAll();
+        if (allTasks.length === 0) {
+          await safeSend(metadata, "No tasks configured.\n\nCreate tasks with:\njeriko task create \"Name\" --trigger stripe:charge.failed --action \"notify team\"\njeriko task create \"Daily Brief\" --schedule \"0 9 * * *\" --action \"morning summary\"");
           return;
         }
 
         const taskButtons: KeyboardLayout = [];
         const taskLines: string[] = [];
-        for (const t of tasks) {
+        for (const t of allTasks) {
           const enabled = t.enabled ? "●" : "○";
-          const lastRun = t.last_run ? formatAge(new Date(t.last_run).getTime()) : "never";
-          taskLines.push(`${enabled} ${t.name} (${t.id}) — ${t.type} — last: ${lastRun}`);
-          taskButtons.push([{ label: t.name, data: `/tasks ${t.id}` }]);
-        }
-
-        await safeKeyboard(
-          metadata,
-          [`Tasks (${tasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = disabled\nTap for details:",
-          taskButtons,
-        );
-        return;
-      }
-
-      case "triggers":
-      case "trigger": {
-        const engine = opts.getTriggerEngine?.();
-        if (!engine) {
-          await safeSend(metadata, "Trigger engine not available.");
-          return;
-        }
-
-        const subCommand = rest[0]?.toLowerCase();
-
-        // /triggers enable <id>
-        if (subCommand === "enable") {
-          const triggerId = rest[1];
-          if (!triggerId) {
-            await safeSend(metadata, "Usage: /triggers enable <trigger-id>");
-            return;
-          }
-          const ok = engine.enable(triggerId);
-          await safeSend(metadata, ok ? `Trigger enabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
-          return;
-        }
-
-        // /triggers disable <id>
-        if (subCommand === "disable") {
-          const triggerId = rest[1];
-          if (!triggerId) {
-            await safeSend(metadata, "Usage: /triggers disable <trigger-id>");
-            return;
-          }
-          const ok = engine.disable(triggerId);
-          await safeSend(metadata, ok ? `Trigger disabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
-          return;
-        }
-
-        // /triggers or /triggers list — show all triggers
-        const triggers = engine.listAll();
-        if (triggers.length === 0) {
-          await safeSend(metadata, "No triggers configured.");
-          return;
-        }
-
-        const buttons: KeyboardLayout = [];
-        const lines: string[] = [];
-        for (const t of triggers) {
-          const enabled = t.enabled ? "●" : "○";
+          const taskType = t.type === "cron" ? "schedule" : t.type;
           const runs = t.run_count ?? 0;
           const lastFired = t.last_fired ? formatAge(new Date(t.last_fired).getTime()) : "never";
-          lines.push(`${enabled} ${t.label ?? t.id} — ${t.type} — ${runs} runs — ${lastFired}`);
-
-          const action = t.enabled
-            ? { label: `Disable ${t.label ?? t.id}`, data: `/triggers disable ${t.id}` }
-            : { label: `Enable ${t.label ?? t.id}`, data: `/triggers enable ${t.id}` };
-          buttons.push([action]);
+          taskLines.push(`${enabled} ${t.label ?? t.id} — ${taskType} — ${runs} runs — ${lastFired}`);
+          taskButtons.push([{ label: t.label ?? t.id, data: `/tasks ${t.id}` }]);
         }
 
         await safeKeyboard(
           metadata,
-          [`Triggers (${triggers.length}):`, ...lines].join("\n") + "\n\n● = enabled, ○ = disabled",
-          buttons,
+          [`Tasks (${allTasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = paused\nTap for details:",
+          taskButtons,
         );
         return;
       }
@@ -2144,10 +2121,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         const { getLicenseState } = await import("../../billing/license.js");
-        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
+        const { getConfiguredConnectorCount } = await import("../../../shared/connector.js");
 
         const licState = getLicenseState();
-        const connectorCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+        const connectorCount = getConfiguredConnectorCount();
         const triggerEngine = opts.getTriggerEngine?.();
         const triggerCount = triggerEngine?.listAll().filter((t) => t.enabled).length ?? 0;
 
@@ -2161,6 +2138,9 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           `Triggers: ${triggerCount}/${triggerLimitDisplay}`,
         ];
 
+        if (connectorCount > licState.connectorLimit) {
+          lines.push("", `⚠ Over connector limit — disconnect ${connectorCount - licState.connectorLimit} connector(s) or upgrade.`);
+        }
         if (licState.pastDue) {
           lines.push("", "⚠ Payment past due — update your payment method to avoid downgrade.");
         }
@@ -2322,10 +2302,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         // /billing — hub menu
         const { getLicenseState } = await import("../../billing/license.js");
-        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
+        const { getConfiguredConnectorCount } = await import("../../../shared/connector.js");
 
         const licState = getLicenseState();
-        const connectorCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+        const connectorCount = getConfiguredConnectorCount();
         const triggerEngine = opts.getTriggerEngine?.();
         const triggerCount = triggerEngine?.listAll().filter((t) => t.enabled).length ?? 0;
         const triggerLimitDisplay = licState.triggerLimit === Infinity ? "∞" : String(licState.triggerLimit);
@@ -2337,6 +2317,9 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           `Triggers: ${triggerCount}/${triggerLimitDisplay}`,
         ];
 
+        if (connectorCount > licState.connectorLimit) {
+          planLines.push("", `⚠ Over connector limit — disconnect ${connectorCount - licState.connectorLimit} connector(s) or upgrade.`);
+        }
         if (licState.pastDue) {
           planLines.push("", "⚠ Payment past due.");
         }
@@ -2873,71 +2856,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 }
 
 // ---------------------------------------------------------------------------
-// Task file helpers — safe JSON reads with error handling
-// ---------------------------------------------------------------------------
-
-interface TaskDef {
-  id: string;
-  name: string;
-  type: string;
-  schedule?: string;
-  command: string;
-  enabled: boolean;
-  created_at: string;
-  last_run?: string;
-}
-
-/** Load a single task by ID, returning null on missing or malformed files. */
-function loadTaskSafe(tasksDir: string, taskId: string): TaskDef | null {
-  const taskPath = join(tasksDir, `${taskId}.json`);
-  if (!existsSync(taskPath)) return null;
-  try {
-    return JSON.parse(readFileSync(taskPath, "utf-8")) as TaskDef;
-  } catch {
-    log.warn(`Malformed task file: ${taskId}.json`);
-    return null;
-  }
-}
-
-/** Load all tasks from the file store, skipping malformed files. */
-function loadAllTasksSafe(tasksDir: string): TaskDef[] {
-  if (!existsSync(tasksDir)) return [];
-  try {
-    const files = readdirSync(tasksDir).filter((f) => f.endsWith(".json"));
-    return files
-      .map((f) => {
-        try {
-          return JSON.parse(readFileSync(join(tasksDir, f), "utf-8")) as TaskDef;
-        } catch {
-          log.warn(`Malformed task file: ${f}`);
-          return null;
-        }
-      })
-      .filter((t): t is TaskDef => t !== null);
-  } catch (err) {
-    log.error(`Failed to read tasks directory: ${err}`);
-    return [];
-  }
-}
-
-/** Update a single field on a task file. Returns the updated task or null. */
-function updateTaskField(
-  tasksDir: string,
-  taskId: string,
-  field: string,
-  value: unknown,
-): TaskDef | null {
-  const task = loadTaskSafe(tasksDir, taskId);
-  if (!task) return null;
-  (task as Record<string, unknown>)[field] = value;
-  try {
-    writeFileSync(join(tasksDir, `${taskId}.json`), JSON.stringify(task, null, 2) + "\n");
-    return task;
-  } catch (err) {
-    log.error(`Failed to update task ${taskId}: ${err}`);
-    return null;
-  }
-}
+// (Old JSON-file-based task helpers removed — tasks now use TriggerEngine)
 
 // ---------------------------------------------------------------------------
 // Connector health check — uses shared registry (single source of truth)

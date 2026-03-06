@@ -11,6 +11,7 @@ import { registerTool } from "./registry.js";
 import type { ToolDefinition } from "./registry.js";
 import { delegate, AGENT_TYPES, type AgentType } from "../orchestrator.js";
 import { getActiveSystemPrompt, getActiveParentMessages, getActiveBackend, getActiveModel } from "../orchestrator-context.js";
+import { getCapabilities } from "../drivers/models.js";
 import { readFileSync } from "node:fs";
 
 const VALID_TYPES = Object.keys(AGENT_TYPES);
@@ -40,6 +41,19 @@ async function execute(args: Record<string, unknown>): Promise<string> {
     const systemPrompt = getActiveSystemPrompt();
     const backend = getActiveBackend();
     const model = getActiveModel();
+
+    // Capability gate: small local models with limited context can't reliably
+    // orchestrate sub-agents. They lack the working memory to manage multi-step
+    // workflows and often produce malformed tool calls in nested contexts.
+    if (backend && model) {
+      const caps = getCapabilities(backend, model);
+      if (caps.provider === "local" && caps.context < 16_384) {
+        return JSON.stringify({
+          ok: false,
+          error: `Model "${caps.id}" has too small a context window (${caps.context} tokens) for sub-agent orchestration. Use a larger model or handle the task directly.`,
+        });
+      }
+    }
 
     // Optionally forward parent conversation context to the sub-agent
     const parentMessages = includeContext ? getActiveParentMessages() : undefined;

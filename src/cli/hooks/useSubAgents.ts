@@ -115,5 +115,5 @@ export function useSubAgents(
  * Returns the string key into PALETTE, not the color hex itself.
  */
 export function getAgentTypeColor(agentType: string): string {
-  return AGENT_TYPE_COLORS[agentType] ?? AGENT_TYPE_COLORS.general;
+  return AGENT_TYPE_COLORS[agentType] ?? AGENT_TYPE_COLORS.general ?? "purple";
 }

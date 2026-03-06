@@ -655,14 +655,25 @@ describe("OpenAICompatibleDriver", () => {
     expect(driver.name).toBe("compat-test-driver");
   });
 
+  it("registers anthropic-type providers", () => {
+    registerCustomProviders([{
+      id: "anthropic-type-driver",
+      name: "Anthropic Custom",
+      baseUrl: "https://api.example.com",
+      apiKey: "key",
+      type: "anthropic",
+    }]);
+    expect(listDrivers()).toContain("anthropic-type-driver");
+    expect(getDriver("anthropic-type-driver").name).toBe("anthropic-type-driver");
+  });
+
   it("skips registration for unsupported types", () => {
-    const before = listDrivers();
     registerCustomProviders([{
       id: "unsupported-type-driver",
       name: "Unsupported",
       baseUrl: "https://api.example.com",
       apiKey: "key",
-      type: "anthropic",
+      type: "totally-invalid" as any,
     }]);
     expect(listDrivers()).not.toContain("unsupported-type-driver");
   });

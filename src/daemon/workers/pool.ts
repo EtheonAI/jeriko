@@ -54,6 +54,8 @@ export interface PoolOptions {
   heartbeatIntervalMs?: number;
   /** Worker idle timeout before killing. Default: 300000 (5 min) */
   idleTimeoutMs?: number;
+  /** Maximum queue length before rejecting new tasks. Default: 1000 */
+  maxQueueLength?: number;
 }
 
 /** Events emitted by the worker pool. */
@@ -77,6 +79,7 @@ export class WorkerPool {
   private idleTimeoutMs: number;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private draining = false;
+  private maxQueueLength: number;
   private policy: WorkerPolicy;
 
   readonly bus = new Bus<PoolEvents>();
@@ -85,6 +88,7 @@ export class WorkerPool {
     this.maxWorkers = opts.maxWorkers ?? 4;
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 30_000;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? 300_000;
+    this.maxQueueLength = opts.maxQueueLength ?? 1000;
     this.policy = new WorkerPolicy();
 
     this.startHeartbeat();
@@ -106,6 +110,10 @@ export class WorkerPool {
   ): Promise<WorkerTaskResult> {
     if (this.draining) {
       return Promise.reject(new Error("Worker pool is draining, no new tasks accepted"));
+    }
+
+    if (this.queue.length >= this.maxQueueLength) {
+      return Promise.reject(new Error(`Worker pool queue full (max ${this.maxQueueLength})`));
     }
 
     return new Promise<WorkerTaskResult>((resolve, reject) => {

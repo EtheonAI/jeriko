@@ -48,3 +48,4 @@ native/npm/
 # data/trigger-log.json
 # data/server.pid
 .wrangler/
+public

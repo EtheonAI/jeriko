@@ -224,8 +224,11 @@ export function createBillingRoutes(
    * Allows distributed daemons to create checkout sessions without needing
    * the Stripe secret key locally. The relay holds the key and proxies the call.
    *
+   * Client metadata (IP, user agent) is forwarded to the Stripe session
+   * for storage in metadata (chargeback defense evidence).
+   *
    * Authentication: Bearer RELAY_AUTH_SECRET (same as license endpoint).
-   * Body: { userId: string, email: string, termsAccepted?: boolean }
+   * Body: { userId: string, email: string, clientIp?: string, userAgent?: string }
    */
   router.post("/checkout", async (c) => {
     if (!(await authenticateRequest(c, env))) {
@@ -240,7 +243,7 @@ export function createBillingRoutes(
       return c.json({ ok: false, error: "Stripe price ID not configured on relay" }, 503);
     }
 
-    let body: { userId?: string; email?: string; termsAccepted?: boolean };
+    let body: { userId?: string; email?: string; clientIp?: string; userAgent?: string };
     try {
       body = await c.req.json();
     } catch {
@@ -255,6 +258,16 @@ export function createBillingRoutes(
       return c.json({ ok: false, error: "userId is required" }, 400);
     }
 
+    // Extract client IP from request headers if not provided by the daemon.
+    // CF-Connecting-IP is the most reliable source in Cloudflare Workers.
+    const clientIp = body.clientIp
+      ?? c.req.header("cf-connecting-ip")
+      ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+      ?? "unknown";
+    const userAgent = body.userAgent
+      ?? c.req.header("user-agent")
+      ?? "unknown";
+
     const billingBaseUrl = (env.JERIKO_BILLING_URL || "https://jeriko.ai").replace(/\/+$/, "");
 
     try {
@@ -263,7 +276,8 @@ export function createBillingRoutes(
         priceId: env.STRIPE_BILLING_PRICE_ID,
         email: body.email,
         userId: body.userId,
-        termsAccepted: body.termsAccepted ?? false,
+        clientIp,
+        userAgent,
         successUrl: `${billingBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
         cancelUrl: `${billingBaseUrl}/billing/cancel`,
       });

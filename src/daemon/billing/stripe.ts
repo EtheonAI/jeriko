@@ -75,15 +75,31 @@ export function isBillingConfigured(): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * Client metadata passed through checkout for compliance and chargeback defense.
+ */
+export interface CheckoutClientMeta {
+  clientIp?: string;
+  userAgent?: string;
+}
+
+/**
  * Create a Stripe Checkout session for the Pro plan.
  *
- * @param email           Customer email (pre-fills Checkout)
- * @param termsAccepted   Whether the user accepted T&C (recorded in metadata)
+ * Follows Stripe's recommended subscription flow:
+ *   - `billing_address_collection: 'required'` — enables AVS fraud checks
+ *   - `consent_collection` — Stripe collects verifiable ToS acceptance
+ *   - `client_reference_id` — links session to internal user ID
+ *   - `customer_creation: 'always'` — ensures customer record exists
+ *   - `payment_method_collection: 'always'` — explicit payment method capture
+ *   - Client IP and user agent stored in metadata for chargeback defense
+ *
+ * @param email       Customer email (pre-fills Checkout)
+ * @param clientMeta  IP address and user agent from the originating request
  * @returns Checkout URL to redirect the user to
  */
 export async function createCheckoutSession(
   email: string,
-  termsAccepted: boolean,
+  clientMeta?: CheckoutClientMeta,
 ): Promise<{ url: string; sessionId: string }> {
   const stripe = getStripeClient();
   const config = getBillingConfig();
@@ -96,31 +112,77 @@ export async function createCheckoutSession(
 
   const userId = getUserId() ?? "";
   const billingBaseUrl = getBillingBaseUrl();
+  const now = new Date().toISOString();
 
-  const session = await stripe.checkout.sessions.create({
+  const sessionParams: Record<string, unknown> = {
     mode: "subscription",
     customer_email: email,
+
+    // Collect billing address for AVS fraud checks and dispute evidence
+    billing_address_collection: "required",
+
+    // Link checkout session to our internal user ID (visible in Stripe Dashboard)
+    client_reference_id: userId || undefined,
+
+    // Note: customer_creation is implicit in subscription mode (always creates customer).
+    // payment_method_collection is implicit in subscription mode (always required).
+
     line_items: [
       {
         price: config.stripePriceId,
         quantity: 1,
       },
     ],
+
+    // Metadata propagated to the subscription for lifecycle tracking
     subscription_data: {
       metadata: {
         source: "jeriko-cli",
         jeriko_user_id: userId,
-        terms_accepted: termsAccepted ? "true" : "false",
-        terms_accepted_at: new Date().toISOString(),
+        client_ip: clientMeta?.clientIp ?? "unknown",
+        user_agent: clientMeta?.userAgent ?? "unknown",
+        checkout_at: now,
       },
     },
+
     success_url: `${billingBaseUrl}/billing/success?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${billingBaseUrl}/billing/cancel`,
+
+    // Session-level metadata (visible in Stripe Dashboard)
     metadata: {
       source: "jeriko-cli",
       jeriko_user_id: userId,
+      client_ip: clientMeta?.clientIp ?? "unknown",
+      user_agent: clientMeta?.userAgent ?? "unknown",
     },
-  });
+  };
+
+  // Stripe-managed Terms of Service consent (creates verifiable record).
+  // Requires ToS URL configured in Stripe Dashboard → Settings → Public details.
+  // If not configured, Stripe rejects the param — we try with it first, fall back without.
+  let session: Awaited<ReturnType<typeof stripe.checkout.sessions.create>>;
+  try {
+    session = await stripe.checkout.sessions.create({
+      ...sessionParams,
+      consent_collection: {
+        terms_of_service: "required",
+      },
+    } as Parameters<typeof stripe.checkout.sessions.create>[0]);
+  } catch (err: unknown) {
+    const isConsentError = err instanceof Error
+      && err.message.includes("terms of service");
+    if (isConsentError) {
+      log.warn(
+        "Stripe consent_collection requires ToS URL in Dashboard settings. "
+        + "Set it at https://dashboard.stripe.com/settings/public — proceeding without consent collection.",
+      );
+      session = await stripe.checkout.sessions.create(
+        sessionParams as Parameters<typeof stripe.checkout.sessions.create>[0],
+      );
+    } else {
+      throw err;
+    }
+  }
 
   if (!session.url) {
     throw new Error("Stripe Checkout session created but no URL returned");

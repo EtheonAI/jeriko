@@ -304,8 +304,128 @@ export function updateLicense(updates: Partial<Omit<BillingLicense, "key">>): vo
 }
 
 // ---------------------------------------------------------------------------
+// Consent evidence (chargeback defense)
+// ---------------------------------------------------------------------------
+
+export interface BillingConsent {
+  id: string;
+  subscription_id: string | null;
+  customer_id: string | null;
+  email: string | null;
+  client_ip: string | null;
+  user_agent: string | null;
+  terms_url: string | null;
+  terms_version: string | null;
+  terms_accepted_at: number | null;
+  privacy_url: string | null;
+  billing_address_collected: boolean;
+  stripe_consent_collected: boolean;
+  checkout_session_id: string | null;
+  created_at: number;
+}
+
+interface ConsentRow {
+  id: string;
+  subscription_id: string | null;
+  customer_id: string | null;
+  email: string | null;
+  client_ip: string | null;
+  user_agent: string | null;
+  terms_url: string | null;
+  terms_version: string | null;
+  terms_accepted_at: number | null;
+  privacy_url: string | null;
+  billing_address_collected: number;
+  stripe_consent_collected: number;
+  checkout_session_id: string | null;
+  created_at: number;
+}
+
+/**
+ * Record consent evidence collected at checkout.
+ *
+ * Called by the checkout.session.completed webhook handler.
+ * Stores IP address, user agent, terms acceptance, and billing address
+ * collection status for chargeback defense.
+ */
+export function recordConsent(consent: Omit<BillingConsent, "created_at"> & {
+  created_at?: number;
+}): void {
+  const db = getDatabase();
+  db.prepare(`
+    INSERT OR IGNORE INTO billing_consent (
+      id, subscription_id, customer_id, email,
+      client_ip, user_agent,
+      terms_url, terms_version, terms_accepted_at, privacy_url,
+      billing_address_collected, stripe_consent_collected,
+      checkout_session_id, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    consent.id,
+    consent.subscription_id ?? null,
+    consent.customer_id ?? null,
+    consent.email ?? null,
+    consent.client_ip ?? null,
+    consent.user_agent ?? null,
+    consent.terms_url ?? null,
+    consent.terms_version ?? null,
+    consent.terms_accepted_at ?? null,
+    consent.privacy_url ?? null,
+    consent.billing_address_collected ? 1 : 0,
+    consent.stripe_consent_collected ? 1 : 0,
+    consent.checkout_session_id ?? null,
+    consent.created_at ?? Math.floor(Date.now() / 1000),
+  );
+}
+
+/**
+ * Get consent evidence for a subscription (for dispute defense).
+ */
+export function getConsentBySubscription(subscriptionId: string): BillingConsent | null {
+  const db = getDatabase();
+  const row = db
+    .query<ConsentRow, [string]>(
+      "SELECT * FROM billing_consent WHERE subscription_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .get(subscriptionId);
+  return row ? rowToConsent(row) : null;
+}
+
+/**
+ * Get consent evidence by checkout session ID.
+ */
+export function getConsentBySession(sessionId: string): BillingConsent | null {
+  const db = getDatabase();
+  const row = db
+    .query<ConsentRow, [string]>(
+      "SELECT * FROM billing_consent WHERE checkout_session_id = ? LIMIT 1",
+    )
+    .get(sessionId);
+  return row ? rowToConsent(row) : null;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+function rowToConsent(row: ConsentRow): BillingConsent {
+  return {
+    id: row.id,
+    subscription_id: row.subscription_id,
+    customer_id: row.customer_id,
+    email: row.email,
+    client_ip: row.client_ip,
+    user_agent: row.user_agent,
+    terms_url: row.terms_url,
+    terms_version: row.terms_version,
+    terms_accepted_at: row.terms_accepted_at,
+    privacy_url: row.privacy_url,
+    billing_address_collected: row.billing_address_collected === 1,
+    stripe_consent_collected: row.stripe_consent_collected === 1,
+    checkout_session_id: row.checkout_session_id,
+    created_at: row.created_at,
+  };
+}
 
 function rowToSubscription(row: SubscriptionRow): BillingSubscription {
   return {

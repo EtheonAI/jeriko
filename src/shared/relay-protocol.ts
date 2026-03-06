@@ -186,3 +186,28 @@ export const RELAY_MAX_PENDING_OAUTH = 10;
 
 /** Maximum trigger IDs a single daemon can register (resource exhaustion guard). */
 export const RELAY_MAX_TRIGGERS_PER_CONNECTION = 10_000;
+
+// ---------------------------------------------------------------------------
+// Composite OAuth state — encodes userId into the state parameter
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a composite state string: `userId.randomToken`.
+ * The `.` delimiter is unambiguous (UUIDs use `-`, hex tokens use `[0-9a-f]`).
+ */
+export function buildCompositeState(userId: string, token: string): string {
+  return `${userId}.${token}`;
+}
+
+/**
+ * Parse a composite state string back into userId and token.
+ * Returns null if the state doesn't contain the `.` delimiter (e.g. self-hosted mode).
+ */
+export function parseCompositeState(state: string): { userId: string; token: string } | null {
+  const dotIndex = state.indexOf(".");
+  if (dotIndex === -1) return null;
+  const userId = state.slice(0, dotIndex);
+  const token = state.slice(dotIndex + 1);
+  if (!userId || !token) return null;
+  return { userId, token };
+}

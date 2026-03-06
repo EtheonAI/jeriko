@@ -134,8 +134,16 @@ export interface Backend {
   killSession(): Promise<SessionInfo>;
   archiveSession(): Promise<SessionInfo>;
 
-  // Tasks
+  // Tasks (unified — backed by TriggerEngine)
   listTasks(): Promise<TaskDef[]>;
+  createTask(params: Record<string, unknown>): Promise<TaskDef>;
+  getTask(id: string): Promise<TaskDef>;
+  pauseTask(id: string): Promise<TaskDef>;
+  resumeTask(id: string): Promise<TaskDef>;
+  deleteTask(id: string): Promise<{ deleted: boolean; id: string }>;
+  testTask(id: string): Promise<{ fired: boolean; id: string; run_count: number }>;
+  getTaskLog(limit?: number): Promise<TaskDef[]>;
+  getTaskTypes(): Promise<Record<string, unknown>>;
 
   // Notifications
   listNotifications(): Promise<NotificationPref[]>;
@@ -185,6 +193,8 @@ export async function createDaemonBackend(): Promise<Backend> {
       abortController = new AbortController();
       const params: Record<string, unknown> = { message };
       if (currentSessionId) params.session_id = currentSessionId;
+      // Always send the current model — ensures /model switches take effect
+      if (currentModel) params.model = currentModel;
 
       try {
         const stream = sendStreamRequest("ask", params, {
@@ -543,7 +553,7 @@ export async function createDaemonBackend(): Promise<Backend> {
     },
 
     async startUpgrade(email) {
-      const response = await sendRequest("billing.checkout" as any, { email, terms_accepted: true });
+      const response = await sendRequest("billing.checkout" as any, { email, client_ip: "cli-local", user_agent: "jeriko-ink-repl" });
       if (!response.ok) throw new Error(response.error ?? "Failed to create checkout");
       return response.data as { url: string };
     },
@@ -579,7 +589,7 @@ export async function createDaemonBackend(): Promise<Backend> {
       return mapDaemonSession(row);
     },
 
-    // Tasks
+    // Tasks (unified — backed by TriggerEngine via IPC)
     async listTasks() {
       try {
         const response = await sendRequest("tasks" as any, {});
@@ -588,6 +598,46 @@ export async function createDaemonBackend(): Promise<Backend> {
         }
       } catch { /* daemon may not support */ }
       return [];
+    },
+    async createTask(params) {
+      const response = await sendRequest("task_create" as any, params);
+      if (!response.ok) throw new Error(response.error ?? "Failed to create task");
+      return response.data as TaskDef;
+    },
+    async getTask(id) {
+      const response = await sendRequest("task_info" as any, { id });
+      if (!response.ok) throw new Error(response.error ?? "Task not found");
+      return response.data as TaskDef;
+    },
+    async pauseTask(id) {
+      const response = await sendRequest("task_pause" as any, { id });
+      if (!response.ok) throw new Error(response.error ?? "Failed to pause task");
+      return response.data as TaskDef;
+    },
+    async resumeTask(id) {
+      const response = await sendRequest("task_resume" as any, { id });
+      if (!response.ok) throw new Error(response.error ?? "Failed to resume task");
+      return response.data as TaskDef;
+    },
+    async deleteTask(id) {
+      const response = await sendRequest("task_delete" as any, { id });
+      if (!response.ok) throw new Error(response.error ?? "Failed to delete task");
+      return response.data as { deleted: boolean; id: string };
+    },
+    async testTask(id) {
+      const response = await sendRequest("task_test" as any, { id });
+      if (!response.ok) throw new Error(response.error ?? "Failed to test task");
+      return response.data as { fired: boolean; id: string; run_count: number };
+    },
+    async getTaskLog(limit = 20) {
+      const response = await sendRequest("task_log" as any, { limit });
+      if (!response.ok) throw new Error(response.error ?? "Failed to get task log");
+      return (response.data ?? []) as TaskDef[];
+    },
+    async getTaskTypes() {
+      const response = await sendRequest("task_types" as any, {});
+      if (!response.ok) throw new Error(response.error ?? "Failed to get task types");
+      return response.data as Record<string, unknown>;
     },
 
     // Notifications
@@ -657,6 +707,14 @@ export async function createInProcessBackend(): Promise<Backend> {
   // Load system prompt + skill summaries (must match kernel steps 9-10)
   const systemPrompt = await loadSystemPrompt();
 
+  // Initialize LLM drivers + model registry (must match kernel step 7)
+  // Without this, custom providers (Groq, OpenRouter, etc.) don't exist in-process.
+  const { loadModelRegistry } = await import("../daemon/agent/drivers/models.js");
+  await Promise.all([
+    loadModelRegistry(),
+    import("../daemon/agent/drivers/index.js"),
+  ]);
+
   const { loadConfig } = await import("../shared/config.js");
   const {
     createSession,
@@ -671,6 +729,19 @@ export async function createInProcessBackend(): Promise<Backend> {
   type DriverMessage = import("../daemon/agent/drivers/index.js").DriverMessage;
 
   const config = loadConfig();
+
+  // Register custom providers from config + auto-discover from env vars (must match kernel step 7)
+  const { registerCustomProviders } = await import("../daemon/agent/drivers/providers.js");
+  if (config.providers?.length) {
+    registerCustomProviders(config.providers);
+  }
+  const { discoverProviderPresets } = await import("../daemon/agent/drivers/presets.js");
+  const explicitIds = new Set((config.providers ?? []).map((p: { id: string }) => p.id));
+  const discovered = discoverProviderPresets(explicitIds);
+  if (discovered.length > 0) {
+    registerCustomProviders(discovered);
+  }
+
   let currentModel = config.agent.model;
 
   // Session setup — resume last or create new
@@ -707,10 +778,14 @@ export async function createInProcessBackend(): Promise<Backend> {
 
       abortController = new AbortController();
 
+      // Parse "provider:model" syntax (e.g. "groq:llama3" → backend="groq", model="llama3")
+      const { parseModelSpec } = await import("../daemon/agent/drivers/models.js");
+      const { backend: parsedBackend, model: parsedModel } = parseModelSpec(currentModel);
+
       const agentConfig = {
         sessionId: session.id,
-        backend: currentModel,
-        model: currentModel,
+        backend: parsedBackend,
+        model: parsedModel,
         systemPrompt,
         maxTokens: config.agent.maxTokens,
         temperature: config.agent.temperature,
@@ -995,17 +1070,23 @@ export async function createInProcessBackend(): Promise<Backend> {
       return mapSessionRow(session);
     },
 
-    // Tasks — direct file access
-    async listTasks() {
-      return loadTasksDirect();
-    },
+    // Tasks — in-process mode has no TriggerEngine, return empty
+    async listTasks() { return []; },
+    async createTask() { throw new Error("Tasks require the daemon. Start with: jeriko serve"); },
+    async getTask() { throw new Error("Tasks require the daemon"); },
+    async pauseTask() { throw new Error("Tasks require the daemon"); },
+    async resumeTask() { throw new Error("Tasks require the daemon"); },
+    async deleteTask() { throw new Error("Tasks require the daemon"); },
+    async testTask() { throw new Error("Tasks require the daemon"); },
+    async getTaskLog() { return []; },
+    async getTaskTypes() { return {}; },
 
     // Notifications — direct KV access
     async listNotifications() {
       const entries = kvList("notify:");
       return entries.map((e) => {
         const parts = e.key.split(":");
-        return { channel: parts[1], chatId: parts[2], enabled: e.value as boolean };
+        return { channel: parts[1] ?? "", chatId: parts[2] ?? "", enabled: e.value as boolean };
       }) satisfies NotificationPref[];
     },
 
@@ -1247,6 +1328,7 @@ async function registerTools(): Promise<void> {
     import("../daemon/agent/tools/connector.js"),
     import("../daemon/agent/tools/skill.js"),
     import("../daemon/agent/tools/webdev.js"),
+    import("../daemon/agent/tools/memory-tool.js"),
   ]);
 }
 
@@ -1274,6 +1356,23 @@ async function loadSystemPrompt(): Promise<string> {
     }
   } catch {
     // Non-fatal — skills are optional
+  }
+
+  // Inject persistent memory (mirrors kernel boot)
+  try {
+    const { homedir: getHome } = await import("node:os");
+    const memoryPath = pathJoin(process.env.HOME || getHome(), ".jeriko", "memory", "MEMORY.md");
+    if (exists(memoryPath)) {
+      const memory = readFileSync(memoryPath, "utf-8").trim();
+      if (memory) {
+        systemPrompt = systemPrompt + "\n\n## Persistent Memory\n" +
+          "The following is your persistent memory from prior sessions. " +
+          "Use the `memory` tool to update it when you learn stable user preferences.\n\n" +
+          memory;
+      }
+    }
+  } catch {
+    // Non-fatal — memory is optional
   }
 
   return systemPrompt;
@@ -1516,22 +1615,6 @@ function getDefaultPlan(): PlanInfo {
   };
 }
 
-/**
- * Load tasks directly from the filesystem (no daemon needed).
- */
-function loadTasksDirect(): TaskDef[] {
-  try {
-    const { existsSync: exists, readdirSync, readFileSync: readFs } = require("node:fs");
-    const { join: pathJ } = require("node:path");
-    const { homedir: hDir } = require("node:os");
-    const tasksDir = pathJ(hDir(), ".jeriko", "data", "tasks");
-    if (!exists(tasksDir)) return [];
-    const files = readdirSync(tasksDir).filter((f: string) => f.endsWith(".json"));
-    return files.map((f: string) => JSON.parse(readFs(pathJ(tasksDir, f), "utf-8"))) as TaskDef[];
-  } catch {
-    return [];
-  }
-}
 
 /**
  * Load auth status directly from connector definitions (no daemon needed).

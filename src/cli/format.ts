@@ -621,10 +621,10 @@ export function formatChannelHelp(): string {
     treeItem(true,  `${t.blue("/channels")}                   ${t.muted("List all channels")}`),
     "",
     `  ${t.muted("Available channels:")}`,
-    treeItem(false, `${t.text("telegram")}    ${t.muted("Bot token from @BotFather")}`),
-    treeItem(false, `${t.text("whatsapp")}    ${t.muted("QR code scan (multi-device)")}`),
-    treeItem(false, `${t.text("slack")}       ${t.muted("Bot + App tokens from Slack API")}`),
-    treeItem(true,  `${t.text("discord")}     ${t.muted("Bot token from Discord Developer Portal")}`),
+    treeItem(false, `${t.text("telegram")}     ${t.muted("Bot token from @BotFather")}`),
+    treeItem(false, `${t.text("whatsapp")}     ${t.muted("QR code scan (multi-device)")}`),
+    treeItem(false, `${t.text("imessage")}     ${t.muted("BlueBubbles server URL + password")}`),
+    treeItem(true,  `${t.text("googlechat")}   ${t.muted("Service Account key from Google Cloud")}`),
     "",
   ];
   return lines.join("\n");
@@ -651,21 +651,20 @@ export function formatChannelSetupHint(channel: string): string {
       `  4. Scan the QR code that appears in the daemon logs`,
       `     ${t.dim("Check logs:")} ${t.blue("jeriko server logs")}`,
     ].join("\n"),
-    slack: [
-      `  ${t.dim("To set up Slack:")}`,
-      `  1. Create an app at ${t.blue("api.slack.com/apps")}`,
-      `  2. Enable Socket Mode and get an App-Level Token`,
-      `  3. Install to workspace and get the Bot Token`,
-      `  4. Set both: ${t.blue("export SLACK_BOT_TOKEN=xoxb-...")}`,
-      `              ${t.blue("export SLACK_APP_TOKEN=xapp-...")}`,
-      `  5. Restart the daemon: ${t.blue("jeriko server restart")}`,
+    imessage: [
+      `  ${t.dim("To set up iMessage (BlueBubbles):")}`,
+      `  1. Install BlueBubbles Server on a Mac (${t.blue("bluebubbles.app")})`,
+      `  2. Configure iMessage and note the server URL + password`,
+      `  3. Set both: ${t.blue("export BLUEBUBBLES_SERVER_URL=http://...")}`,
+      `              ${t.blue("export BLUEBUBBLES_PASSWORD=your-password")}`,
+      `  4. Restart the daemon: ${t.blue("jeriko server restart")}`,
     ].join("\n"),
-    discord: [
-      `  ${t.dim("To set up Discord:")}`,
-      `  1. Create a bot at ${t.blue("discord.com/developers/applications")}`,
-      `  2. Enable MESSAGE CONTENT intent`,
-      `  3. Copy the bot token`,
-      `  4. Set it: ${t.blue("export DISCORD_BOT_TOKEN=<your-token>")}`,
+    googlechat: [
+      `  ${t.dim("To set up Google Chat:")}`,
+      `  1. Create a Google Cloud project, enable Chat API`,
+      `  2. Create a Service Account, download the JSON key`,
+      `  3. Configure the bot HTTPS endpoint to your daemon URL`,
+      `  4. Set it: ${t.blue("export GOOGLE_CHAT_SERVICE_ACCOUNT_KEY=/path/to/key.json")}`,
       `  5. Restart the daemon: ${t.blue("jeriko server restart")}`,
     ].join("\n"),
   };
@@ -1225,16 +1224,18 @@ export function formatConfigStructured(config: Record<string, unknown>): string 
   const channels = config.channels as Record<string, unknown> | undefined;
   if (channels) {
     const channelStatuses: string[] = [];
-    const channelNames = ["telegram", "whatsapp", "slack", "discord"] as const;
+    const channelNames = ["telegram", "whatsapp", "imessage", "googlechat"] as const;
     for (const name of channelNames) {
       const ch = channels[name] as Record<string, unknown> | undefined;
       if (!ch) {
         channelStatuses.push(`${name} ${t.dim(ICONS.error)}`);
         continue;
       }
-      const hasConfig = name === "whatsapp"
-        ? (ch.enabled as boolean)
-        : !!(ch.token || ch.botToken);
+      let hasConfig = false;
+      if (name === "whatsapp") hasConfig = !!(ch.enabled as boolean);
+      else if (name === "telegram") hasConfig = !!(ch.token as string);
+      else if (name === "imessage") hasConfig = !!(ch.serverUrl as string);
+      else if (name === "googlechat") hasConfig = !!(ch.serviceAccountKeyPath as string);
       channelStatuses.push(hasConfig ? `${name} ${t.green(ICONS.success)}` : `${name} ${t.dim(ICONS.error)}`);
     }
     lines.push(kvPair("Channels", t.muted(channelStatuses.join(` ${ICONS.dot} `))));
@@ -1373,7 +1374,7 @@ export function formatTaskList(tasks: ReadonlyArray<TaskDef>): string {
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i]!;
-    const status = task.enabled ? statusDot("connected") : statusDot("disconnected");
+    const status = task.enabled ? statusDot("active") : statusDot("inactive");
     const label = task.enabled ? t.green("enabled") : t.muted("disabled");
     lines.push(treeItem(
       i === tasks.length - 1,
@@ -1435,7 +1436,7 @@ export function formatAuthStatus(connectors: ReadonlyArray<AuthStatus>): string 
 
   for (let i = 0; i < connectors.length; i++) {
     const c = connectors[i]!;
-    const status = c.configured ? statusDot("connected") : statusDot("disconnected");
+    const status = c.configured ? statusDot("active") : statusDot("inactive");
     const label = c.configured ? t.green("configured") : t.yellow("not configured");
     lines.push(treeItem(
       i === connectors.length - 1,

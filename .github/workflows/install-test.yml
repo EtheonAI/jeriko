@@ -1,0 +1,276 @@
+name: Install Tests
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: install-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Build artifacts first ──────────────────────────────────────
+  build:
+    name: Build Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build all platforms
+        run: bash scripts/release.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: install-test-artifacts
+          path: dist/
+          retention-days: 1
+
+  # ── macOS Install Test ─────────────────────────────────────────
+  test-macos:
+    name: Install Test (macOS)
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: install-test-artifacts
+          path: dist/
+
+      - name: Start local file server
+        run: |
+          cd dist
+          python3 -m http.server 9876 &
+          sleep 1
+          echo "LOCAL_CDN=http://127.0.0.1:9876" >> "$GITHUB_ENV"
+
+      - name: Test install.sh (local CDN)
+        run: |
+          export JERIKO_CDN_URL="$LOCAL_CDN"
+          # The install.sh downloads from CDN, expects releases/{version}/jeriko-{platform}
+          # Create the expected directory structure
+          VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+          mkdir -p "dist/releases/${VERSION}"
+          cp dist/jeriko-darwin-arm64 "dist/releases/${VERSION}/jeriko-darwin-arm64"
+          cp dist/manifest.json "dist/releases/${VERSION}/manifest.json"
+          cp dist/agent.md "dist/releases/${VERSION}/agent.md" 2>/dev/null || true
+          echo -n "$VERSION" > "dist/releases/latest"
+
+          # Run the installer
+          bash scripts/install.sh latest
+
+      - name: Verify installation
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          jeriko --version
+          jeriko --help
+          echo "macOS install verified"
+
+      - name: Verify directory structure
+        run: |
+          test -f "$HOME/.local/bin/jeriko" || (echo "Binary not found" && exit 1)
+          test -d "$HOME/.jeriko" || (echo "Data dir not found" && exit 1)
+          test -d "$HOME/.config/jeriko" || (echo "Config dir not found" && exit 1)
+          echo "Directory structure verified"
+
+      - name: Verify shell completions
+        run: |
+          test -f "$HOME/.local/share/bash-completion/completions/jeriko" || echo "Bash completions missing"
+          test -f "$HOME/.local/share/zsh/site-functions/_jeriko" || echo "Zsh completions missing"
+          echo "Completions check complete"
+
+  # ── Ubuntu Install Test ────────────────────────────────────────
+  test-ubuntu:
+    name: Install Test (Ubuntu)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: install-test-artifacts
+          path: dist/
+
+      - name: Start local file server
+        run: |
+          cd dist
+          python3 -m http.server 9876 &
+          sleep 1
+          echo "LOCAL_CDN=http://127.0.0.1:9876" >> "$GITHUB_ENV"
+
+      - name: Test install.sh (local CDN)
+        run: |
+          export JERIKO_CDN_URL="$LOCAL_CDN"
+          VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+          mkdir -p "dist/releases/${VERSION}"
+          cp dist/jeriko-linux-x64 "dist/releases/${VERSION}/jeriko-linux-x64"
+          cp dist/manifest.json "dist/releases/${VERSION}/manifest.json"
+          cp dist/agent.md "dist/releases/${VERSION}/agent.md" 2>/dev/null || true
+          echo -n "$VERSION" > "dist/releases/latest"
+          bash scripts/install.sh latest
+
+      - name: Verify installation
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          jeriko --version
+          jeriko --help
+
+      - name: Verify directory structure
+        run: |
+          test -f "$HOME/.local/bin/jeriko"
+          test -d "$HOME/.jeriko"
+          test -d "$HOME/.config/jeriko"
+          echo "Ubuntu install verified"
+
+  # ── Windows Install Test (PowerShell) ──────────────────────────
+  test-windows-ps:
+    name: Install Test (Windows PowerShell)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: install-test-artifacts
+          path: dist/
+
+      - name: Start local file server
+        shell: pwsh
+        run: |
+          $job = Start-Job -ScriptBlock {
+            Set-Location $using:PWD/dist
+            python -m http.server 9876
+          }
+          Start-Sleep -Seconds 2
+          "LOCAL_CDN=http://127.0.0.1:9876" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Setup CDN structure
+        shell: pwsh
+        run: |
+          $VERSION = (Get-Content package.json | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path "dist/releases/$VERSION" | Out-Null
+          Copy-Item "dist/jeriko-windows-x64.exe" "dist/releases/$VERSION/jeriko-windows-x64.exe"
+          Copy-Item "dist/manifest.json" "dist/releases/$VERSION/manifest.json"
+          if (Test-Path "dist/agent.md") { Copy-Item "dist/agent.md" "dist/releases/$VERSION/agent.md" }
+          Set-Content -Path "dist/releases/latest" -Value $VERSION -NoNewline
+
+      - name: Test install.ps1 (local CDN)
+        shell: pwsh
+        run: |
+          $env:JERIKO_CDN_URL = $env:LOCAL_CDN
+          & ([scriptblock]::Create((Get-Content scripts/install.ps1 -Raw))) latest
+
+      - name: Verify installation
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"
+          jeriko --version
+          jeriko --help
+          Write-Host "Windows PowerShell install verified"
+
+      - name: Verify directory structure
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "$env:USERPROFILE\.local\bin\jeriko.exe")) { throw "Binary not found" }
+          if (-not (Test-Path "$env:USERPROFILE\.jeriko")) { throw "Data dir not found" }
+          if (-not (Test-Path "$env:USERPROFILE\.config\jeriko")) { throw "Config dir not found" }
+          Write-Host "Windows directory structure verified"
+
+  # ── Windows Install Test (CMD) ─────────────────────────────────
+  test-windows-cmd:
+    name: Install Test (Windows CMD)
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: install-test-artifacts
+          path: dist/
+
+      - name: Start local file server
+        shell: cmd
+        run: |
+          start /b python -m http.server 9876 --directory dist
+          timeout /t 2 /nobreak > nul
+          echo LOCAL_CDN=http://127.0.0.1:9876>> %GITHUB_ENV%
+
+      - name: Setup CDN structure
+        shell: pwsh
+        run: |
+          $VERSION = (Get-Content package.json | ConvertFrom-Json).version
+          New-Item -ItemType Directory -Force -Path "dist/releases/$VERSION" | Out-Null
+          Copy-Item "dist/jeriko-windows-x64.exe" "dist/releases/$VERSION/jeriko-windows-x64.exe"
+          Copy-Item "dist/manifest.json" "dist/releases/$VERSION/manifest.json"
+          Set-Content -Path "dist/releases/latest" -Value $VERSION -NoNewline
+
+      - name: Test install.cmd (local CDN)
+        shell: cmd
+        run: |
+          set JERIKO_CDN_URL=%LOCAL_CDN%
+          scripts\install.cmd latest
+
+      - name: Verify installation (CMD)
+        shell: cmd
+        run: |
+          set PATH=%USERPROFILE%\.local\bin;%PATH%
+          jeriko --version
+          jeriko --help
+          echo Windows CMD install verified
+
+  # ── Source Install Test (unix-install.sh) ──────────────────────
+  test-source-install:
+    name: Install Test (From Source)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Run unix-install.sh
+        run: bash scripts/unix-install.sh
+
+      - name: Verify source installation
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          jeriko --version
+          jeriko --help
+          # Verify man page
+          test -f "$HOME/.local/share/man/man1/jeriko.1"
+          # Verify systemd service
+          test -f "$HOME/.config/systemd/user/jeriko.service"
+          echo "Source install verified"

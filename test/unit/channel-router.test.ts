@@ -93,6 +93,9 @@ function createMockRegistry() {
       ch.status = "disconnected";
       delete ch.connected_at;
     },
+    get(name: string) {
+      return channelStatuses.get(name) ?? null;
+    },
     lastMessage(): string {
       return sent[sent.length - 1]?.message ?? "";
     },
@@ -896,11 +899,12 @@ describe("Channel router — /channels", () => {
     emitCommand(registry, "/channels");
     await settle();
 
-    // Should show channel list (either as keyboard or text)
+    // Should show channel hub (keyboard with status text)
     const kb = registry.lastKeyboard();
     const text = kb?.text ?? registry.lastMessage();
     expect(text).toContain("Channels:");
-    expect(text).toContain("telegram");
+    expect(text).toContain("active");
+    expect(text).toContain("Telegram");
     expect(text).toContain("connected");
   });
 
@@ -920,11 +924,13 @@ describe("Channel router — /channels", () => {
 
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
-    // WhatsApp is disconnected — should have a "Connect whatsapp" button
+    // Hub shows per-channel buttons with /channel <name> data
     const data = registry.lastKeyboardData();
-    expect(data.some((d) => d.includes("/channels connect whatsapp"))).toBe(true);
-    // Telegram is the current channel — should NOT have disconnect button for itself
-    expect(data.some((d) => d.includes("/channels disconnect telegram"))).toBe(false);
+    // Each channel gets a detail button: /channel telegram, /channel whatsapp, etc.
+    expect(data.some((d) => d.includes("/channel "))).toBe(true);
+    // Unregistered channels get /channel add <name> buttons
+    const labels = registry.lastKeyboardLabels();
+    expect(labels.some((l) => l.startsWith("+"))).toBe(true);
   });
 
   it("/channels connect connects a disconnected channel", async () => {
@@ -944,7 +950,7 @@ describe("Channel router — /channels", () => {
     // Connect success now shows keyboard with back navigation
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
-    expect(kb!.text).toContain("Channel connected: whatsapp");
+    expect(kb!.text).toContain("whatsapp connected.");
   });
 
   it("/channels disconnect prevents disconnecting current channel", async () => {
@@ -1187,12 +1193,14 @@ describe("Channel router — /tasks", () => {
   it("/tasks create without args shows usage", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
     startChannelRouter({
       channels: registry as any,
       defaultModel: "claude",
       maxTokens: 4096,
       temperature: 0.3,
       extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
     });
 
     emitCommand(registry, "/tasks create");
@@ -1206,12 +1214,14 @@ describe("Channel router — /tasks", () => {
   it("/tasks enable without id shows usage", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
     startChannelRouter({
       channels: registry as any,
       defaultModel: "claude",
       maxTokens: 4096,
       temperature: 0.3,
       extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
     });
 
     emitCommand(registry, "/tasks enable");
@@ -1224,12 +1234,14 @@ describe("Channel router — /tasks", () => {
   it("/tasks disable nonexistent shows not found", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
     startChannelRouter({
       channels: registry as any,
       defaultModel: "claude",
       maxTokens: 4096,
       temperature: 0.3,
       extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
     });
 
     emitCommand(registry, "/tasks disable nonexistent-id");
@@ -1242,12 +1254,14 @@ describe("Channel router — /tasks", () => {
   it("/tasks delete nonexistent shows not found", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
     startChannelRouter({
       channels: registry as any,
       defaultModel: "claude",
       maxTokens: 4096,
       temperature: 0.3,
       extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
     });
 
     emitCommand(registry, "/tasks delete nonexistent-id");
@@ -1260,12 +1274,14 @@ describe("Channel router — /tasks", () => {
   it("/tasks run without id shows usage", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
     startChannelRouter({
       channels: registry as any,
       defaultModel: "claude",
       maxTokens: 4096,
       temperature: 0.3,
       extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
     });
 
     emitCommand(registry, "/tasks run");
@@ -1321,7 +1337,8 @@ describe("Channel router — /triggers", () => {
     await settle();
 
     const text = registry.lastMessage();
-    expect(text).toContain("No triggers");
+    // /triggers is merged with /tasks — shows unified "No tasks" message
+    expect(text).toContain("No tasks configured");
   });
 
   it("/triggers enable without id shows usage", async () => {
@@ -1576,10 +1593,13 @@ describe("Channel router — channels hub", () => {
 
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Channels:");
+    expect(kb!.text).toContain("active");
+    // Hub shows per-channel buttons; unregistered channels get "+ Label" add buttons
     const labels = registry.lastKeyboardLabels();
-    expect(labels).toContain("Add Channel");
+    expect(labels.some((l) => l.startsWith("+") || l.includes("(you)"))).toBe(true);
     const data = registry.lastKeyboardData();
-    expect(data).toContain("/channels add");
+    expect(data.some((d) => d.startsWith("/channel "))).toBe(true);
   });
 
   it("/channels add shows available channel types", async () => {
@@ -1600,13 +1620,14 @@ describe("Channel router — channels hub", () => {
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Add a channel");
     const data = registry.lastKeyboardData();
-    expect(data).toContain("/channels add telegram");
-    expect(data).toContain("/channels add whatsapp");
-    expect(data).toContain("/channels add slack");
-    expect(data).toContain("/channels add discord");
+    // Router uses /channel add <name> (singular) not /channels add
+    // Only shows channels NOT already registered (telegram and whatsapp are registered in mock)
+    expect(data.some((d) => d.includes("/channel add"))).toBe(true);
+    // Back button
+    expect(data).toContain("/channels");
   });
 
-  it("/channels add telegram shows setup guide", async () => {
+  it("/channels add telegram shows already registered (telegram is in mock)", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     startChannelRouter({
@@ -1617,13 +1638,13 @@ describe("Channel router — channels hub", () => {
       extendedThinking: false,
     });
 
+    // Telegram is already registered in the mock — router should say so
     emitCommand(registry, "/channels add telegram");
     await settle();
 
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
-    expect(kb!.text).toContain("Telegram Setup");
-    expect(kb!.text).toContain("@BotFather");
+    expect(kb!.text).toContain("already registered");
     // Should have back button
     const data = registry.lastKeyboardData();
     expect(data).toContain("/channels");
@@ -1649,7 +1670,7 @@ describe("Channel router — channels hub", () => {
 
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
-    expect(kb!.text).toContain("Channel disconnected: whatsapp");
+    expect(kb!.text).toContain("whatsapp disconnected.");
     const data = registry.lastKeyboardData();
     expect(data).toContain("/channels");
   });

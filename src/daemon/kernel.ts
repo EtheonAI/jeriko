@@ -7,11 +7,37 @@ import { initDatabase, closeDatabase } from "./storage/db.js";
 import { ChannelRegistry } from "./services/channels/index.js";
 import { startChannelRouter } from "./services/channels/router.js";
 import { TriggerEngine } from "./services/triggers/engine.js";
+import type { TriggerConfig } from "./services/triggers/engine.js";
+
+/** Present a TriggerConfig as a user-facing task view. */
+function taskView(t: TriggerConfig) {
+  // Map internal trigger types to user-facing task types
+  let taskType: "trigger" | "schedule" | "once";
+  if (t.type === "cron") taskType = "schedule";
+  else if (t.type === "once") taskType = "once";
+  else taskType = "trigger";
+
+  return {
+    id: t.id,
+    name: t.label ?? t.id,
+    type: taskType,
+    internal_type: t.type,
+    enabled: t.enabled,
+    config: t.config,
+    action: t.action,
+    run_count: t.run_count ?? 0,
+    error_count: t.error_count ?? 0,
+    max_runs: t.max_runs ?? 0,
+    last_fired: t.last_fired,
+    created_at: t.created_at,
+  };
+}
 import { createApp, startServer, stopServer, type AppContext } from "./api/app.js";
 import { startSocketServer, stopSocketServer, registerMethod, registerStreamMethod } from "./api/socket.js";
 import { WorkerPool } from "./workers/pool.js";
 import { PluginLoader } from "./plugin/loader.js";
 import { ConnectorManager } from "./services/connectors/manager.js";
+import { pruneExpiredShares } from "./storage/share.js";
 import type { Database } from "bun:sqlite";
 
 // ---------------------------------------------------------------------------
@@ -148,6 +174,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/connector.js"),
     import("./agent/tools/skill.js"),
     import("./agent/tools/webdev.js"),
+    import("./agent/tools/memory-tool.js"),
   ]);
   log.info("Kernel boot: step 6 — built-in tools registered");
 
@@ -199,22 +226,19 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const { WhatsAppChannel } = await import("./services/channels/whatsapp.js");
     channels.register(new WhatsAppChannel());
   }
-  if (config.channels.slack.botToken && config.channels.slack.appToken) {
-    const { SlackChannel } = await import("./services/channels/slack.js");
-    channels.register(new SlackChannel({
-      botToken: config.channels.slack.botToken,
-      appToken: config.channels.slack.appToken,
-      channelIds: config.channels.slack.channelIds.length > 0 ? config.channels.slack.channelIds : undefined,
-      adminIds: config.channels.slack.adminIds.length > 0 ? config.channels.slack.adminIds : undefined,
+  if (config.channels.imessage.serverUrl && config.channels.imessage.password) {
+    const { IMessageChannel } = await import("./services/channels/imessage.js");
+    channels.register(new IMessageChannel({
+      serverUrl: config.channels.imessage.serverUrl,
+      password: config.channels.imessage.password,
+      allowedAddresses: config.channels.imessage.allowedAddresses.length > 0 ? config.channels.imessage.allowedAddresses : undefined,
     }));
   }
-  if (config.channels.discord.token) {
-    const { DiscordChannel } = await import("./services/channels/discord.js");
-    channels.register(new DiscordChannel({
-      token: config.channels.discord.token,
-      guildIds: config.channels.discord.guildIds.length > 0 ? config.channels.discord.guildIds : undefined,
-      channelIds: config.channels.discord.channelIds.length > 0 ? config.channels.discord.channelIds : undefined,
-      adminIds: config.channels.discord.adminIds.length > 0 ? config.channels.discord.adminIds : undefined,
+  if (config.channels.googlechat.serviceAccountKeyPath) {
+    const { GoogleChatChannel } = await import("./services/channels/googlechat.js");
+    channels.register(new GoogleChatChannel({
+      serviceAccountKeyPath: config.channels.googlechat.serviceAccountKeyPath,
+      spaceIds: config.channels.googlechat.spaceIds.length > 0 ? config.channels.googlechat.spaceIds : undefined,
     }));
   }
   // Load system prompt from ~/.config/jeriko/agent.md (copied from AGENT.md at install).
@@ -247,6 +271,28 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
   } catch (err) {
     log.warn(`Kernel boot: failed to load skill summaries: ${err}`);
+  }
+
+  // Inject persistent memory into system prompt.
+  // The agent reads this at session start to recall user preferences,
+  // project conventions, and learned patterns from prior sessions.
+  try {
+    const { readFileSync: readFs, existsSync: existsFs } = await import("node:fs");
+    const { join: joinPath } = await import("node:path");
+    const { homedir: getHome } = await import("node:os");
+    const memoryPath = joinPath(process.env.HOME || getHome(), ".jeriko", "memory", "MEMORY.md");
+    if (existsFs(memoryPath)) {
+      const memory = readFs(memoryPath, "utf-8").trim();
+      if (memory) {
+        systemPrompt = systemPrompt + "\n\n## Persistent Memory\n" +
+          "The following is your persistent memory from prior sessions. " +
+          "Use the `memory` tool to update it when you learn stable user preferences.\n\n" +
+          memory;
+        log.info(`Kernel boot: injected persistent memory (${memory.length} chars)`);
+      }
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: failed to load persistent memory: ${err}`);
   }
 
   // Bind channel message bus to the agent loop + slash-command controls.
@@ -401,12 +447,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       // Connect (non-blocking, reconnects automatically)
       relay.connect();
 
-      // Register all existing webhook triggers
-      for (const t of triggers.listAll()) {
-        if (t.type === "webhook" && t.enabled) {
-          relay.registerTrigger(t.id);
-        }
-      }
+      // NOTE: Existing webhook triggers are registered with the relay AFTER
+      // step 12 (triggers.start()), which loads persisted triggers from SQLite.
+      // At this point the trigger engine's in-memory map is still empty.
+      // See step 12 below for the registration loop.
 
       log.info("Kernel boot: step 10.6 — relay client connected");
     } else {
@@ -428,9 +472,35 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   state.plugins = plugins;
   log.info("Kernel boot: step 11 — plugins loaded");
 
-  // Step 12: Start trigger engine
+  // Step 12: Start trigger engine (loads persisted triggers from SQLite)
   await triggers.start();
+
+  // Register persisted webhook triggers with the relay.
+  // Must happen AFTER start() — the in-memory trigger map is empty until
+  // start() loads from SQLite. The bus events (trigger:added/removed) handle
+  // triggers created after boot; this loop handles pre-existing ones.
+  if (state.relay) {
+    let registeredCount = 0;
+    for (const t of triggers.listAll()) {
+      if (t.type === "webhook" && t.enabled) {
+        state.relay.registerTrigger(t.id);
+        registeredCount++;
+      }
+    }
+    if (registeredCount > 0) {
+      log.info(`Kernel boot: step 12 — registered ${registeredCount} webhook trigger(s) with relay`);
+    }
+  }
+
   log.info("Kernel boot: step 12 — trigger engine started");
+
+  // Step 12.5: Prune expired shares (housekeeping)
+  try {
+    const pruned = pruneExpiredShares();
+    if (pruned > 0) log.info(`Pruned ${pruned} expired/revoked shares`);
+  } catch (err) {
+    log.warn(`Share pruning failed (non-fatal): ${err}`);
+  }
 
   // Step 13: Connect channels
   await channels.connectAll();
@@ -882,9 +952,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const baseUrl = params.base_url as string;
     const apiKey = params.api_key as string;
     const defaultModel = params.default_model as string | undefined;
+    const providerType = (params.type as string | undefined) ?? "openai-compatible";
 
     if (!id || !baseUrl || !apiKey) {
       throw new Error("id, base_url, and api_key are required");
+    }
+
+    // Validate provider type
+    if (providerType !== "openai-compatible" && providerType !== "anthropic") {
+      throw new Error(`Invalid type "${providerType}". Supported: openai-compatible, anthropic`);
     }
 
     // Load and update config file
@@ -912,7 +988,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       name: name ?? id.charAt(0).toUpperCase() + id.slice(1),
       baseUrl,
       apiKey,
-      type: "openai-compatible",
+      type: providerType as "openai-compatible" | "anthropic",
       ...(defaultModel ? { defaultModel } : {}),
     };
 
@@ -993,7 +1069,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       }
       const { generateState } = await import("./services/oauth/state.js");
       const { buildOAuthStartUrl } = await import("../shared/urls.js");
-      const stateToken = generateState(provider.name, "cli", "cli");
+      const { getUserId } = await import("../shared/config.js");
+      const stateToken = generateState(provider.name, "cli", "cli", getUserId());
       const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
       return { ok: true, name, status: "oauth_required", loginUrl, label: provider.label };
     }
@@ -1097,15 +1174,92 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     };
   });
 
-  // ── Task IPC methods ─────────────────────────────────────────
+  // ── Task IPC methods (backed by TriggerEngine) ────────────────
+  // "tasks" is the unified surface for all automation — trigger, schedule, once.
+  // Internally delegates to TriggerEngine. The old JSON-file-based task system is removed.
+
   registerMethod("tasks", async () => {
-    const { existsSync, readdirSync, readFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
-    const { homedir } = await import("node:os");
-    const tasksDir = join(homedir(), ".jeriko", "data", "tasks");
-    if (!existsSync(tasksDir)) return [];
-    const files = readdirSync(tasksDir).filter((f: string) => f.endsWith(".json"));
-    return files.map((f: string) => JSON.parse(readFileSync(join(tasksDir, f), "utf-8")));
+    if (!triggers) return [];
+    return triggers.listAll().map(taskView);
+  });
+
+  registerMethod("task_create", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const { buildTriggerConfig } = await import("./services/triggers/task-adapter.js");
+    const config = buildTriggerConfig(params);
+    const trigger = triggers.add(config);
+    return taskView(trigger);
+  });
+
+  registerMethod("task_info", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    const trigger = triggers.get(id);
+    if (!trigger) throw new Error(`Task not found: ${id}`);
+    return taskView(trigger);
+  });
+
+  registerMethod("task_pause", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    if (!triggers.get(id)) throw new Error(`Task not found: ${id}`);
+    triggers.disable(id);
+    return taskView(triggers.get(id)!);
+  });
+
+  registerMethod("task_resume", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    if (!triggers.get(id)) throw new Error(`Task not found: ${id}`);
+    triggers.enable(id);
+    return taskView(triggers.get(id)!);
+  });
+
+  registerMethod("task_delete", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    const existed = triggers.remove(id);
+    if (!existed) throw new Error(`Task not found: ${id}`);
+    return { deleted: true, id };
+  });
+
+  registerMethod("task_test", async (params) => {
+    if (!triggers) throw new Error("Task engine not available");
+    const id = params.id as string;
+    if (!id) throw new Error("id is required");
+    const trigger = triggers.get(id);
+    if (!trigger) throw new Error(`Task not found: ${id}`);
+    await triggers.fire(id, { test: true, timestamp: new Date().toISOString() });
+    return { fired: true, id, run_count: triggers.get(id)?.run_count ?? 0 };
+  });
+
+  registerMethod("task_log", async (params) => {
+    if (!triggers) return [];
+    const limit = (params.limit as number) || 20;
+    const all = triggers.listAll();
+    // Return tasks sorted by last_fired (most recent first), limited
+    return all
+      .filter((t) => t.last_fired)
+      .sort((a, b) => (b.last_fired ?? "").localeCompare(a.last_fired ?? ""))
+      .slice(0, limit)
+      .map(taskView);
+  });
+
+  registerMethod("task_types", async () => {
+    return {
+      trigger_sources: [
+        "stripe:<event>", "paypal:<event>", "github:<event>", "twilio:<event>",
+        "gmail:new_email", "email:new_email",
+        "http:down", "http:up", "http:slow", "http:any",
+        "file:change", "file:create", "file:delete",
+      ],
+      schedule: "cron expression (e.g. '0 9 * * *', '*/5 * * * *')",
+      once: "ISO datetime (e.g. '2026-06-01T09:00')",
+    };
   });
 
   // ── Notifications IPC method ────────────────────────────────
@@ -1218,10 +1372,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   // ── Billing IPC methods ──────────────────────────────────────
   registerMethod("billing.plan", async () => {
     const { getLicenseState } = await import("./billing/license.js");
+    const { getConfiguredConnectorCount } = await import("../shared/connector.js");
     const state = getLicenseState();
 
-    // Get active connector/trigger counts
-    const connectorCount = connectors ? connectors.names.filter((n) => connectors!.has(n)).length : 0;
+    // Use configured connector count — single source of truth across all surfaces
+    const connectorCount = getConfiguredConnectorCount();
     const triggerCount = triggers ? triggers.listActive().length : 0;
 
     return {
@@ -1246,10 +1401,14 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   registerMethod("billing.checkout", async (params) => {
     const email = params.email as string;
     if (!email) throw new Error("email is required");
-    const termsAccepted = (params.terms_accepted as boolean) ?? false;
+
+    const clientMeta = {
+      clientIp: (params.client_ip as string) ?? "unknown",
+      userAgent: (params.user_agent as string) ?? "unknown",
+    };
 
     const { createCheckoutSession } = await import("./billing/stripe.js");
-    const result = await createCheckoutSession(email, termsAccepted);
+    const result = await createCheckoutSession(email, clientMeta);
     return { url: result.url, session_id: result.sessionId };
   });
 
@@ -1559,4 +1718,17 @@ function installSignalHandlers(): void {
 
   process.on("SIGINT", () => handler("SIGINT"));
   process.on("SIGTERM", () => handler("SIGTERM"));
+
+  // Catch unhandled errors to prevent silent crashes
+  process.on("uncaughtException", (err) => {
+    log.error(`Uncaught exception: ${err.message}`, { stack: err.stack });
+    handler("uncaughtException");
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    const stack = reason instanceof Error ? reason.stack : undefined;
+    log.error(`Unhandled rejection: ${msg}`, { stack });
+    // Don't crash on unhandled rejections — log and continue
+  });
 }

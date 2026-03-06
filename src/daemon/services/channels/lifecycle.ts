@@ -62,31 +62,28 @@ export const CHANNEL_DEFS: readonly ChannelDef[] = [
     ],
   },
   {
-    name: "discord",
-    label: "Discord",
+    name: "imessage",
+    label: "iMessage",
     requiresToken: true,
-    tokenHint: "Bot token from discord.com/developers",
-    tokenCount: 1,
+    tokenHint: "BlueBubbles server URL and password",
+    tokenCount: 2,
     setupGuide: [
-      "1. Create app at discord.com/developers",
-      "2. Create a bot, copy the token",
-      "3. Enable Message Content Intent",
-      "4. Invite bot to server with message permissions",
-      "5. Send: /channel add discord <token>",
+      "1. Install BlueBubbles Server on a Mac (bluebubbles.app)",
+      "2. Configure iMessage and note the server URL + password",
+      "3. Send: /channel add imessage <serverUrl> <password>",
     ],
   },
   {
-    name: "slack",
-    label: "Slack",
+    name: "googlechat",
+    label: "Google Chat",
     requiresToken: true,
-    tokenHint: "botToken (xoxb-...) and appToken (xapp-...)",
-    tokenCount: 2,
+    tokenHint: "Path to Service Account JSON key file",
+    tokenCount: 1,
     setupGuide: [
-      "1. Create a Slack App at api.slack.com/apps",
-      "2. Enable Socket Mode (get xapp- token)",
-      "3. Add Bot Token Scopes: chat:write, channels:history, etc.",
-      "4. Install to workspace (get xoxb- token)",
-      "5. Send: /channel add slack <botToken> <appToken>",
+      "1. Create a Google Cloud project, enable Chat API",
+      "2. Create a Service Account, download the JSON key",
+      "3. Configure the bot's HTTPS endpoint to point to your daemon",
+      "4. Send: /channel add googlechat <path-to-key.json>",
     ],
   },
 ] as const;
@@ -137,29 +134,30 @@ export async function createChannelAdapter(
         onQR: opts?.onQR,
       });
     }
-    case "slack": {
-      const botToken = config?.botToken as string;
-      const appToken = config?.appToken as string;
-      if (!botToken || !appToken) {
-        throw new Error("Slack requires botToken (xoxb-...) and appToken (xapp-...)");
+    case "imessage": {
+      const serverUrl = config?.serverUrl as string;
+      const password = config?.password as string;
+      if (!serverUrl || !password) {
+        throw new Error("iMessage requires BlueBubbles serverUrl and password");
       }
-      const { SlackChannel } = await import("./slack.js");
-      return new SlackChannel({
-        botToken,
-        appToken,
-        channelIds: (config?.channelIds as string[]) ?? undefined,
-        adminIds: (config?.adminIds as string[]) ?? undefined,
+      const { IMessageChannel } = await import("./imessage.js");
+      return new IMessageChannel({
+        serverUrl,
+        password,
+        allowedAddresses: (config?.allowedAddresses as string[]) ?? undefined,
       });
     }
-    case "discord": {
-      const token = config?.token as string;
-      if (!token) throw new Error("Discord requires a bot token");
-      const { DiscordChannel } = await import("./discord.js");
-      return new DiscordChannel({
-        token,
-        guildIds: (config?.guildIds as string[]) ?? undefined,
-        channelIds: (config?.channelIds as string[]) ?? undefined,
-        adminIds: (config?.adminIds as string[]) ?? undefined,
+    case "googlechat": {
+      const keyPath = config?.serviceAccountKeyPath as string;
+      const inlineKey = config?.serviceAccountKey as Record<string, string> | undefined;
+      if (!keyPath && !inlineKey) {
+        throw new Error("Google Chat requires a Service Account key file path or inline key");
+      }
+      const { GoogleChatChannel } = await import("./googlechat.js");
+      return new GoogleChatChannel({
+        serviceAccountKeyPath: keyPath || undefined,
+        serviceAccountKey: inlineKey as any,
+        spaceIds: (config?.spaceIds as string[]) ?? undefined,
       });
     }
     default:

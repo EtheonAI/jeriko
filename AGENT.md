@@ -183,6 +183,14 @@ parallel: [--tasks JSON] [--workers N] (run multiple AI tasks concurrently)
 memory: [--recent N] [--search Q] [--set K --value V] [--get K] [--context] [--log] [--clear] (session memory)
 discover: [--list] [--json] [--raw] [--name N] (auto-generate system prompts)
 
+**Memory tool (agent)** — `memory` persists knowledge across sessions:
+- `read`: Get full persistent memory (user preferences, project conventions)
+- `write`: Replace entire memory file (use markdown with headers)
+- `append`: Add to end of memory
+- `search`: Find lines matching a query
+
+Save to memory when you learn stable patterns: coding style, preferred tools, project structure, workflow preferences. Do NOT save session-specific data — only durable knowledge. Memory is at `~/.jeriko/memory/MEMORY.md` and injected into every session's system prompt.
+
 ### Skills
 skill: list | info NAME | create NAME [--description TXT] | validate NAME | remove NAME | install PATH|URL | edit NAME (manage skill packages)
 
@@ -289,7 +297,7 @@ prompt: [--raw] [--name N] [--list] [--json] (generate system prompt)
 
 ### Billing & Subscription
 plan: (show current tier, limits, and usage)
-upgrade: --email EMAIL [--terms-accepted] (start Stripe Checkout for Pro plan)
+upgrade: --email EMAIL (start Stripe Checkout for Pro plan — ToS accepted on Stripe's hosted page)
 billing: [events] [--limit N] [--type TYPE] (manage subscription — default opens Stripe Customer Portal, `events` shows audit trail)
 
 **Tiers:** Community (free: 2 connectors, 3 triggers) → Pro ($19.99/mo: 10 connectors, unlimited triggers)
@@ -306,49 +314,43 @@ paypal hook: [--no-notify] (format PayPal webhook events)
 github hook: [--no-notify] (format GitHub webhook events)
 twilio hook: [--no-notify] (format Twilio webhook events)
 
-## Task System (`jeriko task`) — Reactive Automation
-4 task types: trigger (event-driven), recurring, cron, once. Each fires an AI action or shell command.
+## Task System (`jeriko task`) — Unified Automation
+3 task types: trigger (event-driven), schedule (recurring), once (one-time). Each fires an AI action or shell command. All tasks are daemon-backed (SQLite-persisted).
 
 ### Trigger Event Types (`jeriko task types`)
 stripe:<event> | paypal:<event> | github:<event> | twilio:<event> — webhook events
-gmail:new_email | email:new_email — email polling (IMAP/Mail.app)
+gmail:new_email | outlook:new_email | email:new_email — email polling
 http:down|up|slow|any — HTTP monitoring
 file:change|create|delete — file system watching
 
 ### Create Tasks
 ```
-# Trigger — event-driven
-jeriko task create --trigger stripe:charge.failed --action "email client" --name "Payment Followup"
-jeriko task create --trigger gmail:new_email --from "client@co.com" --action "summarize and reply" --name "Client Reply"
-jeriko task create --trigger http:down --url "https://mysite.com" --action "alert" --name "Uptime Monitor"
-jeriko task create --trigger file:change --path "/var/log" --action "alert on errors" --name "Log Watcher"
-jeriko task create --trigger github:push --action "run tests" --name "CI Notify"
+# Trigger — event-driven (fires when external event occurs)
+jeriko task create "Payment Alert" --trigger stripe:charge.failed --action "notify team"
+jeriko task create "Client Reply" --trigger gmail:new_email --from "client@co" --action "summarize and reply"
+jeriko task create "Uptime Monitor" --trigger http:down --url "https://mysite.com" --action "alert"
+jeriko task create "Log Watcher" --trigger file:change --path "/var/log" --action "alert on errors"
+jeriko task create "CI Notify" --trigger github:push --action "run tests"
 
-# Recurring — repeating schedule
-jeriko task create --recurring daily --at "09:00" --action "morning briefing" --name "Daily Brief"
-jeriko task create --recurring weekly --day MON --at "09:00" --action "weekly report" --name "Weekly Report"
-jeriko task create --recurring monthly --day-of-month 1 --action "invoice" --name "Monthly Invoice"
+# Schedule — recurring on cron expression
+jeriko task create "Daily Brief" --schedule "0 9 * * *" --action "morning briefing"
+jeriko task create "Weekly Report" --recurring weekly --day MON --at "09:00" --action "weekly report"
+jeriko task create "Health Check" --every 5m --action "check health"
 
-# Cron — custom expression
-jeriko task create --cron "0 9 * * MON" --action "generate report" --name "Weekly Report"
-jeriko task create --every 5m --action "check health" --name "Health Check"
-
-# Once — one-time
-jeriko task create --once "2026-03-01T09:00" --action "send launch email" --name "Launch Day"
+# Once — one-time execution at a specific datetime
+jeriko task create "Launch Day" --once "2026-06-01T09:00" --action "send launch email"
 ```
 
 ### Options
---app mail|telegram|notify | --shell "cmd" | --from "addr" | --subject "text" | --url URL | --path PATH | --interval N | --max-runs N | --no-notify
+--action "AI prompt" | --shell "cmd" | --from "addr" | --subject "text" | --url URL | --path PATH | --interval N | --max-runs N | --no-notify
 
 ### Manage
-jeriko task list | info <id> | log [--limit N] | pause <id> | resume <id> | delete <id> | test <id> | reload | types
+jeriko task list | info <id> | log [--limit N] | pause <id> | resume <id> | delete <id> | test <id> | types
 
-### Telegram
-`/task trigger stripe:charge.failed email client` | `/task recurring daily at:09:00 briefing` | `/task cron "expr" action` | `/task every 5m action` | `/task once "date" action`
-`/tasks` list | `/task_types` | `/task_pause <id>` | `/task_resume <id>` | `/task_delete <id>` | `/task_test <id>` | `/task_log`
-
-### Active Webhooks (bot.jeriko.ai)
-Stripe: ff87d788 | PayPal: 8a7f8e3f | GitHub: 4eae23a1 | Twilio: 3f896c67
+### Channel Commands (Telegram, WhatsApp)
+`/tasks` — list all tasks with status and action buttons
+`/tasks <id>` — show task details (type, config, runs, last fired)
+`/tasks pause <id>` | `/tasks resume <id>` | `/tasks delete <id>` | `/tasks test <id>`
 
 Tasks auto-disable after 5 consecutive errors.
 

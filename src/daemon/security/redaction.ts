@@ -21,11 +21,8 @@ const PATTERNS: Array<{ pattern: RegExp; label: string }> = [
   { pattern: /ghr_[0-9a-zA-Z]{36,}/g,      label: "github-refresh-token" },
   { pattern: /github_pat_[0-9a-zA-Z_]{22,}/g, label: "github-fine-grained-pat" },
 
-  // Slack
-  { pattern: /xoxb-[0-9a-zA-Z\-]{24,}/g,   label: "slack-bot-token" },
-  { pattern: /xoxp-[0-9a-zA-Z\-]{24,}/g,   label: "slack-user-token" },
-  { pattern: /xoxs-[0-9a-zA-Z\-]{24,}/g,   label: "slack-session-token" },
-  { pattern: /xoxa-[0-9a-zA-Z\-]{24,}/g,   label: "slack-app-token" },
+  // Google Service Account (private key ID)
+  { pattern: /-----BEGIN (?:RSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA )?PRIVATE KEY-----/g, label: "private-key-pem" },
 
   // AWS
   { pattern: /AKIA[0-9A-Z]{16}/g,           label: "aws-access-key" },

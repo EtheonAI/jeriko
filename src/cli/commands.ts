@@ -27,6 +27,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/session",        "Show current session details"],
       ["/sessions",       "List recent sessions"],
       ["/resume <slug>",  "Resume a previous session"],
+      ["/switch <slug>",  "Alias for /resume"],
       ["/history",        "Show message history"],
       ["/clear",          "Clear session messages"],
       ["/compact",        "Trigger context compaction"],
@@ -88,6 +89,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/health",         "Check connector health"],
       ["/sys",            "System info"],
       ["/config",         "Show configuration"],
+      ["/theme [name]",   "Show or switch theme"],
     ],
   },
 ] as const;
@@ -107,6 +109,7 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/session",        "Show current session details"],
   ["/sessions",       "List recent sessions"],
   ["/resume",         "Resume a previous session"],
+  ["/switch",         "Alias for /resume"],
   ["/history",        "Show message history"],
   ["/clear",          "Clear session messages"],
   ["/compact",        "Trigger context compaction"],
@@ -149,6 +152,7 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/health",         "Check connector health"],
   ["/sys",            "System info"],
   ["/config",         "Show configuration"],
+  ["/theme",          "Show or switch theme"],
 ]);
 
 /**

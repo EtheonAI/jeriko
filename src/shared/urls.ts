@@ -104,41 +104,27 @@ export function buildWebhookUrl(triggerId: string, localBaseUrl?: string): strin
 /**
  * Build the OAuth callback URL for a specific provider.
  *
- * When using the relay, includes userId so the relay can forward the
- * callback to the correct daemon:
- *   https://bot.jeriko.ai/oauth/:userId/:provider/callback
+ * Always a clean URL without userId in the path:
+ *   https://bot.jeriko.ai/oauth/:provider/callback
  *
- * When self-hosted or local, goes directly to daemon:
- *   https://my-tunnel.example.com/oauth/:provider/callback
+ * The userId is carried in the `state` query parameter (composite state)
+ * so the relay can route without exposing userId in the URL path.
  */
 export function buildOAuthCallbackUrl(provider: string): string {
   const publicUrl = getPublicUrl();
-  const userId = getUserId();
-
-  if (isSelfHosted() || !userId) {
-    return `${publicUrl}/oauth/${provider}/callback`;
-  }
-
-  // Relay mode — include userId for routing
-  return `${publicUrl}/oauth/${userId}/${provider}/callback`;
+  return `${publicUrl}/oauth/${provider}/callback`;
 }
 
 /**
  * Build the OAuth start URL (where the browser is redirected to begin consent).
  *
- * Same routing logic as callback URL.
+ * Always a clean URL without userId in the path. The userId is embedded
+ * in the composite state token for relay routing.
  */
 export function buildOAuthStartUrl(provider: string, stateToken: string): string {
   const publicUrl = getPublicUrl();
-  const userId = getUserId();
-
   const encodedState = encodeURIComponent(stateToken);
-
-  if (isSelfHosted() || !userId) {
-    return `${publicUrl}/oauth/${provider}/start?state=${encodedState}`;
-  }
-
-  return `${publicUrl}/oauth/${userId}/${provider}/start?state=${encodedState}`;
+  return `${publicUrl}/oauth/${provider}/start?state=${encodedState}`;
 }
 
 /**

@@ -20,6 +20,7 @@ import {
   isBillingTier,
 } from "./config.js";
 import { getLicense, getSubscription, getSubscriptionById, updateLicense, type BillingLicense } from "./store.js";
+import { getConfiguredConnectorCount } from "../../shared/connector.js";
 import { getLogger } from "../../shared/logger.js";
 
 const log = getLogger();
@@ -112,20 +113,27 @@ export function getLicenseState(): LicenseState {
 /**
  * Check if a new connector can be activated.
  *
- * @param currentCount  Number of currently active connector instances.
+ * Uses the configured connector count (env vars set) as the usage metric.
+ * This is the single source of truth — all surfaces (CLI, channels, API, IPC)
+ * use the same count via `getConfiguredConnectorCount()`.
+ *
+ * @param currentCount  Override for current count (used by tests). When omitted,
+ *                      reads the actual configured count from CONNECTOR_DEFS.
  * @returns Gate result with reason if denied.
  */
-export function canActivateConnector(currentCount: number): GateResult {
+export function canActivateConnector(currentCount?: number): GateResult {
   const state = getLicenseState();
 
-  if (currentCount < state.connectorLimit) {
+  const count = currentCount ?? getConfiguredConnectorCount();
+
+  if (count < state.connectorLimit) {
     return { allowed: true };
   }
 
   const tierLabel = TIER_LIMITS[state.tier].label;
   return {
     allowed: false,
-    reason: `Connector limit reached (${currentCount}/${state.connectorLimit} on ${tierLabel} plan). `
+    reason: `Connector limit reached (${count}/${state.connectorLimit} on ${tierLabel} plan). `
       + `Upgrade to Pro for ${TIER_LIMITS.pro.connectors} connectors: run \`jeriko upgrade\``,
   };
 }

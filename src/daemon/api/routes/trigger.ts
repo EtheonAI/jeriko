@@ -14,6 +14,7 @@ import type {
   WebhookConfig,
   FileConfig,
   HttpConfig,
+  OnceConfig,
 } from "../../services/triggers/engine.js";
 import type { EmailConfig } from "../../services/triggers/email.js";
 
@@ -23,7 +24,7 @@ const log = getLogger();
 // Validation helpers
 // ---------------------------------------------------------------------------
 
-const TRIGGER_TYPES = ["cron", "webhook", "file", "http", "email"] as const;
+const TRIGGER_TYPES = ["cron", "webhook", "file", "http", "email", "once"] as const;
 type TriggerType = (typeof TRIGGER_TYPES)[number];
 
 function isValidType(type: unknown): type is TriggerType {
@@ -77,6 +78,17 @@ function validateConfig(type: TriggerType, config: unknown): string | null {
       }
       return null;
     }
+    case "once": {
+      const c = config as OnceConfig;
+      if (!c.at?.trim()) {
+        return "config.at (ISO datetime) is required for once triggers";
+      }
+      const parsed = new Date(c.at);
+      if (isNaN(parsed.getTime())) {
+        return "config.at must be a valid ISO datetime string";
+      }
+      return null;
+    }
   }
 }
 
@@ -109,7 +121,7 @@ interface TriggerView {
   type: TriggerType;
   label: string;
   enabled: boolean;
-  config: CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig;
+  config: CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | OnceConfig;
   action: TriggerAction;
   run_count: number;
   error_count: number;
@@ -261,7 +273,7 @@ export function triggerRoutes(): Hono {
     const trigger = triggers.add({
       type: body.type,
       enabled: body.enabled ?? true,
-      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig,
+      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | OnceConfig,
       action: body.action as TriggerAction,
       label: body.label,
       max_runs: body.max_runs,
@@ -314,7 +326,7 @@ export function triggerRoutes(): Hono {
     }
 
     const updated = triggers.update(id, {
-      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | undefined,
+      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | OnceConfig | undefined,
       action: body.action as TriggerAction | undefined,
       label: body.label,
       enabled: body.enabled,

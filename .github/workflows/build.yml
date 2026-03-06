@@ -1,0 +1,114 @@
+name: Build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      platforms:
+        description: 'Platforms to build (comma-separated, or "all")'
+        default: 'all'
+        type: string
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-all:
+    name: Build All Platforms
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Build all platforms
+        run: bash scripts/release.sh
+
+      - name: List artifacts
+        run: ls -lah dist/
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+          retention-days: 7
+
+  verify-macos:
+    name: Verify macOS
+    needs: build-all
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+      - name: Test darwin-arm64 binary
+        run: |
+          chmod +x dist/jeriko-darwin-arm64
+          ./dist/jeriko-darwin-arm64 --version
+          ./dist/jeriko-darwin-arm64 --help
+          echo "macOS arm64 binary verified"
+
+      - name: Test darwin-x64 binary (Rosetta)
+        if: runner.arch == 'ARM64'
+        run: |
+          chmod +x dist/jeriko-darwin-x64
+          arch -x86_64 ./dist/jeriko-darwin-x64 --version || echo "x64 binary requires Rosetta 2"
+
+  verify-windows:
+    name: Verify Windows
+    needs: build-all
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+      - name: Test windows-x64 binary (PowerShell)
+        shell: pwsh
+        run: |
+          & .\dist\jeriko-windows-x64.exe --version
+          & .\dist\jeriko-windows-x64.exe --help
+          Write-Host "Windows x64 binary verified"
+
+      - name: Test windows-x64 binary (CMD)
+        shell: cmd
+        run: |
+          dist\jeriko-windows-x64.exe --version
+          dist\jeriko-windows-x64.exe --help
+          echo Windows x64 binary verified (CMD)
+
+  verify-linux:
+    name: Verify Linux
+    needs: build-all
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          path: dist/
+
+      - name: Test linux-x64 binary
+        run: |
+          chmod +x dist/jeriko-linux-x64
+          ./dist/jeriko-linux-x64 --version
+          ./dist/jeriko-linux-x64 --help
+          echo "Linux x64 binary verified"

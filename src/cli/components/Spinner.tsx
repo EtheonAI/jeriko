@@ -52,7 +52,7 @@ export const SPINNER_PRESETS: Record<string, SpinnerPreset> = {
 } as const;
 
 /** Default preset (braille dots) — used when no phase matches. */
-const DEFAULT_PRESET: SpinnerPreset = SPINNER_PRESETS.streaming;
+const DEFAULT_PRESET: SpinnerPreset = SPINNER_PRESETS.streaming!;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -77,7 +77,7 @@ export const Spinner: React.FC<SpinnerProps> = ({
   color,
   preset,
 }) => {
-  const resolvedPreset = preset ? (SPINNER_PRESETS[preset] ?? DEFAULT_PRESET) : DEFAULT_PRESET;
+  const resolvedPreset = preset ? ((SPINNER_PRESETS as Record<string, SpinnerPreset>)[preset] ?? DEFAULT_PRESET) : DEFAULT_PRESET;
   const resolvedColor = color ?? resolvedPreset.color;
   const { frames, intervalMs } = resolvedPreset;
 

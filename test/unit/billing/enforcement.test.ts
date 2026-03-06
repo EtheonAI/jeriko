@@ -7,7 +7,7 @@
 //   - Re-upgrade → gating lifted, items can be re-enabled
 //   - Enforcement only runs when billing is configured (STRIPE_BILLING_SECRET_KEY)
 
-import { describe, expect, it, beforeAll, afterAll, beforeEach } from "bun:test";
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
 import { initDatabase, closeDatabase } from "../../../src/daemon/storage/db.js";
 import {
   getLicense,
@@ -645,6 +645,87 @@ describe("billing/enforcement", () => {
       expect(result.triggers.disabled).toHaveLength(0);
       expect(connectors.activeCount).toBe(2);
       expect(triggers.enabledCount).toBe(3);
+    });
+  });
+
+  // ── canActivateConnector default count (configured connectors) ──
+
+  describe("canActivateConnector with configured count", () => {
+    // Save and clear ALL connector env vars for isolation
+    const { CONNECTOR_DEFS } = require("../../../src/shared/connector.js") as typeof import("../../../src/shared/connector.js");
+    const allConnectorVars = CONNECTOR_DEFS.flatMap((d) => [
+      ...d.required.flatMap((e: string | string[]) => (Array.isArray(e) ? e : [e])),
+      ...d.optional,
+    ]);
+    const savedConnectorEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const v of allConnectorVars) {
+        savedConnectorEnv[v] = process.env[v];
+        delete process.env[v];
+      }
+    });
+
+    afterEach(() => {
+      for (const [key, val] of Object.entries(savedConnectorEnv)) {
+        if (val === undefined) delete process.env[key];
+        else process.env[key] = val;
+      }
+    });
+
+    it("uses getConfiguredConnectorCount when no currentCount provided", () => {
+      setTier("free", "canceled");
+
+      // All connector env vars cleared → configured count is 0 → under limit (2)
+      const result = canActivateConnector();
+      expect(result.allowed).toBe(true);
+    });
+
+    it("explicit currentCount overrides configured count", () => {
+      setTier("free", "canceled");
+
+      // Explicitly pass 5 — should be over the free limit of 2
+      const result = canActivateConnector(5);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("5/2");
+    });
+
+    it("explicit currentCount of 0 always allows", () => {
+      setTier("free", "canceled");
+
+      const result = canActivateConnector(0);
+      expect(result.allowed).toBe(true);
+    });
+
+    it("with env vars set, configured count reflects reality", () => {
+      setTier("free", "canceled");
+
+      // Set exactly 3 connectors
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+      process.env.PAYPAL_CLIENT_ID = "fake_id";
+      process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
+      process.env.GITHUB_TOKEN = "ghp_fake";
+
+      // 3 configured > free limit of 2 → blocked
+      const result = canActivateConnector();
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("3/2");
+    });
+
+    it("Pro tier allows configured count up to 10", () => {
+      setTier("pro");
+
+      // Set 4 connectors
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+      process.env.PAYPAL_CLIENT_ID = "fake_id";
+      process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
+      process.env.GITHUB_TOKEN = "ghp_fake";
+      process.env.TWILIO_ACCOUNT_SID = "AC_fake";
+      process.env.TWILIO_AUTH_TOKEN = "fake_auth";
+
+      // 4 configured < pro limit of 10 → allowed
+      const result = canActivateConnector();
+      expect(result.allowed).toBe(true);
     });
   });
 

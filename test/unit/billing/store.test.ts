@@ -12,6 +12,9 @@ import {
   getRecentEvents,
   getLicense,
   updateLicense,
+  recordConsent,
+  getConsentBySubscription,
+  getConsentBySession,
 } from "../../../src/daemon/billing/store.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -346,6 +349,142 @@ describe("billing/store", () => {
         .all();
       expect(rows.length).toBe(1);
       expect(rows[0]!.key).toBe("current");
+    });
+  });
+
+  // ── Consent evidence ─────────────────────────────────────────
+
+  describe("consent", () => {
+    it("creates billing_consent table via migration", () => {
+      const tables = db
+        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+        .all()
+        .map((r) => r.name);
+      expect(tables).toContain("billing_consent");
+    });
+
+    it("creates indexes on billing_consent", () => {
+      const indexes = db
+        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='index' ORDER BY name")
+        .all()
+        .map((r) => r.name);
+      expect(indexes).toContain("idx_billing_consent_sub");
+      expect(indexes).toContain("idx_billing_consent_customer");
+    });
+
+    it("records consent evidence", () => {
+      recordConsent({
+        id: "consent_sub_001_1700000000",
+        subscription_id: "sub_consent_001",
+        customer_id: "cus_consent_001",
+        email: "consent@example.com",
+        client_ip: "192.168.1.100",
+        user_agent: "jeriko-cli/2.0.0 (darwin)",
+        terms_url: "https://jeriko.ai/terms",
+        terms_version: "1.0",
+        terms_accepted_at: 1700000000,
+        privacy_url: "https://jeriko.ai/privacy",
+        billing_address_collected: true,
+        stripe_consent_collected: true,
+        checkout_session_id: "cs_test_001",
+      });
+
+      const consent = getConsentBySubscription("sub_consent_001");
+      expect(consent).not.toBeNull();
+      expect(consent!.subscription_id).toBe("sub_consent_001");
+      expect(consent!.customer_id).toBe("cus_consent_001");
+      expect(consent!.email).toBe("consent@example.com");
+      expect(consent!.client_ip).toBe("192.168.1.100");
+      expect(consent!.user_agent).toBe("jeriko-cli/2.0.0 (darwin)");
+      expect(consent!.terms_url).toBe("https://jeriko.ai/terms");
+      expect(consent!.terms_version).toBe("1.0");
+      expect(consent!.terms_accepted_at).toBe(1700000000);
+      expect(consent!.privacy_url).toBe("https://jeriko.ai/privacy");
+      expect(consent!.billing_address_collected).toBe(true);
+      expect(consent!.stripe_consent_collected).toBe(true);
+      expect(consent!.checkout_session_id).toBe("cs_test_001");
+    });
+
+    it("retrieves consent by checkout session ID", () => {
+      const consent = getConsentBySession("cs_test_001");
+      expect(consent).not.toBeNull();
+      expect(consent!.subscription_id).toBe("sub_consent_001");
+    });
+
+    it("returns null for unknown subscription", () => {
+      const consent = getConsentBySubscription("sub_nonexistent");
+      expect(consent).toBeNull();
+    });
+
+    it("returns null for unknown session", () => {
+      const consent = getConsentBySession("cs_nonexistent");
+      expect(consent).toBeNull();
+    });
+
+    it("is idempotent — ignores duplicate consent IDs", () => {
+      recordConsent({
+        id: "consent_dup_test",
+        subscription_id: "sub_consent_dup",
+        customer_id: "cus_dup",
+        email: "first@example.com",
+        client_ip: "10.0.0.1",
+        user_agent: "first-agent",
+        terms_url: null,
+        terms_version: null,
+        terms_accepted_at: null,
+        privacy_url: null,
+        billing_address_collected: false,
+        stripe_consent_collected: false,
+        checkout_session_id: null,
+      });
+
+      // Record again with different data
+      recordConsent({
+        id: "consent_dup_test",
+        subscription_id: "sub_consent_dup",
+        customer_id: "cus_dup",
+        email: "second@example.com",
+        client_ip: "10.0.0.2",
+        user_agent: "second-agent",
+        terms_url: null,
+        terms_version: null,
+        terms_accepted_at: null,
+        privacy_url: null,
+        billing_address_collected: true,
+        stripe_consent_collected: true,
+        checkout_session_id: null,
+      });
+
+      // Should still have the first record
+      const consent = getConsentBySubscription("sub_consent_dup");
+      expect(consent).not.toBeNull();
+      expect(consent!.email).toBe("first@example.com");
+      expect(consent!.client_ip).toBe("10.0.0.1");
+    });
+
+    it("handles null fields gracefully", () => {
+      recordConsent({
+        id: "consent_nulls",
+        subscription_id: null,
+        customer_id: null,
+        email: null,
+        client_ip: null,
+        user_agent: null,
+        terms_url: null,
+        terms_version: null,
+        terms_accepted_at: null,
+        privacy_url: null,
+        billing_address_collected: false,
+        stripe_consent_collected: false,
+        checkout_session_id: "cs_nulls",
+      });
+
+      const consent = getConsentBySession("cs_nulls");
+      expect(consent).not.toBeNull();
+      expect(consent!.subscription_id).toBeNull();
+      expect(consent!.client_ip).toBeNull();
+      expect(consent!.billing_address_collected).toBe(false);
+      expect(consent!.stripe_consent_collected).toBe(false);
     });
   });
 });

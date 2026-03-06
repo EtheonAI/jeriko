@@ -55,14 +55,21 @@ const SENSITIVE_KEYS: readonly string[] = [
   "NODE_AUTH_SECRET",
   "STRIPE_SECRET_KEY",
   "STRIPE_WEBHOOK_SECRET",
-  "PAYPAL_SECRET",
+  "PAYPAL_CLIENT_SECRET",
   "GITHUB_TOKEN",
+  "GH_TOKEN",
   "GITHUB_WEBHOOK_SECRET",
   "TWILIO_AUTH_TOKEN",
   "TELEGRAM_BOT_TOKEN",
-  "JERIKO_TELEGRAM_TOKEN",
   "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
   "DATABASE_URL",
+  "REDIS_URL",
+  "BLUEBUBBLES_PASSWORD",
+  "GOOGLE_CHAT_SERVICE_ACCOUNT_KEY",
+  "WHATSAPP_TOKEN",
+  "CLOUDFLARE_API_TOKEN",
+  "VERCEL_TOKEN",
   "ENCRYPTION_KEY",
 ] as const;
 
@@ -158,8 +165,17 @@ export function createPluginSandbox(manifest: PluginManifest): PluginSandbox {
 
       for (const [key, value] of Object.entries(process.env)) {
         if (value === undefined) continue;
-        // Strip sensitive keys
+        // Strip explicitly listed sensitive keys
         if (SENSITIVE_KEYS.includes(key)) continue;
+        // Strip keys matching sensitive naming patterns (defense-in-depth)
+        const upper = key.toUpperCase();
+        if (
+          upper.includes("SECRET") ||
+          upper.includes("PASSWORD") ||
+          upper.includes("PRIVATE_KEY") ||
+          upper.endsWith("_TOKEN") ||
+          (upper.endsWith("_KEY") && (upper.includes("API") || upper.includes("AUTH")))
+        ) continue;
         env[key] = value;
       }
 

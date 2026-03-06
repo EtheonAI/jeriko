@@ -581,8 +581,8 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 35 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(35);
+  test("has all 37 slash commands", () => {
+    expect(SLASH_COMMANDS.size).toBe(37);
   });
 
   test("contains new v3 commands", () => {

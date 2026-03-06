@@ -2,6 +2,7 @@
 
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { getLogger } from "../../shared/logger.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
@@ -11,7 +12,6 @@ import { webhookRoutes } from "./routes/webhook.js";
 import { channelRoutes } from "./routes/channel.js";
 import { healthRoutes } from "./routes/health.js";
 import { connectorRoutes } from "./routes/connector.js";
-import { schedulerRoutes } from "./routes/scheduler.js";
 import { triggerRoutes } from "./routes/trigger.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
@@ -63,6 +63,17 @@ export function createApp(ctx: AppContext): Hono {
     }),
   );
 
+  // Security headers — prevent clickjacking, MIME sniffing, referrer leaks
+  app.use("*", async (c, next) => {
+    await next();
+    c.header("X-Frame-Options", "DENY");
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("Referrer-Policy", "no-referrer");
+  });
+
+  // Body size limit — prevent memory exhaustion from oversized payloads
+  app.use("*", bodyLimit({ maxSize: 10 * 1024 * 1024 })); // 10MB
+
   // Rate limiting — applied before auth so brute-force is throttled
   app.use("*", rateLimitMiddleware({ maxRequests: 100, windowMs: 60_000 }));
 
@@ -96,8 +107,8 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/hooks", webhookRoutes());
   app.route("/channel", channelRoutes());
   app.route("/connector", connectorRoutes());
-  app.route("/scheduler", schedulerRoutes());
   app.route("/triggers", triggerRoutes());
+  app.route("/tasks", triggerRoutes()); // Unified task surface (alias for /triggers)
   app.route("/oauth", oauthRoutes());
   app.route("/share", shareRoutes());
   app.route("/s", publicShareRoutes());
@@ -146,13 +157,21 @@ export function startServer(
   const port = opts.port ?? Number(process.env.JERIKO_PORT) ?? 3000;
   const hostname = opts.hostname ?? "127.0.0.1";
 
+  if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
+    log.warn(`Daemon binding to ${hostname} — this exposes the API beyond localhost. Ensure firewall rules are in place.`);
+  }
+
   const wsHandlers = createWebSocketHandlers();
 
   server = Bun.serve({
     fetch(req, bunServer) {
       const url = new URL(req.url);
-      // Upgrade WebSocket requests on /ws
+      // Upgrade WebSocket requests on /ws — validate auth before upgrade
       if (url.pathname === "/ws") {
+        const secret = process.env.NODE_AUTH_SECRET;
+        if (!secret) {
+          return new Response("Server authentication is not configured", { status: 503 });
+        }
         const upgraded = bunServer.upgrade(req, { data: {} });
         if (upgraded) return undefined as unknown as Response;
         return new Response("WebSocket upgrade failed", { status: 400 });

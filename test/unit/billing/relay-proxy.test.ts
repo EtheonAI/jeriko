@@ -185,11 +185,15 @@ describe("billing/relay-proxy", () => {
         const { createCheckoutViaRelay } = await import(
           "../../../src/daemon/billing/relay-proxy.js"
         );
-        await createCheckoutViaRelay("user@example.com", true);
+        await createCheckoutViaRelay("user@example.com", {
+          clientIp: "203.0.113.42",
+          userAgent: "Jeriko/2.0",
+        });
 
         expect(capturedBody.userId).toBe("usr_test_123");
         expect(capturedBody.email).toBe("user@example.com");
-        expect(capturedBody.termsAccepted).toBe(true);
+        expect(capturedBody.clientIp).toBe("203.0.113.42");
+        expect(capturedBody.userAgent).toBe("Jeriko/2.0");
       } finally {
         globalThis.fetch = originalFetch;
       }

@@ -30,6 +30,12 @@ export interface RelayPortalResult {
   url: string;
 }
 
+/** Client metadata for chargeback defense evidence. */
+export interface ClientMeta {
+  clientIp?: string;
+  userAgent?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Checkout
 // ---------------------------------------------------------------------------
@@ -41,13 +47,16 @@ export interface RelayPortalResult {
  * on behalf of the daemon. This allows distributed users to upgrade
  * without needing any Stripe keys locally.
  *
- * @param email           Customer email for Stripe Checkout
- * @param termsAccepted   Whether the user accepted Terms of Service
+ * Client metadata (IP, user agent) is forwarded to the relay server
+ * for storage in the Stripe session metadata (chargeback defense).
+ *
+ * @param email       Customer email for Stripe Checkout
+ * @param clientMeta  IP address and user agent from the originating request
  * @returns Checkout URL and session ID, or null if relay unavailable
  */
 export async function createCheckoutViaRelay(
   email: string,
-  termsAccepted: boolean,
+  clientMeta?: ClientMeta,
 ): Promise<RelayCheckoutResult | null> {
   const context = await getRelayContext();
   if (!context) return null;
@@ -62,7 +71,8 @@ export async function createCheckoutViaRelay(
       body: JSON.stringify({
         userId: context.userId,
         email,
-        termsAccepted,
+        clientIp: clientMeta?.clientIp ?? "unknown",
+        userAgent: clientMeta?.userAgent ?? "unknown",
       }),
       signal: AbortSignal.timeout(RELAY_PROXY_TIMEOUT_MS),
     });

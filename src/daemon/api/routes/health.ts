@@ -2,7 +2,6 @@
 
 import { Hono } from "hono";
 import { version } from "node:process";
-import { getUserId } from "../../../shared/config.js";
 
 const startTime = Date.now();
 
@@ -26,7 +25,6 @@ export function healthRoutes(): Hono {
         version: process.env.JERIKO_VERSION ?? "dev",
         node: version,
         runtime: typeof Bun !== "undefined" ? "bun" : "node",
-        user_id: getUserId() ?? null,
         uptime_seconds: uptimeSeconds,
         uptime_human: formatUptime(uptimeSeconds),
         memory: {

@@ -1,193 +1,213 @@
+// Task CLI — unified automation surface backed by the daemon's TriggerEngine.
+//
+// Three task types:
+//   --trigger <source:event>   → event-driven (webhook, file, http, email)
+//   --schedule <cron>          → recurring on cron expression
+//   --once <datetime>          → one-time execution at specific datetime
+//
+// All tasks flow through the daemon's TriggerEngine (SQLite-backed).
+// The old JSON-file-based task system is replaced.
+
 import type { CommandHandler } from "../../dispatcher.js";
 import { parseArgs, flagBool, flagStr } from "../../../shared/args.js";
-import { ok, fail } from "../../../shared/output.js";
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-import { randomUUID } from "node:crypto";
-import { BILLING_ENV } from "../../../daemon/billing/config.js";
 
-const TASKS_DIR = join(homedir(), ".jeriko", "data", "tasks");
-
-interface TaskDef {
-  id: string;
-  name: string;
-  type: "trigger" | "cron" | "once";
-  schedule?: string;
-  command: string;
-  enabled: boolean;
-  created_at: string;
-  last_run?: string;
+function flagNum(parsed: ReturnType<typeof parseArgs>, name: string): number | undefined {
+  const val = flagStr(parsed, name, "");
+  if (!val) return undefined;
+  const n = parseInt(val, 10);
+  return isNaN(n) ? undefined : n;
 }
+import { ok, fail } from "../../../shared/output.js";
+import { sendRequest, isDaemonRunning } from "../../../daemon/api/socket.js";
 
 export const command: CommandHandler = {
   name: "task",
-  description: "Task management (trigger, recurring, cron)",
+  description: "Task management — trigger, schedule, once",
   async run(args: string[]) {
     const parsed = parseArgs(args);
 
     if (flagBool(parsed, "help")) {
-      console.log("Usage: jeriko task <action> [options]");
-      console.log("\nActions:");
-      console.log("  list              List all tasks");
-      console.log("  create <name>     Create a new task");
-      console.log("  get <id>          Get task details");
-      console.log("  enable <id>       Enable a task");
-      console.log("  disable <id>      Disable a task");
-      console.log("  delete <id>       Delete a task");
-      console.log("  run <id>          Run a task immediately");
-      console.log("\nFlags:");
-      console.log("  --type trigger|cron|once   Task type");
-      console.log("  --schedule <cron>          Cron schedule expression");
-      console.log("  --command <cmd>            Command to execute");
+      console.log(`Usage: jeriko task <action> [options]
+
+Actions:
+  list                       List all tasks
+  create <name>              Create a new task
+  info <id>                  Show task details
+  pause <id>                 Disable a task
+  resume <id>                Re-enable a task
+  delete <id>                Remove a task permanently
+  test <id>                  Fire a task manually
+  log [--limit N]            Show recent fire history
+  types                      List trigger event types
+
+Task Types:
+  --trigger stripe:charge.failed    Event-driven (webhook)
+  --trigger gmail:new_email         Event-driven (email polling)
+  --trigger file:change             Event-driven (file watch)
+  --trigger http:down               Event-driven (HTTP polling)
+  --schedule "0 9 * * *"            Recurring (cron expression)
+  --recurring daily --at "09:00"    Recurring (shorthand)
+  --every 5m                        Recurring (interval)
+  --once "2026-06-01T09:00"         One-time at datetime
+
+Action (what to do when fired):
+  --action "prompt for AI"          AI agent action (default)
+  --shell "command"                 Shell command
+
+Options:
+  --from <addr>      Email filter (for email triggers)
+  --subject <text>   Subject filter (for email triggers)
+  --url <URL>        Target URL (for http triggers)
+  --path <PATH>      Watch path (for file triggers)
+  --max-runs <N>     Auto-disable after N fires
+  --no-notify        Suppress notifications`);
       process.exit(0);
     }
 
     const action = parsed.positional[0] ?? "list";
 
-    // Ensure tasks directory exists
-    if (!existsSync(TASKS_DIR)) {
-      mkdirSync(TASKS_DIR, { recursive: true });
+    // Require daemon for all task operations
+    const running = await isDaemonRunning();
+    if (!running) {
+      fail("Daemon not running. Start with: jeriko serve");
+      return;
     }
 
     switch (action) {
       case "list": {
-        const tasks = loadTasks();
-        ok({ tasks, count: tasks.length });
+        const resp = await sendRequest("tasks" as any);
+        if (!resp.ok) { fail(resp.error ?? "Failed to list tasks"); return; }
+        ok({ tasks: resp.data, count: Array.isArray(resp.data) ? resp.data.length : 0 });
         break;
       }
+
       case "create": {
         const name = parsed.positional[1];
-        if (!name) fail("Missing task name. Usage: jeriko task create <name> --command <cmd>");
-        const cmd = flagStr(parsed, "command", "");
-        if (!cmd) fail("Missing --command flag");
-        const type = flagStr(parsed, "type", "once") as TaskDef["type"];
+        if (!name) { fail("Missing task name. Usage: jeriko task create <name> --trigger|--schedule|--once ..."); return; }
+
+        const triggerSpec = flagStr(parsed, "trigger", "");
         const schedule = flagStr(parsed, "schedule", "");
+        const recurring = flagStr(parsed, "recurring", "");
+        const every = flagStr(parsed, "every", "");
+        const once = flagStr(parsed, "once", "");
+        const actionPrompt = flagStr(parsed, "action", "");
+        const shell = flagStr(parsed, "shell", "");
+        const noNotify = flagBool(parsed, "no-notify");
+        const maxRuns = flagNum(parsed, "max-runs");
 
-        if (type === "cron" && !schedule) {
-          fail("Cron tasks require --schedule flag. Example: --schedule '0 9 * * *'");
+        // Build params for daemon
+        const params: Record<string, unknown> = { name };
+
+        if (triggerSpec) {
+          params.trigger = triggerSpec;
+        } else if (schedule) {
+          params.schedule = schedule;
+        } else if (recurring || every) {
+          // Convert recurring shorthand to cron
+          const { parseRecurring } = await import("../../../daemon/services/triggers/task-adapter.js");
+          const at = flagStr(parsed, "at", "");
+          const day = flagStr(parsed, "day", "");
+          const dayOfMonth = flagStr(parsed, "day-of-month", "");
+          const cronExpr = parseRecurring(recurring || every, { at, day, day_of_month: dayOfMonth });
+          params.schedule = cronExpr;
+        } else if (once) {
+          params.once = once;
+        } else {
+          fail("Missing task type. Use --trigger, --schedule, --recurring, --every, or --once");
+          return;
         }
 
-        // Billing gate: check trigger limit before creating a new task.
-        // Only active when billing is configured (STRIPE_BILLING_SECRET_KEY is set).
-        if (process.env[BILLING_ENV.secretKey]) {
-          const { loadSecrets } = await import("../../../shared/secrets.js");
-          loadSecrets();
-          const { canAddTrigger } = await import("../../../daemon/billing/license.js");
-          const enabledCount = loadTasks().filter((t) => t.enabled).length;
-          const check = canAddTrigger(enabledCount);
-          if (!check.allowed) {
-            fail(check.reason!);
-            return;
-          }
-        }
+        if (actionPrompt) params.action = actionPrompt;
+        if (shell) params.shell = shell;
+        if (noNotify) params.no_notify = true;
+        if (maxRuns !== undefined) params.max_runs = maxRuns;
 
-        const task: TaskDef = {
-          id: randomUUID().slice(0, 8),
-          name,
-          type,
-          schedule: schedule || undefined,
-          command: cmd,
-          enabled: true,
-          created_at: new Date().toISOString(),
-        };
+        // Pass through trigger-specific options
+        const from = flagStr(parsed, "from", "");
+        const subject = flagStr(parsed, "subject", "");
+        const url = flagStr(parsed, "url", "");
+        const path = flagStr(parsed, "path", "");
+        const interval = flagNum(parsed, "interval");
+        if (from) params.from = from;
+        if (subject) params.subject = subject;
+        if (url) params.url = url;
+        if (path) params.path = path;
+        if (interval !== undefined) params.interval = interval;
 
-        saveTask(task);
-        ok({ created: true, task });
+        const resp = await sendRequest("task_create" as any, params);
+        if (!resp.ok) { fail(resp.error ?? "Failed to create task"); return; }
+        ok({ created: true, task: resp.data });
         break;
       }
-      case "get": {
-        const id = parsed.positional[1];
-        if (!id) fail("Missing task ID. Usage: jeriko task get <id>");
-        const task = getTask(id);
-        if (!task) fail(`Task not found: "${id}"`, 5);
-        ok(task);
-        break;
-      }
-      case "enable": {
-        const id = parsed.positional[1];
-        if (!id) fail("Missing task ID");
-        const task = getTask(id);
-        if (!task) fail(`Task not found: "${id}"`, 5);
 
-        // Billing gate: check trigger limit before re-enabling a task.
-        if (!task.enabled && process.env[BILLING_ENV.secretKey]) {
-          const { loadSecrets } = await import("../../../shared/secrets.js");
-          loadSecrets();
-          const { canAddTrigger } = await import("../../../daemon/billing/license.js");
-          const enabledCount = loadTasks().filter((t) => t.enabled).length;
-          const check = canAddTrigger(enabledCount);
-          if (!check.allowed) {
-            fail(check.reason!);
-            return;
-          }
-        }
+      case "info": case "get": {
+        const id = parsed.positional[1];
+        if (!id) { fail("Missing task ID. Usage: jeriko task info <id>"); return; }
+        const resp = await sendRequest("task_info" as any, { id });
+        if (!resp.ok) { fail(resp.error ?? "Task not found"); return; }
+        ok(resp.data);
+        break;
+      }
 
-        task.enabled = true;
-        saveTask(task);
-        ok({ enabled: true, id });
+      case "pause": case "disable": {
+        const id = parsed.positional[1];
+        if (!id) { fail("Missing task ID"); return; }
+        const resp = await sendRequest("task_pause" as any, { id });
+        if (!resp.ok) { fail(resp.error ?? "Failed to pause task"); return; }
+        ok({ paused: true, task: resp.data });
         break;
       }
-      case "disable": {
-        const id = parsed.positional[1];
-        if (!id) fail("Missing task ID");
-        const task = getTask(id);
-        if (!task) fail(`Task not found: "${id}"`, 5);
-        task.enabled = false;
-        saveTask(task);
-        ok({ disabled: true, id });
-        break;
-      }
-      case "delete": {
-        const id = parsed.positional[1];
-        if (!id) fail("Missing task ID");
-        const path = join(TASKS_DIR, `${id}.json`);
-        if (!existsSync(path)) fail(`Task not found: "${id}"`, 5);
-        const { unlinkSync } = await import("node:fs");
-        unlinkSync(path);
-        ok({ deleted: true, id });
-        break;
-      }
-      case "run": {
-        const id = parsed.positional[1];
-        if (!id) fail("Missing task ID");
-        const task = getTask(id);
-        if (!task) fail(`Task not found: "${id}"`, 5);
 
-        const { execSync } = await import("node:child_process");
-        try {
-          const output = execSync(task.command, { encoding: "utf-8", timeout: 60000 });
-          task.last_run = new Date().toISOString();
-          saveTask(task);
-          ok({ ran: true, id, output: output.trim() });
-        } catch (err: unknown) {
-          const e = err as { stderr?: string; message?: string };
-          fail(`Task execution failed: ${e.stderr || e.message || "unknown"}`);
-        }
+      case "resume": case "enable": {
+        const id = parsed.positional[1];
+        if (!id) { fail("Missing task ID"); return; }
+        const resp = await sendRequest("task_resume" as any, { id });
+        if (!resp.ok) { fail(resp.error ?? "Failed to resume task"); return; }
+        ok({ resumed: true, task: resp.data });
         break;
       }
+
+      case "delete": case "remove": {
+        const id = parsed.positional[1];
+        if (!id) { fail("Missing task ID"); return; }
+        const resp = await sendRequest("task_delete" as any, { id });
+        if (!resp.ok) { fail(resp.error ?? "Failed to delete task"); return; }
+        ok(resp.data);
+        break;
+      }
+
+      case "test": case "run": {
+        const id = parsed.positional[1];
+        if (!id) { fail("Missing task ID"); return; }
+        const resp = await sendRequest("task_test" as any, { id });
+        if (!resp.ok) { fail(resp.error ?? "Failed to test task"); return; }
+        ok(resp.data);
+        break;
+      }
+
+      case "log": case "history": {
+        const limit = flagNum(parsed, "limit") ?? 20;
+        const resp = await sendRequest("task_log" as any, { limit });
+        if (!resp.ok) { fail(resp.error ?? "Failed to get task log"); return; }
+        ok(resp.data);
+        break;
+      }
+
+      case "types": {
+        const resp = await sendRequest("task_types" as any);
+        if (!resp.ok) { fail(resp.error ?? "Failed to get task types"); return; }
+        ok(resp.data);
+        break;
+      }
+
+      case "reload": {
+        // Reload is handled by restarting the daemon
+        fail("Use `jeriko serve --restart` to reload tasks");
+        break;
+      }
+
       default:
-        fail(`Unknown action: "${action}". Use list, create, get, enable, disable, delete, or run.`);
+        fail(`Unknown action: "${action}". Use list, create, info, pause, resume, delete, test, log, or types.`);
     }
   },
 };
-
-function loadTasks(): TaskDef[] {
-  if (!existsSync(TASKS_DIR)) return [];
-  const { readdirSync } = require("node:fs");
-  const files = readdirSync(TASKS_DIR).filter((f: string) => f.endsWith(".json"));
-  return files.map((f: string) => {
-    const content = readFileSync(join(TASKS_DIR, f), "utf-8");
-    return JSON.parse(content) as TaskDef;
-  });
-}
-
-function getTask(id: string): TaskDef | null {
-  const path = join(TASKS_DIR, `${id}.json`);
-  if (!existsSync(path)) return null;
-  return JSON.parse(readFileSync(path, "utf-8")) as TaskDef;
-}
-
-function saveTask(task: TaskDef): void {
-  writeFileSync(join(TASKS_DIR, `${task.id}.json`), JSON.stringify(task, null, 2) + "\n");
-}

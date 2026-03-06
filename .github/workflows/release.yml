@@ -1,0 +1,236 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Gate: Tests must pass ──────────────────────────────────────
+  gate:
+    name: Pre-Release Gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Unit tests
+        run: bun test test/unit/ --timeout 30000
+
+      - name: Integration tests
+        run: bun test test/integration/ --timeout 60000
+
+  # ── Build all platforms ────────────────────────────────────────
+  build:
+    name: Build Release
+    needs: gate
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - name: Build all platforms
+        run: bash scripts/release.sh
+
+      - name: List artifacts
+        run: ls -lah dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+          retention-days: 3
+
+  # ── Verify on each platform ────────────────────────────────────
+  verify-macos:
+    name: Verify macOS
+    needs: build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+
+      - name: Verify darwin-arm64
+        run: |
+          chmod +x dist/jeriko-darwin-arm64
+          ./dist/jeriko-darwin-arm64 --version
+          echo "macOS arm64 OK"
+
+  verify-windows:
+    name: Verify Windows
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+
+      - name: Verify windows-x64
+        shell: pwsh
+        run: |
+          & .\dist\jeriko-windows-x64.exe --version
+          Write-Host "Windows x64 OK"
+
+  verify-linux:
+    name: Verify Linux
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+
+      - name: Verify linux-x64
+        run: |
+          chmod +x dist/jeriko-linux-x64
+          ./dist/jeriko-linux-x64 --version
+          echo "Linux x64 OK"
+
+  # ── Upload to CDN ──────────────────────────────────────────────
+  upload-cdn:
+    name: Upload to CDN
+    needs: [build, verify-macos, verify-windows, verify-linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+
+      - name: Install wrangler
+        run: npm install -g wrangler
+
+      - name: Upload to R2
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          BUCKET="${JERIKO_R2_BUCKET:-jeriko-releases}"
+
+          # Upload each binary
+          for f in dist/jeriko-*; do
+            filename=$(basename "$f")
+            echo "Uploading $filename..."
+            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/${filename}" \
+              --file "$f" --content-type "application/octet-stream"
+          done
+
+          # Upload manifest
+          wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/manifest.json" \
+            --file dist/manifest.json --content-type "application/json"
+
+          # Upload templates
+          if [ -f dist/templates.tar.gz ]; then
+            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/templates.tar.gz" \
+              --file dist/templates.tar.gz --content-type "application/gzip"
+          fi
+
+          # Upload agent prompt
+          if [ -f dist/agent.md ]; then
+            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/agent.md" \
+              --file dist/agent.md --content-type "text/markdown"
+          fi
+
+          # Update latest pointer
+          echo -n "$VERSION" > dist/latest
+          wrangler r2 object put --remote "${BUCKET}/releases/latest" \
+            --file dist/latest --content-type "text/plain"
+
+          echo "CDN upload complete: $VERSION"
+
+  # ── Create GitHub Release ──────────────────────────────────────
+  publish:
+    name: Publish GitHub Release
+    needs: [build, verify-macos, verify-windows, verify-linux, upload-cdn]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-artifacts
+          path: dist/
+
+      - name: Determine prerelease
+        id: prerelease
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+          if echo "$VERSION" | grep -qE '(alpha|beta|rc)'; then
+            echo "flag=--prerelease" >> "$GITHUB_OUTPUT"
+          else
+            echo "flag=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ needs.build.outputs.version }}"
+
+          # Collect assets
+          ASSETS=""
+          for f in dist/jeriko-*; do
+            ASSETS="$ASSETS $f"
+          done
+          ASSETS="$ASSETS dist/manifest.json"
+          [ -f dist/templates.tar.gz ] && ASSETS="$ASSETS dist/templates.tar.gz"
+          [ -f dist/agent.md ] && ASSETS="$ASSETS dist/agent.md"
+
+          gh release create "v${VERSION}" \
+            --title "Jeriko v${VERSION}" \
+            --generate-notes \
+            ${{ steps.prerelease.outputs.flag }} \
+            $ASSETS

@@ -20,7 +20,10 @@ export class WebhookTrigger {
    * Returns true if the signature is valid (or if no secret is configured).
    */
   verify(payload: unknown, headers: Record<string, string>): boolean {
-    if (!this.secret) return true;
+    if (!this.secret) {
+      log.warn("Webhook trigger has no secret configured — accepting without signature verification");
+      return true;
+    }
 
     const body = typeof payload === "string" ? payload : JSON.stringify(payload);
 

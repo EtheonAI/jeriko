@@ -10,6 +10,8 @@ import {
   getLicense,
   hasEvent,
   getRecentEvents,
+  getConsentBySubscription,
+  getConsentBySession,
 } from "../../../src/daemon/billing/store.js";
 import { BILLING_ENV } from "../../../src/daemon/billing/config.js";
 import { join } from "node:path";
@@ -58,6 +60,7 @@ describe("billing/webhook", () => {
     db.prepare("DELETE FROM billing_subscription").run();
     db.prepare("DELETE FROM billing_license").run();
     db.prepare("DELETE FROM billing_event").run();
+    db.prepare("DELETE FROM billing_consent").run();
   });
 
   // ── Helper: create a signed webhook payload ──────────────────
@@ -172,6 +175,9 @@ describe("billing/webhook", () => {
         subscription: "sub_new_checkout",
         customer: "cus_new",
         customer_email: "new@example.com",
+        consent: {
+          terms_of_service: "accepted",
+        },
         metadata: {
           source: "jeriko-cli",
           terms_accepted: "true",
@@ -408,6 +414,125 @@ describe("billing/webhook", () => {
       const events = getRecentEvents(100);
       const matching = events.filter((e) => e.id === eventId);
       expect(matching.length).toBe(1);
+    });
+  });
+
+  // ── invoice.payment_action_required ──────────────────────────
+
+  describe("invoice.payment_action_required", () => {
+    it("handles 3DS/SCA authentication requirement", () => {
+      // Create subscription first
+      const checkoutBody = makeEvent("checkout.session.completed", {
+        subscription: "sub_3ds_test",
+        customer: "cus_3ds",
+        customer_email: "3ds@example.com",
+        metadata: {},
+      });
+      processWebhookEvent(checkoutBody, signPayload(checkoutBody));
+
+      // 3DS action required
+      const actionBody = makeEvent("invoice.payment_action_required", {
+        subscription: "sub_3ds_test",
+        hosted_invoice_url: "https://invoice.stripe.com/i/test_123",
+      });
+      const result = processWebhookEvent(actionBody, signPayload(actionBody));
+
+      expect(result.handled).toBe(true);
+      expect(result.eventType).toBe("invoice.payment_action_required");
+
+      // Subscription should NOT be downgraded (it's waiting for auth, not failed)
+      const sub = getSubscriptionById("sub_3ds_test");
+      expect(sub!.status).toBe("active");
+      expect(sub!.tier).toBe("pro");
+    });
+
+    it("records event in audit trail", () => {
+      const eventId = `evt_3ds_audit_${Date.now()}`;
+      const body = makeEvent("invoice.payment_action_required", {
+        subscription: "sub_3ds_audit",
+        hosted_invoice_url: "https://invoice.stripe.com/test",
+      }, eventId);
+
+      processWebhookEvent(body, signPayload(body));
+      expect(hasEvent(eventId)).toBe(true);
+    });
+  });
+
+  // ── Consent evidence (checkout.session.completed) ────────────
+
+  describe("consent evidence", () => {
+    it("stores consent data from checkout completion", () => {
+      const eventId = `evt_consent_${Date.now()}`;
+      const body = makeEvent("checkout.session.completed", {
+        id: "cs_consent_test",
+        subscription: "sub_consent_checkout",
+        customer: "cus_consent_checkout",
+        customer_email: "consent@example.com",
+        consent: {
+          terms_of_service: "accepted",
+        },
+        billing_address_collection: "required",
+        metadata: {
+          source: "jeriko-cli",
+          client_ip: "203.0.113.42",
+          user_agent: "jeriko-cli/2.0.0 (linux)",
+        },
+      }, eventId);
+      const sig = signPayload(body);
+
+      const result = processWebhookEvent(body, sig);
+      expect(result.handled).toBe(true);
+
+      // Consent record should be created
+      const consent = getConsentBySubscription("sub_consent_checkout");
+      expect(consent).not.toBeNull();
+      expect(consent!.subscription_id).toBe("sub_consent_checkout");
+      expect(consent!.customer_id).toBe("cus_consent_checkout");
+      expect(consent!.email).toBe("consent@example.com");
+      expect(consent!.client_ip).toBe("203.0.113.42");
+      expect(consent!.user_agent).toBe("jeriko-cli/2.0.0 (linux)");
+      expect(consent!.stripe_consent_collected).toBe(true);
+      expect(consent!.terms_accepted_at).not.toBeNull();
+      expect(consent!.terms_url).toBe("https://jeriko.ai/terms");
+      expect(consent!.checkout_session_id).toBe("cs_consent_test");
+    });
+
+    it("stores consent even when Stripe consent not collected", () => {
+      const body = makeEvent("checkout.session.completed", {
+        id: "cs_no_consent",
+        subscription: "sub_no_consent",
+        customer: "cus_no_consent",
+        customer_email: "noconsent@example.com",
+        // No consent field
+        metadata: {
+          client_ip: "10.0.0.1",
+        },
+      });
+
+      processWebhookEvent(body, signPayload(body));
+
+      const consent = getConsentBySubscription("sub_no_consent");
+      expect(consent).not.toBeNull();
+      expect(consent!.stripe_consent_collected).toBe(false);
+      expect(consent!.terms_accepted_at).toBeNull();
+      expect(consent!.client_ip).toBe("10.0.0.1");
+    });
+
+    it("retrieves consent by checkout session ID", () => {
+      const body = makeEvent("checkout.session.completed", {
+        id: "cs_session_lookup",
+        subscription: "sub_session_lookup",
+        customer: "cus_session_lookup",
+        customer_email: "session@example.com",
+        consent: { terms_of_service: "accepted" },
+        metadata: {},
+      });
+
+      processWebhookEvent(body, signPayload(body));
+
+      const consent = getConsentBySession("cs_session_lookup");
+      expect(consent).not.toBeNull();
+      expect(consent!.subscription_id).toBe("sub_session_lookup");
     });
   });
 

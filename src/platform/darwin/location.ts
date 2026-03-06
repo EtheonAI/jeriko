@@ -9,7 +9,7 @@ export class DarwinLocation implements LocationProvider {
    * For precise GPS location, macOS CoreLocation requires a native helper.
    */
   async current(): Promise<LocationInfo> {
-    const response = await fetch("http://ip-api.com/json/?fields=lat,lon,city,regionName,country,timezone,query");
+    const response = await fetch("https://ip-api.com/json/?fields=lat,lon,city,regionName,country,timezone,query");
 
     if (!response.ok) {
       throw new Error(`Location lookup failed: HTTP ${response.status}`);

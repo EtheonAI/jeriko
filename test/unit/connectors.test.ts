@@ -13,6 +13,7 @@ import {
   CONNECTOR_DEFS,
   getConnectorDef,
   isConnectorConfigured,
+  getConfiguredConnectorCount,
 } from "../../src/shared/connector.js";
 import {
   CONNECTOR_FACTORIES,
@@ -596,5 +597,70 @@ describe("PayPal connector (direct instantiation)", () => {
     const result = await connector.call("nonexistent.method", {});
     expect(result.ok).toBe(false);
     expect(result.error).toContain("Unknown PayPal method");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getConfiguredConnectorCount — unified connector usage count
+// ---------------------------------------------------------------------------
+
+describe("getConfiguredConnectorCount", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+
+  // Save and clear all connector env vars before each test
+  beforeEach(() => {
+    const allVars = CONNECTOR_DEFS.flatMap((d) => [
+      ...d.required.flatMap((e) => (Array.isArray(e) ? e : [e])),
+      ...d.optional,
+    ]);
+    for (const v of allVars) {
+      savedEnv[v] = process.env[v];
+      delete process.env[v];
+    }
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
+  });
+
+  it("returns 0 when no connectors are configured", () => {
+    expect(getConfiguredConnectorCount()).toBe(0);
+  });
+
+  it("counts single configured connector", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    expect(getConfiguredConnectorCount()).toBe(1);
+  });
+
+  it("counts multiple configured connectors", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    process.env.GITHUB_TOKEN = "ghp_fake";
+    process.env.TWILIO_ACCOUNT_SID = "AC_fake";
+    process.env.TWILIO_AUTH_TOKEN = "fake_auth";
+    expect(getConfiguredConnectorCount()).toBe(3);
+  });
+
+  it("does not count partially configured connectors", () => {
+    // PayPal needs BOTH client_id and client_secret
+    process.env.PAYPAL_CLIENT_ID = "fake_id";
+    // Missing PAYPAL_CLIENT_SECRET
+    expect(getConfiguredConnectorCount()).toBe(0);
+  });
+
+  it("counts connector with alternative env vars", () => {
+    // GitHub accepts GITHUB_TOKEN or GH_TOKEN
+    process.env.GH_TOKEN = "ghp_fake";
+    expect(getConfiguredConnectorCount()).toBe(1);
+  });
+
+  it("is consistent with isConnectorConfigured", () => {
+    process.env.STRIPE_SECRET_KEY = "sk_test_fake";
+    process.env.GITHUB_TOKEN = "ghp_fake";
+
+    const manualCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+    expect(getConfiguredConnectorCount()).toBe(manualCount);
   });
 });

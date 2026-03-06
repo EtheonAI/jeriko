@@ -33,7 +33,7 @@ export const command: CommandHandler = {
       console.log("  jeriko install latest              Install as latest");
       console.log("  jeriko install 2.0.0               Install as specific version");
       console.log("\nPlugin install:");
-      console.log("  jeriko install @jeriko/plugin-slack");
+      console.log("  jeriko install @jeriko/plugin-example");
       console.log("  jeriko install ./my-plugin");
       console.log("  jeriko install https://github.com/user/jeriko-plugin");
       console.log("\nFlags:");

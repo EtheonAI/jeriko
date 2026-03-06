@@ -2,7 +2,8 @@
 set -e
 
 # ── Jeriko Linux Install Test ────────────────────────────────────
-# Runs inside Docker container with repo mounted at /repo
+# Runs inside Docker container. /repo is mounted read-only.
+# /dist contains the built binaries + manifest.json.
 
 PASS=0
 FAIL=0
@@ -14,82 +15,124 @@ fail() { FAIL=$((FAIL + 1)); TESTS=$((TESTS + 1)); echo "  [FAIL] $1"; }
 echo ""
 echo "  Jeriko Linux Install Test"
 echo "  $(date)"
+echo "  User: $(whoami), Arch: $(uname -m)"
 echo ""
 
-# ── Test 1: Git install method ──────────────────────────────────────
+# ── Setup: local file server ──────────────────────────────────────
 
-echo "── Test: install.sh --install-method git ──"
+# Serve dist/ as a mock CDN
+VERSION=$(grep '"version"' /repo/package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
 
-bash /repo/install.sh --no-onboard --install-method git --git-dir /tmp/Jeriko-test
+if [ -d /dist ]; then
+  mkdir -p "/tmp/cdn/releases/${VERSION}"
+  cp /dist/jeriko-linux-* "/tmp/cdn/releases/${VERSION}/" 2>/dev/null || true
+  cp /dist/manifest.json "/tmp/cdn/releases/${VERSION}/" 2>/dev/null || true
+  cp /dist/agent.md "/tmp/cdn/releases/${VERSION}/" 2>/dev/null || true
+  echo -n "$VERSION" > "/tmp/cdn/releases/latest"
+  cd /tmp/cdn && python3 -m http.server 9876 &
+  sleep 1
+  export JERIKO_CDN_URL="http://127.0.0.1:9876"
+fi
+
+# ── Test 1: install.sh binary installer ───────────────────────────
+
+echo "── Test: install.sh (binary installer) ──"
+
+if [ -n "$JERIKO_CDN_URL" ]; then
+  bash /repo/scripts/install.sh latest
+
+  if [ -f "$HOME/.local/bin/jeriko" ]; then
+    pass "Binary installed to ~/.local/bin/jeriko"
+  else
+    fail "Binary not found at ~/.local/bin/jeriko"
+  fi
+
+  export PATH="$HOME/.local/bin:$PATH"
+
+  if command -v jeriko &>/dev/null; then
+    pass "jeriko command is available"
+  else
+    fail "jeriko command not found in PATH"
+  fi
+else
+  echo "  [SKIP] No dist/ mounted — skipping binary install test"
+fi
+
+# ── Test 2: jeriko --version ──────────────────────────────────────
+
+echo ""
+echo "── Test: jeriko --version ──"
 
 if command -v jeriko &>/dev/null; then
-  pass "jeriko command available after git install"
-else
-  # Try direct path
-  if [ -x /tmp/Jeriko-test/bin/jeriko ]; then
-    export PATH="/tmp/Jeriko-test/bin:$HOME/.local/bin:$PATH"
-    pass "jeriko binary exists (PATH needed refresh)"
+  VER_OUT=$(jeriko --version 2>/dev/null || true)
+  if [ -n "$VER_OUT" ]; then
+    pass "jeriko --version: $VER_OUT"
   else
-    fail "jeriko not found after git install"
+    fail "jeriko --version returned empty"
   fi
 fi
 
-# ── Test 2: discover --list ─────────────────────────────────────────
+# ── Test 3: Directory structure ───────────────────────────────────
 
 echo ""
-echo "── Test: jeriko discover --list ──"
+echo "── Test: Directory structure ──"
 
-CMD_COUNT=$(jeriko discover --list 2>/dev/null | wc -l || echo "0")
-CMD_COUNT=$(echo "$CMD_COUNT" | tr -d ' ')
-
-if [ "$CMD_COUNT" -ge 10 ]; then
-  pass "discover --list found $CMD_COUNT commands"
+if [ -d "$HOME/.jeriko" ]; then
+  pass "Data directory exists (~/.jeriko)"
 else
-  fail "discover --list found only $CMD_COUNT commands (expected 10+)"
+  fail "Data directory missing (~/.jeriko)"
 fi
 
-# ── Test 3: jeriko sys ──────────────────────────────────────────────
+if [ -d "$HOME/.config/jeriko" ]; then
+  pass "Config directory exists (~/.config/jeriko)"
+else
+  fail "Config directory missing (~/.config/jeriko)"
+fi
+
+# ── Test 4: Shell completions ─────────────────────────────────────
 
 echo ""
-echo "── Test: jeriko sys ──"
+echo "── Test: Shell completions ──"
 
-SYS_OUT=$(jeriko sys --info --format json 2>/dev/null || echo "")
-
-if echo "$SYS_OUT" | grep -q '"ok":true'; then
-  pass "jeriko sys --info returns ok:true"
+if [ -f "$HOME/.local/share/bash-completion/completions/jeriko" ]; then
+  pass "Bash completion installed"
 else
-  # sys may fail in Docker due to limited access, check if it at least runs
-  if jeriko sys --info 2>/dev/null; then
-    pass "jeriko sys --info ran successfully"
+  fail "Bash completion missing"
+fi
+
+if [ -f "$HOME/.local/share/zsh/site-functions/_jeriko" ]; then
+  pass "Zsh completion installed"
+else
+  fail "Zsh completion missing"
+fi
+
+# ── Test 5: User identity ────────────────────────────────────────
+
+echo ""
+echo "── Test: User identity ──"
+
+if [ -f "$HOME/.config/jeriko/.env" ]; then
+  if grep -q "JERIKO_USER_ID=" "$HOME/.config/jeriko/.env"; then
+    pass "JERIKO_USER_ID generated"
   else
-    fail "jeriko sys --info failed"
+    fail "JERIKO_USER_ID not found in .env"
   fi
+else
+  fail ".env file missing"
 fi
 
-# ── Test 4: jeriko exec ────────────────────────────────────────────
+# ── Test 6: Output contract ──────────────────────────────────────
 
 echo ""
-echo "── Test: jeriko exec ──"
+echo "── Test: Output contract ──"
 
-EXEC_OUT=$(jeriko exec echo hello 2>/dev/null || echo "")
-
-if echo "$EXEC_OUT" | grep -q "hello"; then
-  pass "jeriko exec echo hello"
-else
-  fail "jeriko exec echo hello (got: $EXEC_OUT)"
-fi
-
-# ── Test 5: jeriko fs ──────────────────────────────────────────────
-
-echo ""
-echo "── Test: jeriko fs ──"
-
-FS_OUT=$(jeriko fs --ls / 2>/dev/null || echo "")
-
-if [ -n "$FS_OUT" ]; then
-  pass "jeriko fs --ls /"
-else
-  fail "jeriko fs --ls / returned empty"
+if command -v jeriko &>/dev/null; then
+  HELP_OUT=$(jeriko --help 2>/dev/null || true)
+  if echo "$HELP_OUT" | grep -qi "jeriko\|command\|usage"; then
+    pass "jeriko --help produces meaningful output"
+  else
+    fail "jeriko --help output unexpected: $(echo "$HELP_OUT" | head -3)"
+  fi
 fi
 
 # ── Summary ─────────────────────────────────────────────────────────

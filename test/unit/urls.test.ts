@@ -103,20 +103,21 @@ describe("urls", () => {
   // ── buildOAuthCallbackUrl ───────────────────────────────────
 
   describe("buildOAuthCallbackUrl", () => {
-    it("includes userId when using relay", () => {
+    it("never includes userId in the URL path (relay mode)", () => {
       process.env.JERIKO_USER_ID = "user-abc-123";
       const url = buildOAuthCallbackUrl("github");
-      expect(url).toBe("https://bot.jeriko.ai/oauth/user-abc-123/github/callback");
+      expect(url).toBe("https://bot.jeriko.ai/oauth/github/callback");
+      expect(url).not.toContain("user-abc-123");
     });
 
-    it("omits userId when self-hosted", () => {
+    it("uses public URL when self-hosted", () => {
       process.env.JERIKO_PUBLIC_URL = "https://my-tunnel.example.com";
       process.env.JERIKO_USER_ID = "user-abc-123";
       const url = buildOAuthCallbackUrl("github");
       expect(url).toBe("https://my-tunnel.example.com/oauth/github/callback");
     });
 
-    it("omits userId when no userId available", () => {
+    it("uses default URL when no userId available", () => {
       const url = buildOAuthCallbackUrl("github");
       expect(url).toBe("https://bot.jeriko.ai/oauth/github/callback");
     });
@@ -125,13 +126,14 @@ describe("urls", () => {
   // ── buildOAuthStartUrl ──────────────────────────────────────
 
   describe("buildOAuthStartUrl", () => {
-    it("includes userId when using relay", () => {
+    it("never includes userId in the URL path (relay mode)", () => {
       process.env.JERIKO_USER_ID = "user-abc-123";
       const url = buildOAuthStartUrl("github", "state-token-xyz");
-      expect(url).toBe("https://bot.jeriko.ai/oauth/user-abc-123/github/start?state=state-token-xyz");
+      expect(url).toBe("https://bot.jeriko.ai/oauth/github/start?state=state-token-xyz");
+      expect(url).not.toContain("user-abc-123");
     });
 
-    it("omits userId when self-hosted", () => {
+    it("uses public URL when self-hosted", () => {
       process.env.JERIKO_PUBLIC_URL = "https://my-tunnel.example.com";
       const url = buildOAuthStartUrl("github", "state-token-xyz");
       expect(url).toBe("https://my-tunnel.example.com/oauth/github/start?state=state-token-xyz");

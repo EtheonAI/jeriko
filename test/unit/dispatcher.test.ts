@@ -18,7 +18,10 @@ describe("dispatcher", () => {
     const { dispatcher } = await import("../../src/cli/dispatcher.js");
     try {
       await dispatcher(["--version"]);
-    } catch { /* EXIT thrown by mock */ }
+    } catch (e: any) {
+      // Only swallow the EXIT error from our process.exit mock
+      if (e?.message !== "EXIT") throw e;
+    }
     expect(logSpy).toHaveBeenCalledWith("jeriko 2.0.0-alpha.0");
   });
 
@@ -26,7 +29,9 @@ describe("dispatcher", () => {
     const { dispatcher } = await import("../../src/cli/dispatcher.js");
     try {
       await dispatcher(["--help"]);
-    } catch { /* EXIT thrown by mock */ }
+    } catch (e: any) {
+      if (e?.message !== "EXIT") throw e;
+    }
     const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
     expect(output).toContain("Unix-first CLI toolkit");
     expect(output).toContain("Commands:");

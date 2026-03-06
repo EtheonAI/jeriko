@@ -280,13 +280,14 @@ describe("relay end-to-end", () => {
   // ── OAuth callback proxying ───────────────────────────────────
 
   describe("oauth callback proxying", () => {
-    it("forwards OAuth callback to daemon and returns HTML", async () => {
+    it("forwards OAuth callback to daemon and returns HTML (state-based routing)", async () => {
       const client = await connectDaemon("user-oauth-1");
       await client.waitForMessage("auth_ok");
 
       // Simulate: OAuth provider redirects browser to relay
+      // userId is in the composite state (user-oauth-1.xyz789), not in the URL path
       const oauthPromise = relayFetch(
-        "/oauth/user-oauth-1/github/callback?code=abc123&state=xyz789",
+        "/oauth/github/callback?code=abc123&state=user-oauth-1.xyz789",
       );
 
       // Daemon receives the OAuth callback
@@ -294,7 +295,7 @@ describe("relay end-to-end", () => {
       expect(msg.type).toBe("oauth_callback");
       expect(msg.provider).toBe("github");
       expect(msg.params.code).toBe("abc123");
-      expect(msg.params.state).toBe("xyz789");
+      expect(msg.params.state).toBe("user-oauth-1.xyz789");
       expect(msg.requestId).toBeDefined();
 
       // Daemon responds with success HTML
@@ -314,13 +315,32 @@ describe("relay end-to-end", () => {
       client.close();
     });
 
+    it("returns 400 when state parameter is missing", async () => {
+      const res = await relayFetch(
+        "/oauth/github/callback?code=abc",
+      );
+      expect(res.status).toBe(400);
+      const html = await res.text();
+      expect(html).toContain("Missing or invalid state");
+    });
+
     it("returns 503 when daemon is not connected for OAuth", async () => {
       const res = await relayFetch(
-        "/oauth/nonexistent-user/github/callback?code=abc&state=xyz",
+        "/oauth/github/callback?code=abc&state=nonexistent-user.xyz",
       );
       expect(res.status).toBe(503);
       const html = await res.text();
       expect(html).toContain("not connected");
+    });
+
+    it("legacy URL with userId in path redirects to clean URL", async () => {
+      const res = await relayFetch(
+        "/oauth/user-oauth-1/github/callback?code=abc&state=xyz",
+        { redirect: "manual" },
+      );
+      expect(res.status).toBe(301);
+      const location = res.headers.get("location");
+      expect(location).toBe("/oauth/github/callback?code=abc&state=xyz");
     });
   });
 

@@ -1,0 +1,188 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/daemon/**'
+      - 'src/shared/**'
+      - 'apps/relay/**'
+      - 'test/integration/**'
+      - 'test/e2e/**'
+  schedule:
+    # Weekly on Sundays at 04:00 UTC
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relay:
+    name: Relay Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Relay E2E tests
+        run: bun test test/integration/relay-e2e.test.ts --timeout 60000
+
+  channels:
+    name: Channel Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Channel connector integration
+        run: bun test test/integration/channel-connectors.test.ts --timeout 60000
+
+  commands:
+    name: Command Integration
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Command integration tests
+        run: bun test test/integration/commands.test.ts --timeout 60000
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: E2E channel commands
+        run: bun test test/e2e/ --timeout 60000
+
+  billing:
+    name: Billing Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Billing unit tests
+        run: bun test test/unit/billing/ --timeout 30000
+
+  connectors:
+    name: Connector Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Connector tests
+        run: bun test test/unit/connectors.test.ts test/unit/oauth.test.ts --timeout 30000
+
+  triggers:
+    name: Trigger Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: deps-${{ runner.os }}-
+
+      - run: bun install --frozen-lockfile
+
+      - name: Trigger tests
+        run: bun test test/unit/trigger-engine.test.ts test/unit/trigger-routes.test.ts test/unit/email-trigger.test.ts --timeout 30000

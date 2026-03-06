@@ -182,6 +182,7 @@ export function publicShareRoutes(): Hono {
    */
   router.get("/:id", (c) => {
     const result = renderShareById(c.req.param("id"));
+    c.header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");
     return c.html(result.html, result.statusCode);
   });
 

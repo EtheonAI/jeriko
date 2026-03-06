@@ -14,7 +14,8 @@ export interface CheckoutSessionParams {
   priceId: string;
   email: string;
   userId: string;
-  termsAccepted: boolean;
+  clientIp?: string;
+  userAgent?: string;
   successUrl: string;
   cancelUrl: string;
 }
@@ -62,15 +63,34 @@ export async function createCheckoutSession(
   body.set("success_url", params.successUrl);
   body.set("cancel_url", params.cancelUrl);
 
+  // Collect billing address for AVS fraud checks and dispute evidence
+  body.set("billing_address_collection", "required");
+
+  // Stripe-managed Terms of Service consent (creates verifiable record)
+  body.set("consent_collection[terms_of_service]", "required");
+
+  // Link checkout session to internal user ID (visible in Stripe Dashboard)
+  if (params.userId) {
+    body.set("client_reference_id", params.userId);
+  }
+
+  // Note: customer_creation is implicit in subscription mode (always creates customer).
+  // payment_method_collection is implicit in subscription mode (always required).
+
+  const now = new Date().toISOString();
+
   // Subscription metadata — persisted on the subscription object
   body.set("subscription_data[metadata][source]", "jeriko-cli");
   body.set("subscription_data[metadata][jeriko_user_id]", params.userId);
-  body.set("subscription_data[metadata][terms_accepted]", params.termsAccepted ? "true" : "false");
-  body.set("subscription_data[metadata][terms_accepted_at]", new Date().toISOString());
+  body.set("subscription_data[metadata][client_ip]", params.clientIp ?? "unknown");
+  body.set("subscription_data[metadata][user_agent]", params.userAgent ?? "unknown");
+  body.set("subscription_data[metadata][checkout_at]", now);
 
   // Session metadata — available in checkout.session.completed event
   body.set("metadata[source]", "jeriko-cli");
   body.set("metadata[jeriko_user_id]", params.userId);
+  body.set("metadata[client_ip]", params.clientIp ?? "unknown");
+  body.set("metadata[user_agent]", params.userAgent ?? "unknown");
 
   const response = await stripeRequest(params.secretKey, "/checkout/sessions", body);
 

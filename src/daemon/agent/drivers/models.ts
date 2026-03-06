@@ -33,6 +33,10 @@ export interface ModelCapabilities {
   toolCall: boolean;
   /** Supports reasoning/thinking mode. */
   reasoning: boolean;
+  /** Supports image/vision input (screenshots, photos). */
+  vision: boolean;
+  /** Supports structured output / JSON mode. */
+  structuredOutput: boolean;
   /** Cost per 1M input tokens (USD). 0 for local models. */
   costInput: number;
   /** Cost per 1M output tokens (USD). 0 for local models. */
@@ -102,21 +106,25 @@ const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
   anthropic: {
     id: "claude-sonnet-4-6", provider: "anthropic", family: "claude-sonnet",
     context: 200_000, maxOutput: 64_000, toolCall: true, reasoning: true,
+    vision: true, structuredOutput: true,
     costInput: 3, costOutput: 15,
   },
   openai: {
     id: "gpt-4o", provider: "openai", family: "gpt",
     context: 128_000, maxOutput: 16_384, toolCall: true, reasoning: false,
+    vision: true, structuredOutput: true,
     costInput: 2.5, costOutput: 10,
   },
   local: {
     id: "llama3", provider: "local", family: "llama",
     context: 32_768, maxOutput: 4_096, toolCall: false, reasoning: false,
+    vision: false, structuredOutput: false,
     costInput: 0, costOutput: 0,
   },
   "claude-code": {
     id: "claude-sonnet-4-6", provider: "claude-code", family: "claude-code",
     context: 200_000, maxOutput: 16_384, toolCall: false, reasoning: true,
+    vision: true, structuredOutput: true,
     costInput: 0, costOutput: 0,
   },
 };
@@ -186,6 +194,8 @@ function parseRegistry(data: Record<string, unknown>): void {
         maxOutput: (limit.output as number) ?? 0,
         toolCall: (m.tool_call as boolean) ?? false,
         reasoning: (m.reasoning as boolean) ?? false,
+        vision: (m.vision as boolean) ?? false,
+        structuredOutput: (m.structured_output as boolean) ?? (m.json_mode as boolean) ?? false,
         costInput: (cost.input as number) ?? 0,
         costOutput: (cost.output as number) ?? 0,
       };
@@ -282,6 +292,7 @@ function scoreCaps(caps: ModelCapabilities): number {
   return (
     (caps.toolCall ? 4 : 0) +
     (caps.reasoning ? 4 : 0) +
+    (caps.vision ? 2 : 0) +
     (caps.context > 0 ? 2 : 0) +
     (caps.maxOutput > 0 ? 1 : 0)
   );
@@ -377,13 +388,15 @@ function crossReferenceWithRegistry(
       log.debug(
         `Ollama cross-ref "${modelId}" → matched "${ref.id}" ` +
         `(family: ${ref.family}, provider: ${ref.provider}) ` +
-        `[reasoning=${ref.reasoning} ctx=${ref.context} out=${ref.maxOutput}]`,
+        `[reasoning=${ref.reasoning} vision=${ref.vision} ctx=${ref.context} out=${ref.maxOutput}]`,
       );
 
       return {
         ...probed,
         // Inherit model-intrinsic capabilities from models.dev
         reasoning: ref.reasoning,
+        vision: ref.vision,
+        structuredOutput: ref.structuredOutput,
         // Use the larger value — Ollama probe may underreport, but models.dev
         // reflects the model's true capacity regardless of runtime config.
         context: Math.max(probed.context, ref.context),
@@ -492,12 +505,14 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     maxOutput,
     toolCall,
     reasoning: false,
+    vision: false,
+    structuredOutput: false,
     costInput: 0,
     costOutput: 0,
   };
 
   // Cross-reference with models.dev to detect capabilities that Ollama's
-  // /api/show can't report — primarily `reasoning` mode, but also more
+  // /api/show can't report — reasoning, vision, structured output, and more
   // accurate context/output limits from the model's spec sheet.
   const enriched = crossReferenceWithRegistry(modelId, probed);
 
@@ -634,6 +649,8 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
     maxOutput: 4_096,
     toolCall: false,
     reasoning: false,
+    vision: false,
+    structuredOutput: false,
     costInput: 0,
     costOutput: 0,
   };
@@ -702,6 +719,111 @@ export function isKnownProvider(name: string): boolean {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic model fetching from provider endpoints
+// ---------------------------------------------------------------------------
+
+/** A model available on a remote provider (from /models endpoint). */
+export interface RemoteModel {
+  id: string;
+  created?: number;
+  owned_by?: string;
+  /** Ollama-specific: model file size in bytes. */
+  size?: number;
+  /** Ollama-specific: parameter count (e.g. "8B", "70B"). */
+  parameter_size?: string;
+  /** Ollama-specific: quantization level (e.g. "Q4_K_M"). */
+  quantization?: string;
+}
+
+/**
+ * Fetch available models from Ollama's /api/tags endpoint.
+ *
+ * Returns the list of locally available models. Non-fatal — returns empty on error.
+ * Used by `jeriko provider models local` and model listing in the REPL.
+ */
+export async function fetchOllamaModels(): Promise<RemoteModel[]> {
+  const baseUrl = getOllamaBaseUrl();
+
+  try {
+    const resp = await fetch(`${baseUrl}/api/tags`, {
+      signal: AbortSignal.timeout(5_000),
+    });
+
+    if (!resp.ok) return [];
+
+    const data = (await resp.json()) as {
+      models?: Array<{
+        name?: string;
+        modified_at?: string;
+        size?: number;
+        details?: { family?: string; parameter_size?: string; quantization_level?: string };
+      }>;
+    };
+
+    if (!Array.isArray(data.models)) return [];
+
+    return data.models.map((m) => ({
+      id: m.name ?? "",
+      owned_by: m.details?.family,
+      size: m.size,
+      parameter_size: m.details?.parameter_size,
+      quantization: m.details?.quantization_level,
+    })).filter((m) => m.id);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fetch available models from a provider's /models endpoint.
+ *
+ * Works with any OpenAI-compatible provider (standard /v1/models or /models).
+ * Returns the raw model list from the API. Non-fatal — returns empty on error.
+ *
+ * @param baseUrl   Provider base URL (e.g. "https://api.groq.com/openai/v1")
+ * @param apiKey    API key (already resolved, not an env ref)
+ * @param headers   Optional extra headers
+ */
+export async function fetchProviderModels(
+  baseUrl: string,
+  apiKey: string,
+  headers?: Record<string, string>,
+): Promise<RemoteModel[]> {
+  const base = baseUrl.replace(/\/+$/, "");
+  // Try /models first (if baseUrl ends with /v1), then /v1/models
+  const urls = base.endsWith("/v1")
+    ? [`${base}/models`]
+    : [`${base}/models`, `${base}/v1/models`];
+
+  for (const url of urls) {
+    try {
+      const resp = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          ...(headers ?? {}),
+        },
+        signal: AbortSignal.timeout(10_000),
+      });
+
+      if (!resp.ok) continue;
+
+      const data = (await resp.json()) as { data?: Array<Record<string, unknown>> };
+      if (!Array.isArray(data.data)) continue;
+
+      return data.data.map((m) => ({
+        id: (m.id as string) ?? "",
+        created: m.created as number | undefined,
+        owned_by: m.owned_by as string | undefined,
+      })).filter((m) => m.id);
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
 }
 
 // ---------------------------------------------------------------------------

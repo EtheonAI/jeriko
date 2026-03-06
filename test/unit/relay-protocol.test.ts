@@ -12,6 +12,8 @@ import {
   RELAY_AUTH_TIMEOUT_MS,
   RELAY_MAX_PENDING_OAUTH,
   RELAY_MAX_TRIGGERS_PER_CONNECTION,
+  buildCompositeState,
+  parseCompositeState,
 } from "../../src/shared/relay-protocol.js";
 
 describe("relay-protocol", () => {
@@ -73,6 +75,65 @@ describe("relay-protocol", () => {
     it("max triggers per connection is bounded", () => {
       expect(RELAY_MAX_TRIGGERS_PER_CONNECTION).toBe(10_000);
       expect(RELAY_MAX_TRIGGERS_PER_CONNECTION).toBeGreaterThan(100);
+    });
+  });
+
+  // ── Composite state ─────────────────────────────────────────
+
+  describe("buildCompositeState", () => {
+    it("joins userId and token with a dot delimiter", () => {
+      const result = buildCompositeState("user-123", "abcdef");
+      expect(result).toBe("user-123.abcdef");
+    });
+
+    it("works with UUID userId and hex token", () => {
+      const userId = "913e6412-338f-493b-ba58-1fe761d30bd0";
+      const token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd";
+      const result = buildCompositeState(userId, token);
+      expect(result).toBe(`${userId}.${token}`);
+    });
+  });
+
+  describe("parseCompositeState", () => {
+    it("parses userId and token from composite state", () => {
+      const parsed = parseCompositeState("user-123.abcdef");
+      expect(parsed).toEqual({ userId: "user-123", token: "abcdef" });
+    });
+
+    it("splits on first dot only (token can contain dots)", () => {
+      const parsed = parseCompositeState("user-123.token.with.dots");
+      expect(parsed).toEqual({ userId: "user-123", token: "token.with.dots" });
+    });
+
+    it("returns null for plain tokens without a dot", () => {
+      expect(parseCompositeState("abcdef1234567890")).toBeNull();
+    });
+
+    it("returns null for empty string", () => {
+      expect(parseCompositeState("")).toBeNull();
+    });
+
+    it("returns null when userId is empty (leading dot)", () => {
+      expect(parseCompositeState(".abcdef")).toBeNull();
+    });
+
+    it("returns null when token is empty (trailing dot)", () => {
+      expect(parseCompositeState("user-123.")).toBeNull();
+    });
+
+    it("handles UUID userId correctly", () => {
+      const userId = "913e6412-338f-493b-ba58-1fe761d30bd0";
+      const token = "a1b2c3d4e5f6";
+      const parsed = parseCompositeState(`${userId}.${token}`);
+      expect(parsed).toEqual({ userId, token });
+    });
+
+    it("roundtrips with buildCompositeState", () => {
+      const userId = "913e6412-338f-493b-ba58-1fe761d30bd0";
+      const token = "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd";
+      const composite = buildCompositeState(userId, token);
+      const parsed = parseCompositeState(composite);
+      expect(parsed).toEqual({ userId, token });
     });
   });
 });

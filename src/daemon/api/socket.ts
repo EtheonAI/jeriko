@@ -53,6 +53,15 @@ export interface IpcRequest {
     | "triggers"
     | "trigger_enable"
     | "trigger_disable"
+    | "tasks"
+    | "task_create"
+    | "task_info"
+    | "task_pause"
+    | "task_resume"
+    | "task_delete"
+    | "task_test"
+    | "task_log"
+    | "task_types"
     | "skills"
     | "skill_detail"
     | "config"
@@ -159,11 +168,18 @@ export function startSocketServer(): net.Server {
     fs.mkdirSync(dir, { recursive: true });
   }
 
+  const MAX_IPC_BUFFER = 10 * 1024 * 1024; // 10MB max buffer per connection
+
   server = net.createServer((conn) => {
     let buffer = "";
 
     conn.on("data", (chunk) => {
       buffer += chunk.toString();
+      if (buffer.length > MAX_IPC_BUFFER) {
+        log.warn("IPC buffer exceeded 10MB — closing connection");
+        conn.destroy();
+        return;
+      }
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
 

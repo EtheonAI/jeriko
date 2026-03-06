@@ -26,19 +26,13 @@ export function billingRoutes(): Hono {
    */
   router.get("/plan", async (c) => {
     const { getLicenseState } = await import("../../billing/license.js");
+    const { getConfiguredConnectorCount } = await import("../../../shared/connector.js");
     const state = getLicenseState();
 
-    // Get active connector/trigger counts for usage display
-    let connectorCount = 0;
+    // Use configured connector count — single source of truth across all surfaces
+    const connectorCount = getConfiguredConnectorCount();
+
     let triggerCount = 0;
-
-    try {
-      const connectors = c.get("connectors" as never) as { names: string[] } | undefined;
-      if (connectors?.names) {
-        connectorCount = connectors.names.length;
-      }
-    } catch { /* connectors not available */ }
-
     try {
       const triggers = c.get("triggers" as never) as { listActive?: () => unknown[] } | undefined;
       if (triggers?.listActive) {
@@ -75,12 +69,16 @@ export function billingRoutes(): Hono {
    *   1. Relay proxy (works for all distributed users — no local Stripe keys)
    *   2. Direct Stripe SDK (self-hosted users with STRIPE_BILLING_SECRET_KEY)
    *
-   * Body: { email: string, terms_accepted?: boolean }
+   * Body: { email: string, client_ip?: string, user_agent?: string }
+   *
+   * Client IP and user agent are captured for chargeback defense evidence.
+   * If not provided in the body, they are extracted from the HTTP request.
    */
   router.post("/checkout", async (c) => {
     const body = await c.req.json<{
       email?: string;
-      terms_accepted?: boolean;
+      client_ip?: string;
+      user_agent?: string;
     }>();
 
     if (!body.email) {
@@ -88,12 +86,22 @@ export function billingRoutes(): Hono {
     }
 
     const email = body.email;
-    const termsAccepted = body.terms_accepted ?? false;
+
+    // Extract client metadata from request if not explicitly provided.
+    // x-forwarded-for handles proxied requests; x-real-ip is a common alternative.
+    const clientIp = body.client_ip
+      ?? c.req.header("x-forwarded-for")?.split(",")[0]?.trim()
+      ?? c.req.header("x-real-ip")
+      ?? "unknown";
+    const userAgent = body.user_agent
+      ?? c.req.header("user-agent")
+      ?? "unknown";
+    const clientMeta = { clientIp, userAgent };
 
     // Strategy 1: Try relay proxy first (distributed users)
     try {
       const { createCheckoutViaRelay } = await import("../../billing/relay-proxy.js");
-      const relayResult = await createCheckoutViaRelay(email, termsAccepted);
+      const relayResult = await createCheckoutViaRelay(email, clientMeta);
       if (relayResult) {
         return c.json({
           ok: true,
@@ -115,7 +123,7 @@ export function billingRoutes(): Hono {
       }
 
       const { createCheckoutSession } = await import("../../billing/stripe.js");
-      const result = await createCheckoutSession(email, termsAccepted);
+      const result = await createCheckoutSession(email, clientMeta);
 
       return c.json({
         ok: true,

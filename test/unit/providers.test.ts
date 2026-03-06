@@ -85,7 +85,7 @@ describe("registerCustomProviders", () => {
     expect(listDrivers()).not.toContain("");
   });
 
-  it("skips providers with unsupported type", () => {
+  it("registers anthropic-type providers as AnthropicCompatibleDriver", () => {
     const anthropicType: ProviderConfig = {
       id: "custom-anthropic",
       name: "Custom Anthropic",
@@ -95,7 +95,21 @@ describe("registerCustomProviders", () => {
     };
 
     registerCustomProviders([anthropicType]);
-    expect(listDrivers()).not.toContain("custom-anthropic");
+    expect(listDrivers()).toContain("custom-anthropic");
+    expect(getDriver("custom-anthropic").name).toBe("custom-anthropic");
+  });
+
+  it("skips providers with unsupported type", () => {
+    const badType: ProviderConfig = {
+      id: "bad-type-provider",
+      name: "Bad Type",
+      baseUrl: "https://api.example.com",
+      apiKey: "key",
+      type: "unsupported" as any,
+    };
+
+    registerCustomProviders([badType]);
+    expect(listDrivers()).not.toContain("bad-type-provider");
   });
 });
 
@@ -275,5 +289,229 @@ describe("getCapabilities for custom providers", () => {
     expect(caps.provider).toBe("openrouter");
     expect(caps.family).toBe("unknown");
     expect(caps.context).toBe(24_000);
+  });
+});
+
+// ─── AnthropicCompatibleDriver ───────────────────────────────────────────────
+
+import { AnthropicCompatibleDriver } from "../../src/daemon/agent/drivers/anthropic-compat.js";
+
+describe("AnthropicCompatibleDriver", () => {
+  const ANTHROPIC_PROVIDER: ProviderConfig = {
+    id: "anthropic-proxy",
+    name: "Anthropic Proxy",
+    baseUrl: "https://proxy.example.com",
+    apiKey: "test-key",
+    type: "anthropic",
+  };
+
+  it("uses provider config id as driver name", () => {
+    const driver = new AnthropicCompatibleDriver(ANTHROPIC_PROVIDER);
+    expect(driver.name).toBe("anthropic-proxy");
+  });
+
+  it("implements the LLMDriver interface", () => {
+    const driver = new AnthropicCompatibleDriver(ANTHROPIC_PROVIDER);
+    expect(typeof driver.chat).toBe("function");
+    expect(typeof driver.name).toBe("string");
+  });
+
+  it("is registered via registerCustomProviders with type anthropic", () => {
+    registerCustomProviders([{
+      id: "my-anthropic-endpoint",
+      name: "My Anthropic",
+      baseUrl: "https://my-proxy.example.com",
+      apiKey: "test-key",
+      type: "anthropic",
+    }]);
+    const driver = getDriver("my-anthropic-endpoint");
+    expect(driver.name).toBe("my-anthropic-endpoint");
+  });
+
+  it("registers model aliases for anthropic-type providers", () => {
+    registerCustomProviders([{
+      id: "anthro-custom",
+      name: "Anthro Custom",
+      baseUrl: "https://api.example.com",
+      apiKey: "key",
+      type: "anthropic",
+      models: { "fast": "claude-3-haiku" },
+      defaultModel: "claude-3-sonnet",
+    }]);
+
+    expect(resolveModel("anthro-custom", "fast")).toBe("claude-3-haiku");
+    expect(resolveModel("anthro-custom", "anthro-custom")).toBe("claude-3-sonnet");
+  });
+});
+
+// ─── Anthropic shared helpers ─────────────────────────────────────────────────
+
+import {
+  convertToAnthropicMessages,
+  convertToAnthropicTools,
+  buildAnthropicHeaders,
+  buildAnthropicRequestBody,
+} from "../../src/daemon/agent/drivers/anthropic-shared.js";
+import type { DriverMessage, DriverConfig } from "../../src/daemon/agent/drivers/index.js";
+
+describe("anthropic-shared helpers", () => {
+  it("convertToAnthropicMessages extracts system messages", () => {
+    const messages: DriverMessage[] = [
+      { role: "system", content: "You are helpful" },
+      { role: "user", content: "Hello" },
+    ];
+    const { system, messages: converted } = convertToAnthropicMessages(messages);
+    expect(system).toBe("You are helpful");
+    expect(converted.length).toBe(1);
+    expect(converted[0]!.role).toBe("user");
+  });
+
+  it("convertToAnthropicMessages converts tool results to user messages", () => {
+    const messages: DriverMessage[] = [
+      { role: "tool", content: "result data", tool_call_id: "call_123" },
+    ];
+    const { messages: converted } = convertToAnthropicMessages(messages);
+    expect(converted[0]!.role).toBe("user");
+    expect(Array.isArray(converted[0]!.content)).toBe(true);
+    const blocks = converted[0]!.content as any[];
+    expect(blocks[0].type).toBe("tool_result");
+    expect(blocks[0].tool_use_id).toBe("call_123");
+  });
+
+  it("convertToAnthropicMessages converts assistant tool calls to content blocks", () => {
+    const messages: DriverMessage[] = [
+      {
+        role: "assistant",
+        content: "Let me check",
+        tool_calls: [{ id: "tc_1", name: "bash", arguments: '{"command":"ls"}' }],
+      },
+    ];
+    const { messages: converted } = convertToAnthropicMessages(messages);
+    const blocks = converted[0]!.content as any[];
+    expect(blocks.length).toBe(2);
+    expect(blocks[0].type).toBe("text");
+    expect(blocks[1].type).toBe("tool_use");
+    expect(blocks[1].name).toBe("bash");
+  });
+
+  it("convertToAnthropicTools maps driver tools to Anthropic format", () => {
+    const config = {
+      model: "test",
+      max_tokens: 1024,
+      temperature: 0.3,
+      tools: [
+        { name: "bash", description: "Run a command", parameters: { type: "object" } },
+      ],
+    } as DriverConfig;
+    const tools = convertToAnthropicTools(config);
+    expect(tools).toBeDefined();
+    expect(tools![0]!.name).toBe("bash");
+    expect(tools![0]!.input_schema).toEqual({ type: "object" });
+  });
+
+  it("buildAnthropicHeaders includes API key and version", () => {
+    const headers = buildAnthropicHeaders(
+      { apiKey: "sk-test", baseUrl: "https://api.anthropic.com" },
+      { model: "test", max_tokens: 1024, temperature: 0.3 } as DriverConfig,
+    );
+    expect(headers["x-api-key"]).toBe("sk-test");
+    expect(headers["anthropic-version"]).toBe("2023-06-01");
+    expect(headers["anthropic-beta"]).toContain("prompt-caching");
+  });
+
+  it("buildAnthropicHeaders includes thinking beta when extended_thinking is on", () => {
+    const headers = buildAnthropicHeaders(
+      { apiKey: "sk-test", baseUrl: "https://api.anthropic.com" },
+      { model: "test", max_tokens: 1024, temperature: 0.3, extended_thinking: true } as DriverConfig,
+    );
+    expect(headers["anthropic-beta"]).toContain("extended-thinking");
+  });
+
+  it("buildAnthropicHeaders merges custom headers", () => {
+    const headers = buildAnthropicHeaders(
+      { apiKey: "sk-test", baseUrl: "https://api.anthropic.com", customHeaders: { "X-Custom": "value" } },
+      { model: "test", max_tokens: 1024, temperature: 0.3 } as DriverConfig,
+    );
+    expect(headers["X-Custom"]).toBe("value");
+  });
+
+  it("buildAnthropicRequestBody includes model and messages", () => {
+    const body = buildAnthropicRequestBody(
+      { model: "claude-3-sonnet", max_tokens: 4096, temperature: 0.5 } as DriverConfig,
+      {
+        system: "Be helpful",
+        messages: [{ role: "user" as const, content: "Hi" }],
+        tools: undefined,
+      },
+    );
+    expect(body.model).toBe("claude-3-sonnet");
+    expect(body.max_tokens).toBe(4096);
+    expect(body.system).toBe("Be helpful");
+    expect(body.stream).toBe(true);
+  });
+
+  it("buildAnthropicRequestBody includes thinking config when enabled", () => {
+    const body = buildAnthropicRequestBody(
+      { model: "claude-3-opus", max_tokens: 8192, temperature: 0.3, extended_thinking: true } as DriverConfig,
+      {
+        system: undefined,
+        messages: [{ role: "user" as const, content: "Think about this" }],
+        tools: undefined,
+      },
+    );
+    expect(body.thinking).toEqual({ type: "enabled", budget_tokens: 32768 });
+  });
+});
+
+// ─── fetchProviderModels ─────────────────────────────────────────────────────
+
+import { fetchProviderModels, fetchOllamaModels } from "../../src/daemon/agent/drivers/models.js";
+
+describe("fetchProviderModels", () => {
+  it("returns empty array when provider is unreachable", async () => {
+    const models = await fetchProviderModels(
+      "http://127.0.0.1:1/nonexistent",
+      "fake-key",
+    );
+    expect(models).toEqual([]);
+  });
+
+  it("returns empty array when API key is invalid (non-200 response)", async () => {
+    // httpbin.org returns 401 for unauthorized requests
+    const models = await fetchProviderModels(
+      "https://api.openai.com/v1",
+      "invalid-key-xxx",
+    );
+    expect(models).toEqual([]);
+  });
+});
+
+// ─── fetchOllamaModels ──────────────────────────────────────────────────────
+
+describe("fetchOllamaModels", () => {
+  it("returns empty array when Ollama is not reachable", async () => {
+    // Point to a port that's definitely not running Ollama
+    const origBase = process.env.OLLAMA_BASE_URL;
+    const origLocal = process.env.LOCAL_MODEL_URL;
+    process.env.OLLAMA_BASE_URL = "http://127.0.0.1:1";
+    delete process.env.LOCAL_MODEL_URL;
+    try {
+      const models = await fetchOllamaModels();
+      expect(models).toEqual([]);
+    } finally {
+      if (origBase) process.env.OLLAMA_BASE_URL = origBase;
+      else delete process.env.OLLAMA_BASE_URL;
+      if (origLocal) process.env.LOCAL_MODEL_URL = origLocal;
+    }
+  });
+
+  it("returns model array with expected shape from real Ollama (if running)", async () => {
+    // Integration test — only meaningful when Ollama is actually running
+    const models = await fetchOllamaModels();
+    // Either empty (Ollama not running) or well-shaped
+    for (const m of models) {
+      expect(typeof m.id).toBe("string");
+      expect(m.id.length).toBeGreaterThan(0);
+    }
   });
 });

@@ -23,6 +23,8 @@ import { estimateModelCost, formatModelCost } from "../lib/cost.js";
 import { Spinner } from "./Spinner.js";
 import { ContextBar } from "./ContextBar.js";
 import type { Phase, SessionStats, ContextInfo, SubAgentState } from "../types.js";
+import type { DevMode } from "../hooks/useDevMode.js";
+import { MODE_LABELS } from "../hooks/useDevMode.js";
 
 // ---------------------------------------------------------------------------
 // Component
@@ -38,6 +40,8 @@ interface StatusBarProps {
   subAgents?: Map<string, SubAgentState>;
   /** Current stream text length for token estimation. */
   streamLength?: number;
+  /** Development mode (normal, auto-accept, plan). */
+  devMode?: DevMode;
 }
 
 export const StatusBar: React.FC<StatusBarProps> = ({
@@ -49,6 +53,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   sessionSlug,
   subAgents,
   streamLength,
+  devMode,
 }) => {
   switch (phase) {
     case "thinking":
@@ -77,6 +82,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
           model={model}
           context={context}
           sessionSlug={sessionSlug}
+          devMode={devMode}
         />
       );
   }
@@ -152,6 +158,7 @@ interface IdleStatusProps {
   model: string;
   context?: ContextInfo;
   sessionSlug?: string;
+  devMode?: DevMode;
 }
 
 const IdleStatus: React.FC<IdleStatusProps> = ({
@@ -159,6 +166,7 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
   model,
   context,
   sessionSlug,
+  devMode,
 }) => {
   if (stats.turns === 0) return null;
 
@@ -193,9 +201,19 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
     parts.push(sessionSlug);
   }
 
+  // Dev mode badge (only shown when not in normal mode)
+  const devBadge = devMode && devMode !== "normal"
+    ? ` [${MODE_LABELS[devMode]}]`
+    : "";
+
   return (
     <Box flexDirection="column" marginTop={1}>
-      <Text color={PALETTE.dim}>{parts.join(sep)}</Text>
+      <Box>
+        <Text color={PALETTE.dim}>{parts.join(sep)}</Text>
+        {devBadge && (
+          <Text color={devMode === "auto-accept" ? PALETTE.warning : PALETTE.info}>{devBadge}</Text>
+        )}
+      </Box>
       {context && (
         <ContextBar totalUsed={totalUsed} context={context} />
       )}

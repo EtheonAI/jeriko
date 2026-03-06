@@ -149,3 +149,22 @@ export function listShares(limit: number = 50): SharedSession[] {
     )
     .all(limit);
 }
+
+/**
+ * Delete expired shares and shares revoked more than 7 days ago.
+ * Call periodically (e.g. daily) to prevent storage bloat.
+ * Returns the number of rows deleted.
+ */
+export function pruneExpiredShares(): number {
+  const db = getDatabase();
+  const now = Date.now();
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+
+  const result = db.prepare(
+    `DELETE FROM shared_session
+     WHERE (expires_at IS NOT NULL AND expires_at < ?)
+        OR (revoked_at IS NOT NULL AND revoked_at < ?)`,
+  ).run(now, sevenDaysAgo);
+
+  return result.changes;
+}

@@ -13,7 +13,7 @@ const log = getLogger();
 const SQL_CREATE = `
 CREATE TABLE IF NOT EXISTS trigger_config (
   id          TEXT    PRIMARY KEY,
-  type        TEXT    NOT NULL CHECK (type IN ('cron', 'webhook', 'file', 'http', 'email')),
+  type        TEXT    NOT NULL CHECK (type IN ('cron', 'webhook', 'file', 'http', 'email', 'once')),
   enabled     INTEGER NOT NULL DEFAULT 1,
   config      TEXT    NOT NULL DEFAULT '{}',
   action      TEXT    NOT NULL DEFAULT '{}',
@@ -72,7 +72,7 @@ export class TriggerStore {
         try { db.exec(sql); } catch { /* column already exists */ }
       }
 
-      // Migrate CHECK constraint to include 'email' type for existing databases.
+      // Migrate CHECK constraint to include 'email' and 'once' types for existing databases.
       // SQLite doesn't support ALTER CHECK — must recreate the table.
       this.migrateCheckConstraint(db);
 
@@ -196,19 +196,19 @@ export class TriggerStore {
    */
   private migrateCheckConstraint(db: ReturnType<typeof getDatabase>): void {
     try {
-      // Probe whether the current CHECK allows 'email' by attempting an insert.
+      // Probe whether the current CHECK allows 'once' (the latest type) by attempting an insert.
       // If it fails with a constraint error, we need to migrate.
       const probeId = "__check_probe__";
       db.prepare(
         `INSERT INTO trigger_config (id, type, enabled, config, action, created_at)
-         VALUES (?, 'email', 0, '{}', '{}', ?)`,
+         VALUES (?, 'once', 0, '{}', '{}', ?)`,
       ).run(probeId, new Date().toISOString());
 
-      // If we get here, the CHECK already allows 'email'. Clean up the probe row.
+      // If we get here, the CHECK already allows 'once'. Clean up the probe row.
       db.prepare("DELETE FROM trigger_config WHERE id = ?").run(probeId);
     } catch {
-      // CHECK constraint rejected 'email' — recreate the table.
-      log.info("TriggerStore: migrating CHECK constraint to include 'email' type");
+      // CHECK constraint rejected 'once' — recreate the table.
+      log.info("TriggerStore: migrating CHECK constraint to include 'once' type");
 
       db.exec("BEGIN TRANSACTION");
       try {

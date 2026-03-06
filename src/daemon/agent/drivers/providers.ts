@@ -9,17 +9,39 @@
 
 import type { ProviderConfig } from "../../../shared/config.js";
 import { OpenAICompatibleDriver } from "./openai-compat.js";
-import { registerDriver } from "./index.js";
+import { AnthropicCompatibleDriver } from "./anthropic-compat.js";
+import { registerDriver, type LLMDriver } from "./index.js";
 import { registerProviderAliases } from "./models.js";
 import { getLogger } from "../../../shared/logger.js";
 
 const log = getLogger();
 
+/** Supported provider protocol types. */
+const SUPPORTED_TYPES = new Set(["openai-compatible", "anthropic"]);
+
+/**
+ * Create a driver instance from a provider config.
+ *
+ * Routes to the correct driver class based on the `type` field:
+ *   - "openai-compatible" (default) → OpenAICompatibleDriver
+ *   - "anthropic" → AnthropicCompatibleDriver
+ */
+function createDriverFromConfig(config: ProviderConfig): LLMDriver {
+  const type = config.type ?? "openai-compatible";
+  switch (type) {
+    case "anthropic":
+      return new AnthropicCompatibleDriver(config);
+    case "openai-compatible":
+    default:
+      return new OpenAICompatibleDriver(config);
+  }
+}
+
 /**
  * Register custom providers from config.
  *
  * For each ProviderConfig:
- *   1. Creates an OpenAICompatibleDriver instance
+ *   1. Creates the appropriate driver (OpenAI-compat or Anthropic-compat)
  *   2. Registers it in the driver registry under the provider's `id`
  *   3. Registers model aliases if a `models` mapping is defined
  *   4. Registers the default model alias if `defaultModel` is defined
@@ -33,13 +55,13 @@ export function registerCustomProviders(providers: ProviderConfig[]): void {
       continue;
     }
 
-    // Only openai-compatible is supported for now
-    if (config.type && config.type !== "openai-compatible") {
-      log.warn(`Skipping provider "${config.id}": unsupported type "${config.type}"`);
+    const type = config.type ?? "openai-compatible";
+    if (!SUPPORTED_TYPES.has(type)) {
+      log.warn(`Skipping provider "${config.id}": unsupported type "${type}"`);
       continue;
     }
 
-    const driver = new OpenAICompatibleDriver(config);
+    const driver = createDriverFromConfig(config);
     registerDriver(driver);
 
     // Register model aliases (short names → real API model IDs)

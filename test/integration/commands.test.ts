@@ -74,6 +74,11 @@ beforeAll(async () => {
   loadSecrets();
   config = loadConfig();
 
+  // Disable billing enforcement — integration tests use in-memory DB with no
+  // license, which defaults to free tier (2 connectors). Real env may have more
+  // configured, causing false "limit reached" errors in /connect tests.
+  delete process.env.STRIPE_BILLING_SECRET_KEY;
+
   // Initialize DB (needed by session commands)
   const { initDatabase } = await import("../../src/daemon/storage/db.js");
   initDatabase(":memory:"); // In-memory DB for tests
@@ -824,7 +829,7 @@ describe("OAuth state (live)", () => {
   });
 
   it("state tokens work for all channels", () => {
-    for (const channelName of ["telegram", "whatsapp", "slack", "discord"]) {
+    for (const channelName of ["telegram", "whatsapp", "imessage", "googlechat"]) {
       const token = generateState("github", "chat-1", channelName);
       const entry = consumeState(token);
       expect(entry!.channelName).toBe(channelName);
@@ -835,6 +840,24 @@ describe("OAuth state (live)", () => {
     const token = generateState("github", "chat-1", "telegram");
     expect(consumeState(token)).not.toBeNull();
     expect(consumeState(token)).toBeNull();
+  });
+
+  it("generates composite state when userId is provided", () => {
+    const state = generateState("github", "chat-1", "telegram", "user-abc-123");
+    expect(state).toContain("user-abc-123.");
+    expect(state).toMatch(/^user-abc-123\.[0-9a-f]{64}$/);
+
+    // consumeState handles composite state
+    const entry = consumeState(state);
+    expect(entry).not.toBeNull();
+    expect(entry!.provider).toBe("github");
+    expect(entry!.chatId).toBe("chat-1");
+  });
+
+  it("generates plain token when userId is not provided", () => {
+    const token = generateState("github", "chat-1", "telegram");
+    expect(token).toMatch(/^[0-9a-f]{64}$/);
+    expect(token).not.toContain(".");
   });
 });
 

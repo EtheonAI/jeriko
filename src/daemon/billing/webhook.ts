@@ -11,6 +11,7 @@ import { loadBillingConfig, TIER_LIMITS, GRACE_PERIOD_MS, type BillingTier, isBi
 import {
   upsertSubscription,
   recordEvent,
+  recordConsent,
   hasEvent,
   updateLicense,
   getSubscriptionById,
@@ -50,6 +51,7 @@ const EVENT_HANDLERS: Record<string, EventHandler> = {
   "customer.subscription.resumed": handleSubscriptionResumed,
   "invoice.paid": handleInvoicePaid,
   "invoice.payment_failed": handleInvoicePaymentFailed,
+  "invoice.payment_action_required": handlePaymentActionRequired,
 };
 
 // ---------------------------------------------------------------------------
@@ -149,7 +151,14 @@ export function processWebhookEvent(
 
 /**
  * Checkout completed — customer just subscribed.
- * Creates subscription record and updates license.
+ *
+ * Creates subscription record, stores consent evidence for chargeback
+ * defense, and updates the local license cache.
+ *
+ * Consent data is extracted from:
+ *   - session.consent (Stripe consent_collection result)
+ *   - session.metadata (client_ip, user_agent passed at session creation)
+ *   - subscription_data.metadata (propagated from session creation)
  */
 function handleCheckoutCompleted(event: StripeEvent): void {
   const session = event.data.object;
@@ -160,14 +169,19 @@ function handleCheckoutCompleted(event: StripeEvent): void {
     ?? (customerDetails?.email as string)
     ?? "";
   const metadata = session.metadata as Record<string, string> | undefined;
+  const consent = session.consent as Record<string, string> | undefined;
+  const sessionId = session.id as string | undefined;
 
   if (!subscriptionId || !customerId) {
     log.warn("Billing webhook: checkout.session.completed missing subscription/customer");
     return;
   }
 
-  const termsAccepted = metadata?.terms_accepted === "true";
   const now = Math.floor(Date.now() / 1000);
+
+  // Stripe consent_collection records ToS acceptance on their end.
+  // consent.terms_of_service === "accepted" when the customer agreed.
+  const stripeConsentCollected = consent?.terms_of_service === "accepted";
 
   upsertSubscription({
     id: subscriptionId,
@@ -178,11 +192,29 @@ function handleCheckoutCompleted(event: StripeEvent): void {
     current_period_start: null,
     current_period_end: null,
     cancel_at_period_end: false,
-    terms_accepted_at: termsAccepted ? now : null,
+    terms_accepted_at: stripeConsentCollected ? now : null,
+  });
+
+  // Store consent evidence for chargeback defense.
+  // IP and user agent are passed through metadata at checkout session creation.
+  recordConsent({
+    id: `consent_${subscriptionId}_${now}`,
+    subscription_id: subscriptionId,
+    customer_id: customerId,
+    email,
+    client_ip: metadata?.client_ip ?? null,
+    user_agent: metadata?.user_agent ?? null,
+    terms_url: "https://jeriko.ai/terms",
+    terms_version: "1.0",
+    terms_accepted_at: stripeConsentCollected ? now : null,
+    privacy_url: "https://jeriko.ai/privacy",
+    billing_address_collected: session.billing_address_collection === "required",
+    stripe_consent_collected: stripeConsentCollected,
+    checkout_session_id: sessionId ?? null,
   });
 
   syncLicenseFromTier("pro", "active", subscriptionId, customerId, email);
-  log.info(`Billing: new subscription ${subscriptionId} for ${email}`);
+  log.info(`Billing: new subscription ${subscriptionId} for ${email} (consent=${stripeConsentCollected})`);
 }
 
 /**
@@ -330,6 +362,29 @@ function handleInvoicePaymentFailed(event: StripeEvent): void {
   }
 
   log.warn(`Billing: payment failed for subscription ${subscriptionId}`);
+}
+
+/**
+ * Invoice payment action required — 3D Secure / SCA authentication needed.
+ *
+ * The customer must complete additional authentication (e.g. bank 3DS challenge)
+ * before the payment can succeed. Stripe will send the hosted_invoice_url to
+ * the customer if configured, but we log this for observability and to allow
+ * the daemon to surface it to the user.
+ */
+function handlePaymentActionRequired(event: StripeEvent): void {
+  const invoice = event.data.object;
+  const subscriptionId = invoice.subscription as string | undefined;
+  const hostedUrl = invoice.hosted_invoice_url as string | undefined;
+
+  if (!subscriptionId) return;
+
+  // Don't downgrade — the payment isn't failed, it needs customer action.
+  // The subscription stays active while waiting for authentication.
+  log.warn(
+    `Billing: payment action required for subscription ${subscriptionId}`
+    + (hostedUrl ? ` — invoice URL: ${hostedUrl}` : ""),
+  );
 }
 
 // ---------------------------------------------------------------------------
