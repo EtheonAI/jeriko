@@ -260,12 +260,11 @@ async function actionStatus(args: Record<string, unknown>): Promise<string> {
     const logsData = await readDebugLogs(port);
     if (logsData) {
       debugSummary = {
-        consoleErrors: (logsData.consoleLogs ?? []).filter(
-          (l: { level?: string }) => l.level === "ERROR" || l.level === "WARN",
+        consoleErrors: ((logsData.consoleLogs ?? []) as Array<{ level?: string }>).filter(
+          (l) => l.level === "ERROR" || l.level === "WARN",
         ).length,
-        networkErrors: (logsData.networkRequests ?? []).filter(
-          (r: { response?: { status?: number }; error?: unknown }) =>
-            (r.response?.status ?? 0) >= 400 || r.error,
+        networkErrors: ((logsData.networkRequests ?? []) as Array<{ response?: { status?: number }; error?: unknown }>).filter(
+          (r) => (r.response?.status ?? 0) >= 400 || r.error,
         ).length,
         uiEvents: (logsData.uiEvents ?? []).length,
       };
@@ -362,12 +361,11 @@ async function actionDebugLogs(args: Record<string, unknown>): Promise<string> {
 
     switch (filter) {
       case "errors":
-        result.consoleLogs = (logs.consoleLogs ?? []).filter(
-          (l: { level?: string }) => l.level === "ERROR" || l.level === "WARN",
+        result.consoleLogs = ((logs.consoleLogs ?? []) as Array<{ level?: string }>).filter(
+          (l) => l.level === "ERROR" || l.level === "WARN",
         );
-        result.networkRequests = (logs.networkRequests ?? []).filter(
-          (r: { response?: { status?: number }; error?: unknown }) =>
-            (r.response?.status ?? 0) >= 400 || r.error,
+        result.networkRequests = ((logs.networkRequests ?? []) as Array<{ response?: { status?: number }; error?: unknown }>).filter(
+          (r) => (r.response?.status ?? 0) >= 400 || r.error,
         );
         break;
       case "network":

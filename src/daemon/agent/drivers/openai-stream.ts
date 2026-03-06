@@ -77,7 +77,7 @@ export async function* parseOpenAIStream(
         return;
       }
 
-      let readResult: ReadableStreamReadResult<Uint8Array>;
+      let readResult: { done: boolean; value?: Uint8Array };
       if (signal) {
         readResult = await Promise.race([
           reader.read(),

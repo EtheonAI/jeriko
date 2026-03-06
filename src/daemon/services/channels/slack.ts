@@ -66,6 +66,7 @@ export class SlackChannel implements ChannelAdapter {
     if (this.app) return this.app;
 
     try {
+      // @ts-ignore — optional dependency, installed by user
       this.bolt = await import("@slack/bolt");
     } catch {
       throw new Error(

@@ -326,7 +326,7 @@ export function triggerRoutes(): Hono {
     }
 
     const updated = triggers.update(id, {
-      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | OnceConfig | undefined,
+      config: body.config as CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | undefined,
       action: body.action as TriggerAction | undefined,
       label: body.label,
       enabled: body.enabled,

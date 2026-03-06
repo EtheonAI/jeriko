@@ -66,6 +66,7 @@ export class DiscordChannel implements ChannelAdapter {
     if (this.discord) return this.discord;
 
     try {
+      // @ts-ignore — optional dependency, installed by user
       this.discord = await import("discord.js");
     } catch {
       throw new Error(

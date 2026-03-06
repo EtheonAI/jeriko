@@ -376,7 +376,7 @@ export async function* sendStreamRequest(
   let done = false;
 
   // Idle timeout management
-  let timer: ReturnType<typeof setTimeout>;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const resetTimer = () => {
     clearTimeout(timer);
     timer = setTimeout(() => {
@@ -461,10 +461,11 @@ export async function* sendStreamRequest(
         throw connectionError;
       }
       if (finalResponse) {
-        if (!finalResponse.ok) {
-          throw new Error(finalResponse.error ?? "Daemon stream request failed");
+        const resp = finalResponse as IpcResponse;
+        if (!resp.ok) {
+          throw new Error(resp.error ?? "Daemon stream request failed");
         }
-        return finalResponse;
+        return resp;
       }
 
       // Wait for more data
