@@ -64,8 +64,6 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_STRIPE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
   __BAKED_HUBSPOT_CLIENT_ID__:      JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID      ?? ""),
   __BAKED_SHOPIFY_CLIENT_ID__:      JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID      ?? ""),
-  __BAKED_SLACK_CLIENT_ID__:        JSON.stringify(process.env.BAKED_SLACK_CLIENT_ID        ?? ""),
-  __BAKED_DISCORD_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DISCORD_CLIENT_ID      ?? ""),
   __BAKED_SQUARE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_SQUARE_CLIENT_ID       ?? ""),
   __BAKED_GITLAB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITLAB_CLIENT_ID       ?? ""),
   __BAKED_DIGITALOCEAN_CLIENT_ID__: JSON.stringify(process.env.BAKED_DIGITALOCEAN_CLIENT_ID ?? ""),

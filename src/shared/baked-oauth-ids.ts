@@ -23,8 +23,6 @@ declare const __BAKED_VERCEL_CLIENT_ID__: string | undefined;
 declare const __BAKED_STRIPE_CLIENT_ID__: string | undefined;
 declare const __BAKED_HUBSPOT_CLIENT_ID__: string | undefined;
 declare const __BAKED_SHOPIFY_CLIENT_ID__: string | undefined;
-declare const __BAKED_SLACK_CLIENT_ID__: string | undefined;
-declare const __BAKED_DISCORD_CLIENT_ID__: string | undefined;
 declare const __BAKED_SQUARE_CLIENT_ID__: string | undefined;
 declare const __BAKED_GITLAB_CLIENT_ID__: string | undefined;
 declare const __BAKED_DIGITALOCEAN_CLIENT_ID__: string | undefined;
@@ -50,8 +48,6 @@ export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>
   stripe:       typeof __BAKED_STRIPE_CLIENT_ID__       !== "undefined" ? __BAKED_STRIPE_CLIENT_ID__       : undefined,
   hubspot:      typeof __BAKED_HUBSPOT_CLIENT_ID__      !== "undefined" ? __BAKED_HUBSPOT_CLIENT_ID__      : undefined,
   shopify:      typeof __BAKED_SHOPIFY_CLIENT_ID__      !== "undefined" ? __BAKED_SHOPIFY_CLIENT_ID__      : undefined,
-  slack:        typeof __BAKED_SLACK_CLIENT_ID__        !== "undefined" ? __BAKED_SLACK_CLIENT_ID__        : undefined,
-  discord:      typeof __BAKED_DISCORD_CLIENT_ID__      !== "undefined" ? __BAKED_DISCORD_CLIENT_ID__      : undefined,
   square:       typeof __BAKED_SQUARE_CLIENT_ID__       !== "undefined" ? __BAKED_SQUARE_CLIENT_ID__       : undefined,
   gitlab:       typeof __BAKED_GITLAB_CLIENT_ID__       !== "undefined" ? __BAKED_GITLAB_CLIENT_ID__       : undefined,
   digitalocean: typeof __BAKED_DIGITALOCEAN_CLIENT_ID__ !== "undefined" ? __BAKED_DIGITALOCEAN_CLIENT_ID__ : undefined,

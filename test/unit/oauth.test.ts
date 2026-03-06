@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 23 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(23);
+  it("defines exactly 21 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(21);
   });
 
   it("has all required fields on every provider", () => {

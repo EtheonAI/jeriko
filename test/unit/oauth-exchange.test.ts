@@ -24,7 +24,7 @@ describe("TOKEN_EXCHANGE_PROVIDERS", () => {
   it("has entries for all OAuth providers", () => {
     const expectedProviders = [
       "stripe", "github", "x", "gdrive", "onedrive", "vercel", "gmail", "outlook",
-      "hubspot", "shopify", "slack", "discord", "square", "gitlab", "digitalocean",
+      "hubspot", "shopify", "square", "gitlab", "digitalocean",
       "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox", "salesforce",
     ];
     for (const name of expectedProviders) {

@@ -37,8 +37,6 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; cli
   ["vercel",       { clientIdKey: "VERCEL_OAUTH_CLIENT_ID",       clientSecretKey: "VERCEL_OAUTH_CLIENT_SECRET" }],
   ["hubspot",      { clientIdKey: "HUBSPOT_OAUTH_CLIENT_ID",      clientSecretKey: "HUBSPOT_OAUTH_CLIENT_SECRET" }],
   ["shopify",      { clientIdKey: "SHOPIFY_OAUTH_CLIENT_ID",      clientSecretKey: "SHOPIFY_OAUTH_CLIENT_SECRET" }],
-  ["slack",        { clientIdKey: "SLACK_OAUTH_CLIENT_ID",        clientSecretKey: "SLACK_OAUTH_CLIENT_SECRET" }],
-  ["discord",      { clientIdKey: "DISCORD_OAUTH_CLIENT_ID",      clientSecretKey: "DISCORD_OAUTH_CLIENT_SECRET" }],
   ["square",       { clientIdKey: "SQUARE_OAUTH_CLIENT_ID",       clientSecretKey: "SQUARE_OAUTH_CLIENT_SECRET" }],
   ["gitlab",       { clientIdKey: "GITLAB_OAUTH_CLIENT_ID",       clientSecretKey: "GITLAB_OAUTH_CLIENT_SECRET" }],
   ["digitalocean", { clientIdKey: "DIGITALOCEAN_OAUTH_CLIENT_ID", clientSecretKey: "DIGITALOCEAN_OAUTH_CLIENT_SECRET" }],

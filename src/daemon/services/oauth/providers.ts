@@ -205,30 +205,6 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     // Shopify tokens are permanent — no refresh token
   },
   {
-    name: "slack",
-    label: "Slack",
-    authUrl: "https://slack.com/oauth/v2/authorize",
-    tokenUrl: "https://slack.com/api/oauth.v2.access",
-    scopes: ["chat:write", "channels:read", "channels:history", "users:read", "files:read", "reactions:read", "reactions:write", "search:read"],
-    bakedIdKey: "slack",
-    clientIdVar: "SLACK_OAUTH_CLIENT_ID",
-    clientSecretVar: "SLACK_OAUTH_CLIENT_SECRET",
-    tokenEnvVar: "SLACK_BOT_TOKEN",
-    // Slack bot tokens are permanent — no refresh
-  },
-  {
-    name: "discord",
-    label: "Discord",
-    authUrl: "https://discord.com/oauth2/authorize",
-    tokenUrl: "https://discord.com/api/oauth2/token",
-    scopes: ["bot", "guilds", "guilds.members.read", "messages.read"],
-    bakedIdKey: "discord",
-    clientIdVar: "DISCORD_OAUTH_CLIENT_ID",
-    clientSecretVar: "DISCORD_OAUTH_CLIENT_SECRET",
-    tokenEnvVar: "DISCORD_BOT_TOKEN",
-    refreshTokenEnvVar: "DISCORD_REFRESH_TOKEN",
-  },
-  {
     name: "square",
     label: "Square",
     authUrl: "https://connect.squareup.com/oauth2/authorize",

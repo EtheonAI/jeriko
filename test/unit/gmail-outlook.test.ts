@@ -443,8 +443,8 @@ describe("Registry totals", () => {
     expect(CONNECTOR_DEFS.length).toBe(27);
   });
 
-  it("OAUTH_PROVIDERS has 23 entries", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(23);
+  it("OAUTH_PROVIDERS has 21 entries", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(21);
   });
 
   it("all OAuth providers have matching ConnectorDef", () => {

@@ -149,15 +149,13 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Messages, channels, users, files, reactions",
     required: ["SLACK_BOT_TOKEN"],
     optional: ["SLACK_SIGNING_SECRET"],
-    oauth: { clientIdVar: "SLACK_OAUTH_CLIENT_ID", clientSecretVar: "SLACK_OAUTH_CLIENT_SECRET" },
   },
   {
     name: "discord",
     label: "Discord",
     description: "Guilds, channels, messages, users",
     required: ["DISCORD_BOT_TOKEN"],
-    optional: ["DISCORD_REFRESH_TOKEN"],
-    oauth: { clientIdVar: "DISCORD_OAUTH_CLIENT_ID", clientSecretVar: "DISCORD_OAUTH_CLIENT_SECRET" },
+    optional: [],
   },
   {
     name: "sendgrid",

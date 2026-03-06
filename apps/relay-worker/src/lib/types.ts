@@ -77,15 +77,6 @@ export interface Env {
   /** Shopify OAuth client secret. */
   SHOPIFY_OAUTH_CLIENT_SECRET?: string;
 
-  /** Slack OAuth client ID. */
-  SLACK_OAUTH_CLIENT_ID?: string;
-  /** Slack OAuth client secret. */
-  SLACK_OAUTH_CLIENT_SECRET?: string;
-
-  /** Discord OAuth client ID. */
-  DISCORD_OAUTH_CLIENT_ID?: string;
-  /** Discord OAuth client secret. */
-  DISCORD_OAUTH_CLIENT_SECRET?: string;
 
   /** Square OAuth client ID. */
   SQUARE_OAUTH_CLIENT_ID?: string;
