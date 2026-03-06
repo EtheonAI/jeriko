@@ -1,38 +1,18 @@
 /**
- * `jeriko onboard` — Interactive onboarding wizard.
+ * `jeriko onboard` — Alias for `jeriko init`.
  *
- * Runs the same @clack/prompts wizard used for first-launch setup.
- * Can be invoked:
- *   - By the install script as the final step
- *   - Manually with `jeriko onboard`
- *   - From the REPL via `/onboard`
- *
- * Flow (channel-first):
- *   1. Channel select — Telegram, WhatsApp, or skip
- *   2. Provider selection (Claude, GPT, Local, or custom)
- *   3. API key input + verification
- *   4. Persist config + env
+ * Delegates entirely to the init wizard. Kept for backward compatibility
+ * with install scripts and `/onboard` REPL command.
  */
 
 import type { CommandHandler } from "../../dispatcher.js";
 import { parseArgs, flagBool } from "../../../shared/args.js";
-import { runOnboarding, persistSetup } from "../../wizard/onboarding.js";
+import { fail } from "../../../shared/output.js";
+import { existsSync, mkdirSync } from "node:fs";
+import { getConfigDir } from "../../../shared/config.js";
 import { ClackPrompter } from "../../wizard/clack-prompter.js";
-
-// ---------------------------------------------------------------------------
-// Version helper (shared with chat.tsx)
-// ---------------------------------------------------------------------------
-
-async function getVersion(): Promise<string> {
-  try {
-    const { join } = await import("node:path");
-    const pkgPath = join(import.meta.dirname, "../../../../package.json");
-    const pkg = await Bun.file(pkgPath).json();
-    return pkg.version ?? "2.0.0";
-  } catch {
-    return "2.0.0";
-  }
-}
+import { runInteractiveInit } from "./init.js";
+import { JERIKO_DIR } from "../../lib/daemon.js";
 
 // ---------------------------------------------------------------------------
 // Command
@@ -40,27 +20,26 @@ async function getVersion(): Promise<string> {
 
 export const command: CommandHandler = {
   name: "onboard",
-  description: "Run the interactive setup wizard",
+  description: "Run the interactive setup wizard (alias for init)",
   async run(args: string[]) {
     const parsed = parseArgs(args);
 
     if (flagBool(parsed, "help")) {
       console.log("Usage: jeriko onboard");
-      console.log("\nInteractive setup wizard for first-time configuration.");
-      console.log("Sets up messaging channel, AI provider, and API key.");
+      console.log("\nAlias for `jeriko init`. Runs the full interactive setup wizard.");
       process.exit(0);
     }
 
-    const version = await getVersion();
-    const prompter = new ClackPrompter();
-    const result = await runOnboarding(prompter, version);
+    const configDir = getConfigDir();
+    if (!existsSync(JERIKO_DIR)) mkdirSync(JERIKO_DIR, { recursive: true });
+    if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
 
-    if (result) {
-      await persistSetup(result);
-      process.exit(0);
-    } else {
-      // User cancelled
-      process.exit(1);
+    try {
+      const prompter = new ClackPrompter();
+      await runInteractiveInit(prompter);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      fail(`Setup failed: ${msg}`);
     }
   },
 };

@@ -31,6 +31,7 @@ import {
   VERSION_TARGET_RE,
 } from "./install-utils.js";
 import { execSync } from "node:child_process";
+import { spawnDaemon } from "../../lib/daemon.js";
 
 /**
  * Detect the version of the currently running binary.
@@ -96,6 +97,15 @@ export async function runSelfInstall(target: string): Promise<void> {
   // 7. Verify
   verifyInstallation();
 
+  // 8. Auto-start daemon
+  info("Starting daemon...");
+  const daemonPid = await spawnDaemon();
+  if (daemonPid) {
+    success(`Daemon started (PID ${daemonPid})`);
+  } else {
+    warn("Could not auto-start daemon — run: jeriko server start");
+  }
+
   // Done
   console.log();
   success("Installation complete!");
@@ -104,6 +114,5 @@ export async function runSelfInstall(target: string): Promise<void> {
   console.log("    \x1b[1mjeriko --help\x1b[0m          Show all commands");
   console.log("    \x1b[1mjeriko init\x1b[0m            Run setup wizard (API keys)");
   console.log("    \x1b[1mjeriko\x1b[0m                 Start interactive chat");
-  console.log("    \x1b[1mjeriko server start\x1b[0m    Start the daemon");
   console.log();
 }

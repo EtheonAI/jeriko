@@ -68,3 +68,30 @@ export async function verifyOllamaRunning(): Promise<boolean> {
     clearTimeout(timer);
   }
 }
+
+/**
+ * Fetch the list of installed Ollama models from the local API.
+ * Returns an array of model name strings (e.g. ["llama3:latest", "deepseek-coder:6.7b"]).
+ * Returns empty array on error or if Ollama is not running.
+ */
+export async function fetchOllamaModelList(): Promise<string[]> {
+  try {
+    const res = await fetch("http://127.0.0.1:11434/api/tags", {
+      signal: AbortSignal.timeout(5_000),
+    });
+
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as {
+      models?: Array<{ name?: string }>;
+    };
+
+    if (!Array.isArray(data.models)) return [];
+
+    return data.models
+      .map((m) => m.name ?? "")
+      .filter((name) => name.length > 0);
+  } catch {
+    return [];
+  }
+}

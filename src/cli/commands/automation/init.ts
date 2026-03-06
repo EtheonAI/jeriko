@@ -1,24 +1,23 @@
 /**
  * `jeriko init` — Full configuration wizard.
  *
- * Extends the onboarding flow with additional setup:
- *   - Security token (NODE_AUTH_SECRET)
- *   - Connector credentials (Stripe, GitHub, Twilio)
- *   - Agent prompt deployment
+ * ALWAYS runs the interactive wizard. If config already exists, pre-fills
+ * existing values so the user can review and update them.
  *
- * Flow (channel-first, consistent with `jeriko onboard`):
+ * Flow (channel-first):
  *   1. Channel select — Telegram, WhatsApp, or skip
  *   2. Channel token input (Telegram only)
  *   3. Provider select — Claude, GPT, Local, or preset
  *   4. API key input + verification
- *   5. Security token generation
- *   6. Write config + env
- *   7. Deploy agent prompt
- *   8. Auto-start daemon
+ *   5. Ollama model selection (if local provider + Ollama running)
+ *   6. Security token generation
+ *   7. Write config + env
+ *   8. Deploy agent prompt
+ *   9. Auto-start daemon
  *
  * Flags:
  *   --non-interactive   Build config from env vars (CI/scripting)
- *   --force             Overwrite existing config
+ *   --force             Overwrite existing config (kept for CI compat)
  */
 
 import type { CommandHandler } from "../../dispatcher.js";
@@ -31,7 +30,7 @@ import { getConfigDir } from "../../../shared/config.js";
 import { ClackPrompter } from "../../wizard/clack-prompter.js";
 import { validateApiKey, getProviderOptions, CHANNEL_OPTIONS } from "../../lib/setup.js";
 import type { ChannelChoice } from "../../lib/setup.js";
-import { verifyApiKey, verifyOllamaRunning } from "../../wizard/verify.js";
+import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList } from "../../wizard/verify.js";
 import type { WizardPrompter } from "../../wizard/prompter.js";
 import { JERIKO_DIR, spawnDaemon } from "../../lib/daemon.js";
 
@@ -61,6 +60,18 @@ function deployAgentPrompt(): void {
 
 function isCancel(value: unknown): value is symbol {
   return typeof value === "symbol";
+}
+
+/**
+ * Load existing config values (if any) for pre-filling the wizard.
+ */
+function loadExistingConfig(): Record<string, unknown> | null {
+  if (!existsSync(CONFIG_FILE)) return null;
+  try {
+    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -94,10 +105,67 @@ function buildNonInteractiveConfig(): Record<string, unknown> {
 }
 
 /**
- * Run the interactive init wizard — channel-first flow with extra steps.
+ * Prompt the user to select an installed Ollama model.
+ * Returns the model name (e.g. "deepseek-coder:6.7b") or null if none available.
  */
-async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
-  prompter.intro("Jeriko Setup");
+async function selectOllamaModel(prompter: WizardPrompter): Promise<string | null> {
+  const s = prompter.spinner();
+  s.start("Checking Ollama...");
+
+  const running = await verifyOllamaRunning();
+  if (!running) {
+    s.stop("Ollama not detected");
+    prompter.note(
+      "Install Ollama: https://ollama.com\nThen run: ollama pull <model>",
+      "Ollama Required",
+    );
+    return null;
+  }
+
+  const models = await fetchOllamaModelList();
+  s.stop(`Ollama is running (${models.length} model${models.length !== 1 ? "s" : ""} installed)`);
+
+  if (models.length === 0) {
+    prompter.note(
+      "No models installed. Run: ollama pull <model>\nExamples: llama3, deepseek-coder, mistral, qwen2",
+      "No Models Found",
+    );
+    return null;
+  }
+
+  if (models.length === 1) {
+    prompter.note(`Auto-selected: ${models[0]!}`, "Ollama Model");
+    return models[0]!;
+  }
+
+  // Multiple models — let the user pick
+  const modelId = await prompter.select({
+    message: "Choose an Ollama model",
+    options: models.map((m) => ({
+      value: m,
+      label: m,
+    })),
+  });
+
+  if (isCancel(modelId)) return null;
+  return modelId as string;
+}
+
+/**
+ * Run the interactive init wizard — channel-first flow with extra steps.
+ * Exported so `onboard` can delegate to the same function.
+ */
+export async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
+  const existing = loadExistingConfig();
+  const existingChannels = (existing?.channels ?? {}) as Record<string, unknown>;
+  const existingTelegram = (existingChannels.telegram ?? {}) as Record<string, unknown>;
+  const existingWhatsapp = (existingChannels.whatsapp ?? {}) as Record<string, unknown>;
+
+  if (existing) {
+    prompter.intro("Jeriko Setup (reconfiguring)");
+  } else {
+    prompter.intro("Jeriko Setup");
+  }
 
   // ── Step 1: Channel ──────────────────────────────────────────────
   const channelId = await prompter.select({
@@ -114,8 +182,10 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
     return;
   }
 
-  let telegramToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
-  let whatsappEnabled = false;
+  let telegramToken = process.env.TELEGRAM_BOT_TOKEN
+    ?? (existingTelegram.token as string | undefined)
+    ?? "";
+  let whatsappEnabled = (existingWhatsapp.enabled as boolean | undefined) ?? false;
 
   if (channelId === "telegram" && !telegramToken) {
     const token = await prompter.text({
@@ -159,6 +229,8 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
 
   // ── Step 3: API key ──────────────────────────────────────────────
   let apiKey = "";
+  let resolvedModel = provider.model;
+
   if (provider.needsApiKey) {
     // Check env first
     const envValue = process.env[provider.envKey];
@@ -191,19 +263,10 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
       s.stop(valid ? "API key verified" : "Could not verify (continuing anyway)");
     }
   } else if (provider.id === "local") {
-    // Verify Ollama is reachable
-    const s = prompter.spinner();
-    s.start("Checking Ollama...");
-
-    const running = await verifyOllamaRunning();
-    if (running) {
-      s.stop("Ollama is running");
-    } else {
-      s.stop("Ollama not detected");
-      prompter.note(
-        "Install Ollama: https://ollama.com\nThen run: ollama pull llama3",
-        "Ollama Required",
-      );
+    // ── Step 3b: Ollama model detection + selection ───────────────
+    const ollamaModel = await selectOllamaModel(prompter);
+    if (ollamaModel) {
+      resolvedModel = `local/${ollamaModel}`;
     }
   }
 
@@ -224,13 +287,13 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
 
   // ── Write config ─────────────────────────────────────────────────
   const config: Record<string, unknown> = {
-    agent: { model: provider.model },
+    agent: { model: resolvedModel },
     channels: {
       telegram: {
         token: telegramToken,
         adminIds: process.env.ADMIN_TELEGRAM_IDS
           ? process.env.ADMIN_TELEGRAM_IDS.split(",").map(s => s.trim())
-          : [],
+          : (existingTelegram.adminIds as string[] | undefined) ?? [],
       },
       whatsapp: { enabled: whatsappEnabled },
     },
@@ -258,14 +321,14 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
     envLines.push(`NODE_AUTH_SECRET=${authSecret}`);
   }
   if (envLines.length > 0) {
-    const existing = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
-    const existingLines = existing.split("\n");
+    const existingEnv = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+    const existingEnvLines = existingEnv.split("\n");
     const newLines = envLines.filter((l) => {
       const key = l.split("=")[0]!;
-      return !existingLines.some((el) => el.startsWith(`${key}=`));
+      return !existingEnvLines.some((el) => el.startsWith(`${key}=`));
     });
     if (newLines.length > 0) {
-      writeFileSync(envPath, existing + newLines.join("\n") + "\n");
+      writeFileSync(envPath, existingEnv + newLines.join("\n") + "\n");
     }
   }
 
@@ -296,32 +359,26 @@ export const command: CommandHandler = {
     if (flagBool(parsed, "help")) {
       console.log("Usage: jeriko init [options]");
       console.log("\nInteractive setup wizard for Jeriko configuration.");
+      console.log("Always runs the wizard. Pre-fills existing values if config exists.");
       console.log("\nSteps:");
       console.log("  1. Messaging channel (Telegram / WhatsApp / skip)");
       console.log("  2. AI provider (Claude, GPT, Local, or custom)");
       console.log("  3. API key verification");
-      console.log("  4. Security (NODE_AUTH_SECRET)");
-      console.log("  5. Write config + deploy agent prompt");
-      console.log("  6. Auto-start daemon");
+      console.log("  4. Ollama model selection (if local provider)");
+      console.log("  5. Security (NODE_AUTH_SECRET)");
+      console.log("  6. Write config + deploy agent prompt");
+      console.log("  7. Auto-start daemon");
       console.log("\nFlags:");
       console.log("  --non-interactive Use env vars instead of prompts");
-      console.log("  --force           Overwrite existing config");
+      console.log("  --force           Alias for default behavior (always reconfigures)");
       process.exit(0);
     }
 
     const nonInteractive = flagBool(parsed, "non-interactive");
-    const force = flagBool(parsed, "force");
 
     // Ensure directories exist
     if (!existsSync(JERIKO_DIR)) mkdirSync(JERIKO_DIR, { recursive: true });
     if (!existsSync(CONFIG_DIR)) mkdirSync(CONFIG_DIR, { recursive: true });
-
-    // Check for existing config
-    if (existsSync(CONFIG_FILE) && !force) {
-      console.log("\n  Configuration already exists at " + CONFIG_FILE);
-      console.log("  Run with --force to reconfigure.\n");
-      return;
-    }
 
     if (nonInteractive) {
       const config = buildNonInteractiveConfig();
@@ -331,7 +388,7 @@ export const command: CommandHandler = {
       return;
     }
 
-    // Interactive mode
+    // Interactive mode — always runs, pre-fills existing values
     try {
       const prompter: WizardPrompter = new ClackPrompter();
       await runInteractiveInit(prompter);

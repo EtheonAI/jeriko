@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { validateApiKey, getProviderOptions } from "../lib/setup.js";
 import { CHANNEL_OPTIONS, type ChannelChoice } from "../lib/setup.js";
 import { getConfigDir } from "../../shared/config.js";
-import { verifyApiKey, verifyOllamaRunning } from "./verify.js";
+import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList } from "./verify.js";
 import type { WizardPrompter } from "./prompter.js";
 import { JERIKO_DIR, spawnDaemon } from "../lib/daemon.js";
 
@@ -109,6 +109,7 @@ export async function runOnboarding(
 
   // ── Step 3: API key input (if needed) ──────────────────────────
   let apiKey = "";
+  let ollamaModel: string | null = null;
   if (provider.needsApiKey) {
     const key = await prompter.password({
       message: `Enter your ${provider.name} API key`,
@@ -139,27 +140,51 @@ export async function runOnboarding(
       s.stop("API key could not be verified (will try anyway)");
     }
   } else if (provider.id === "local") {
-    // Verify Ollama is reachable
+    // Verify Ollama is reachable and detect installed models
     const s = prompter.spinner();
     s.start("Checking Ollama...");
 
     const running = await verifyOllamaRunning();
-    if (running) {
-      s.stop("Ollama is running");
-    } else {
+    if (!running) {
       s.stop("Ollama not detected");
       prompter.note(
-        "Install Ollama: https://ollama.com\nThen run: ollama pull llama3",
+        "Install Ollama: https://ollama.com\nThen run: ollama pull <model>",
         "Ollama Required",
       );
+    } else {
+      const models = await fetchOllamaModelList();
+      s.stop(`Ollama is running (${models.length} model${models.length !== 1 ? "s" : ""} installed)`);
+
+      if (models.length === 0) {
+        prompter.note(
+          "No models installed. Run: ollama pull <model>\nExamples: llama3, deepseek-coder, mistral, qwen2",
+          "No Models Found",
+        );
+      } else if (models.length === 1) {
+        ollamaModel = models[0]!;
+        prompter.note(`Auto-selected: ${ollamaModel}`, "Ollama Model");
+      } else {
+        const modelId = await prompter.select({
+          message: "Choose an Ollama model",
+          options: models.map((m) => ({
+            value: m,
+            label: m,
+          })),
+        });
+        if (!isCancel(modelId)) {
+          ollamaModel = modelId as string;
+        }
+      }
     }
   }
+
+  const resolvedModel = ollamaModel ? `local/${ollamaModel}` : provider.model;
 
   prompter.outro("You're all set! Type /help for commands.");
 
   return {
     provider: provider.id,
-    model: provider.model,
+    model: resolvedModel,
     apiKey,
     envKey: provider.envKey,
     channel: channelId as ChannelChoice,

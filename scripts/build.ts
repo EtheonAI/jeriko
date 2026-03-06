@@ -79,7 +79,6 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
 
 /** Packages that are always external (optional deps, never bundled). */
 const STATIC_EXTERNALS = [
-  "qrcode-terminal",
   "link-preview-js",
   "jimp",
   "sharp",

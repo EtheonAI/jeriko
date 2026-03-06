@@ -56,6 +56,9 @@ const aliasIndex = new Map<string, Map<string, string>>();
 /** Cached local model probes (Ollama /api/show results). */
 const localProbeCache = new Map<string, ModelCapabilities>();
 
+/** Cached default local model name — populated by fetchOllamaModels() or loadModelRegistry(). */
+let cachedDefaultLocalModel: string | null = null;
+
 /**
  * Family-based cross-reference index — maps normalized family names to the best
  * known capabilities for that model family across ALL providers on models.dev.
@@ -101,7 +104,9 @@ const STATIC_ALIASES: Record<string, Record<string, string>> = {
   },
 };
 
-/** Fallback capabilities — ONLY used when models.dev AND Ollama probe both fail. */
+/** Fallback capabilities — ONLY used when models.dev AND Ollama probe both fail.
+ *  The local "llama3" ID is a last-resort fallback; at runtime, resolveModel()
+ *  prefers the first model detected from Ollama's /api/tags. */
 const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
   anthropic: {
     id: "claude-sonnet-4-6", provider: "anthropic", family: "claude-sonnet",
@@ -145,18 +150,30 @@ export async function loadModelRegistry(): Promise<void> {
     const resp = await fetch(MODELS_URL, {
       signal: AbortSignal.timeout(FETCH_TIMEOUT),
     });
-    if (!resp.ok) {
+    if (resp.ok) {
+      const data = (await resp.json()) as Record<string, unknown>;
+      parseRegistry(data);
+      fetched = true;
+      log.info(`Model registry loaded: ${capIndex.size} models from models.dev`);
+    } else {
       log.warn(`Model registry fetch failed: HTTP ${resp.status}`);
-      return;
     }
-
-    const data = (await resp.json()) as Record<string, unknown>;
-    parseRegistry(data);
-    fetched = true;
-    log.info(`Model registry loaded: ${capIndex.size} models from models.dev`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`Model registry fetch failed (using static fallbacks): ${msg}`);
+  }
+
+  // Populate default local model from Ollama (non-blocking, best-effort)
+  if (!cachedDefaultLocalModel) {
+    try {
+      const models = await fetchOllamaModels();
+      if (models.length > 0) {
+        cachedDefaultLocalModel = models[0]!.id;
+        log.debug(`Default local model detected: ${cachedDefaultLocalModel}`);
+      }
+    } catch {
+      // Non-fatal — cachedDefaultLocalModel stays null
+    }
   }
 }
 
@@ -574,9 +591,9 @@ export function resolveModel(provider: string, alias: string): string {
     }
   }
 
-  // 5. Local model: resolve "local"/"ollama" to env var
+  // 5. Local model: resolve "local"/"ollama" to env var, then cached detection, then fallback
   if (provider === "local" && (normalized === "local" || normalized === "ollama")) {
-    return process.env.LOCAL_MODEL ?? "llama3";
+    return process.env.LOCAL_MODEL ?? cachedDefaultLocalModel ?? "llama3";
   }
 
   // 6. Pass-through
@@ -765,13 +782,20 @@ export async function fetchOllamaModels(): Promise<RemoteModel[]> {
 
     if (!Array.isArray(data.models)) return [];
 
-    return data.models.map((m) => ({
+    const results = data.models.map((m) => ({
       id: m.name ?? "",
       owned_by: m.details?.family,
       size: m.size,
       parameter_size: m.details?.parameter_size,
       quantization: m.details?.quantization_level,
     })).filter((m) => m.id);
+
+    // Cache the first model as the default local model for resolveModel()
+    if (results.length > 0 && !cachedDefaultLocalModel) {
+      cachedDefaultLocalModel = results[0]!.id;
+    }
+
+    return results;
   } catch {
     return [];
   }
