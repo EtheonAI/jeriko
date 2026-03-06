@@ -113,7 +113,9 @@ export function listSessions(
   includeArchived: boolean = false,
 ): SessionRow[] {
   const db = getDatabase();
-  const where = includeArchived ? "" : "WHERE archived_at IS NULL";
+  const where = includeArchived
+    ? "WHERE parent_session_id IS NULL"
+    : "WHERE archived_at IS NULL AND parent_session_id IS NULL";
   return db
     .query<SessionRow, [number]>(
       `SELECT * FROM session ${where} ORDER BY updated_at DESC LIMIT ?`,

@@ -120,11 +120,26 @@ export function getSessionTokenCount(sessionId: string): number {
 }
 
 /**
- * Delete a specific message and its parts.
+ * Delete a specific message and its parts, updating the session token count.
  */
 export function deleteMessage(id: string): void {
   const db = getDatabase();
+  // Get the message's session and token counts before deleting
+  const msg = db
+    .query<{ session_id: string; tokens_input: number; tokens_output: number }, [string]>(
+      "SELECT session_id, tokens_input, tokens_output FROM message WHERE id = ?",
+    )
+    .get(id);
   db.prepare("DELETE FROM message WHERE id = ?").run(id);
+  // Decrement session token count to stay in sync
+  if (msg) {
+    const delta = (msg.tokens_input ?? 0) + (msg.tokens_output ?? 0);
+    if (delta > 0) {
+      db.prepare(
+        "UPDATE session SET token_count = MAX(0, token_count - ?), updated_at = ? WHERE id = ?",
+      ).run(delta, Date.now(), msg.session_id);
+    }
+  }
 }
 
 /**

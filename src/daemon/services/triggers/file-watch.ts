@@ -1,6 +1,6 @@
 // File-watch trigger — uses fs.watch for file system event monitoring.
 
-import { watch, type FSWatcher } from "node:fs";
+import { watch, existsSync, type FSWatcher } from "node:fs";
 import { resolve } from "node:path";
 import { getLogger } from "../../../shared/logger.js";
 import type { FileConfig } from "./engine.js";
@@ -39,7 +39,7 @@ export class FileWatchTrigger {
             if (!filename) return;
 
             const fullPath = resolve(watchPath, filename);
-            const mappedEvent = this.mapEvent(eventType);
+            const mappedEvent = this.mapEvent(eventType, fullPath);
             if (!mappedEvent || !this.events.has(mappedEvent)) return;
 
             // Debounce: coalesce rapid events on the same file
@@ -102,15 +102,13 @@ export class FileWatchTrigger {
 
   /**
    * Map Node's fs.watch event type to our FileEventType.
-   * fs.watch only emits "rename" and "change" — we approximate the rest.
+   * fs.watch only emits "rename" and "change". "rename" fires for both
+   * file creation and deletion — we disambiguate by checking file existence.
    */
-  private mapEvent(fsEvent: string): FileEventType | null {
+  private mapEvent(fsEvent: string, filePath: string): FileEventType | null {
     switch (fsEvent) {
       case "rename":
-        // "rename" fires for both create and delete. Without stating the file
-        // to check existence, we report "create" as the more common case.
-        // The calling code can stat if needed.
-        return "create";
+        return existsSync(filePath) ? "create" : "delete";
       case "change":
         return "modify";
       default:

@@ -15,6 +15,25 @@ import { kvGet } from "../../storage/kv.js";
 
 const log = getLogger();
 
+/**
+ * Extract a value from a JSON response body using a dot-notation path.
+ * Supports paths like "data.status", "items[0].name", or "count".
+ * Returns the stringified extracted value, or the raw body if extraction fails.
+ */
+function extractJsonPath(body: string, path: string): string {
+  try {
+    let obj: unknown = JSON.parse(body);
+    const segments = path.replace(/\[(\d+)\]/g, ".$1").split(".");
+    for (const seg of segments) {
+      if (obj == null || typeof obj !== "object") return body;
+      obj = (obj as Record<string, unknown>)[seg];
+    }
+    return typeof obj === "string" ? obj : JSON.stringify(obj);
+  } catch {
+    return body;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -575,9 +594,9 @@ export class TriggerEngine {
             });
             const body = await resp.text();
 
-            // If a filter is specified, only fire when the filtered value changes
+            // If a filter is specified, extract a value and only fire when it changes
             if (httpConfig.jqFilter) {
-              const current = body; // simplified — full jq would need a library
+              const current = extractJsonPath(body, httpConfig.jqFilter);
               if (lastValue !== undefined && current !== lastValue) {
                 await this.executeTriggerAction(trigger, {
                   status: resp.status,

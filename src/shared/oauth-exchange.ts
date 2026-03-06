@@ -45,6 +45,8 @@ export interface ExchangeOptions {
   clientId: string;
   clientSecret: string;
   codeVerifier?: string;
+  /** Provider-specific context. Used to resolve tokenUrl placeholders like {shop} for Shopify. */
+  context?: Record<string, string>;
 }
 
 // ---------------------------------------------------------------------------
@@ -109,16 +111,6 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
   ["shopify", {
     name: "shopify",
     tokenUrl: "https://{shop}.myshopify.com/admin/oauth/access_token",
-    tokenExchangeAuth: "body",
-  }],
-  ["slack", {
-    name: "slack",
-    tokenUrl: "https://slack.com/api/oauth.v2.access",
-    tokenExchangeAuth: "body",
-  }],
-  ["discord", {
-    name: "discord",
-    tokenUrl: "https://discord.com/api/oauth2/token",
     tokenExchangeAuth: "body",
   }],
   ["square", {
@@ -223,7 +215,15 @@ export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<Toke
     headers.Authorization = `Basic ${btoa(clientSecret + ":")}`;
   }
 
-  const response = await fetch(provider.tokenUrl, {
+  // Resolve provider-specific placeholders in tokenUrl (e.g. {shop} for Shopify)
+  let tokenUrl = provider.tokenUrl;
+  if (opts.context) {
+    for (const [key, value] of Object.entries(opts.context)) {
+      tokenUrl = tokenUrl.replace(`{${key}}`, value);
+    }
+  }
+
+  const response = await fetch(tokenUrl, {
     method: "POST",
     headers,
     body: new URLSearchParams(params).toString(),
