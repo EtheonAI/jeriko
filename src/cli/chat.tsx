@@ -52,7 +52,10 @@ export async function startChat(): Promise<void> {
   // First-run onboarding wizard (before Ink mounts)
   if (needsSetup()) {
     const result = await runOnboarding(new ClackPrompter(), version);
-    if (result) await persistSetup(result);
+    if (result) {
+      // persistSetup writes config + env, then calls spawnDaemon()
+      await persistSetup(result);
+    }
   }
 
   // Choose backend (daemon or in-process)

@@ -81,6 +81,23 @@ gdrive: ACTION [--flags] (Google Drive — list, search, upload, download, expor
 onedrive: ACTION [--flags] (OneDrive — list, search, upload, download, mkdir, move, rename, delete)
 gmail: ACTION [--flags] (Gmail — messages, labels, drafts, threads, send, search, profile)
 outlook: ACTION [--flags] (Outlook — messages, folders, send, reply, forward, search, profile)
+hubspot: RESOURCE ACTION [--flags] (HubSpot CRM — contacts, companies, deals, tickets, owners, pipelines)
+shopify: RESOURCE ACTION [--flags] (Shopify — products, orders, customers, inventory, collections)
+slack: RESOURCE ACTION [--flags] (Slack — messages, channels, users, files, reactions, search, pins)
+discord: RESOURCE ACTION [--flags] (Discord — guilds, channels, messages, reactions, users, roles)
+sendgrid: RESOURCE ACTION [--flags] (SendGrid — mail, contacts, lists, templates, stats, senders)
+square: RESOURCE ACTION [--flags] (Square — payments, orders, customers, catalog, inventory, locations)
+gitlab: RESOURCE ACTION [--flags] (GitLab — projects, issues, merge requests, pipelines, branches, users)
+cloudflare: RESOURCE ACTION [--flags] (Cloudflare — zones, DNS, Workers, KV, analytics)
+digitalocean: RESOURCE ACTION [--flags] (DigitalOcean — droplets, domains, databases, apps, volumes)
+notion: RESOURCE ACTION [--flags] (Notion — search, pages, databases, blocks, users, comments)
+linear: RESOURCE ACTION [--flags] (Linear — issues, projects, teams, cycles, labels, states)
+jira: RESOURCE ACTION [--flags] (Jira — issues, projects, boards, sprints, users, statuses)
+airtable: RESOURCE ACTION [--flags] (Airtable — bases, tables, records, fields)
+asana: RESOURCE ACTION [--flags] (Asana — tasks, projects, sections, workspaces, teams, tags)
+mailchimp: RESOURCE ACTION [--flags] (Mailchimp — lists, members, campaigns, templates, automations)
+dropbox: RESOURCE ACTION [--flags] (Dropbox — files, folders, sharing, search, users)
+salesforce: RESOURCE ACTION [--flags] (Salesforce — records, SOQL, objects, search, users, limits)
 connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified gateway — list, health, info, call any connector)
 
 ### AI & Code
@@ -271,7 +288,9 @@ See `references/cdk-patterns.md` for common CDK patterns.
 **Connector tool (agent)** — `connector` calls any configured external service:
 - `connector({ name: "gmail", method: "messages.list", params: { q: "is:unread" } })`
 - `connector({ name: "stripe", method: "customers.create", params: { email: "..." } })`
-- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x
+- `connector({ name: "slack", method: "messages.send", params: { channel: "C...", text: "Hello" } })`
+- `connector({ name: "notion", method: "search", params: { query: "meeting notes" } })`
+- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, slack, discord, sendgrid, square, gitlab, cloudflare, digitalocean, notion, linear, jira, airtable, asana, mailchimp, dropbox, salesforce
 
 ### Sharing
 share: [session-id-or-slug] [--revoke ID] [--list] [--no-expire] (share conversations)

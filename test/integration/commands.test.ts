@@ -775,8 +775,8 @@ describe("Per-chat isolation", () => {
 // ---------------------------------------------------------------------------
 
 describe("Connector registry", () => {
-  it("defines exactly 10 connectors", () => {
-    expect(CONNECTOR_DEFS.length).toBe(10);
+  it("defines exactly 27 connectors", () => {
+    expect(CONNECTOR_DEFS.length).toBe(27);
   });
 
   it("all connectors have required fields", () => {

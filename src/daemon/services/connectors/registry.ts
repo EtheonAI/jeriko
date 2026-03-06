@@ -46,6 +46,36 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./hubspot/connector.js")).HubSpotConnector,
   shopify: async () =>
     (await import("./shopify/connector.js")).ShopifyConnector,
+  slack: async () =>
+    (await import("./slack/connector.js")).SlackConnector,
+  discord: async () =>
+    (await import("./discord/connector.js")).DiscordConnector,
+  sendgrid: async () =>
+    (await import("./sendgrid/connector.js")).SendGridConnector,
+  square: async () =>
+    (await import("./square/connector.js")).SquareConnector,
+  gitlab: async () =>
+    (await import("./gitlab/connector.js")).GitLabConnector,
+  cloudflare: async () =>
+    (await import("./cloudflare/connector.js")).CloudflareConnector,
+  digitalocean: async () =>
+    (await import("./digitalocean/connector.js")).DigitalOceanConnector,
+  notion: async () =>
+    (await import("./notion/connector.js")).NotionConnector,
+  linear: async () =>
+    (await import("./linear/connector.js")).LinearConnector,
+  jira: async () =>
+    (await import("./jira/connector.js")).JiraConnector,
+  airtable: async () =>
+    (await import("./airtable/connector.js")).AirtableConnector,
+  asana: async () =>
+    (await import("./asana/connector.js")).AsanaConnector,
+  mailchimp: async () =>
+    (await import("./mailchimp/connector.js")).MailchimpConnector,
+  dropbox: async () =>
+    (await import("./dropbox/connector.js")).DropboxConnector,
+  salesforce: async () =>
+    (await import("./salesforce/connector.js")).SalesforceConnector,
 };
 
 // ---------------------------------------------------------------------------

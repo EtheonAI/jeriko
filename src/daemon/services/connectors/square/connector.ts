@@ -4,11 +4,23 @@
  * Extends BearerConnector for OAuth2 Bearer token auth with refresh.
  */
 
+import { createHmac, timingSafeEqual } from "crypto";
 import { BearerConnector } from "../base.js";
+import type { WebhookEvent } from "../interface.js";
 
 export class SquareConnector extends BearerConnector {
   readonly name = "square";
   readonly version = "1.0.0";
+
+  private webhookSignatureKey = "";
+
+  private get isSandbox(): boolean {
+    return !!process.env.SQUARE_SANDBOX || process.env.SQUARE_ENVIRONMENT === "sandbox";
+  }
+
+  private get baseHost(): string {
+    return this.isSandbox ? "connect.squareupsandbox.com" : "connect.squareup.com";
+  }
 
   protected readonly auth = {
     baseUrl: "https://connect.squareup.com/v2",
@@ -20,6 +32,44 @@ export class SquareConnector extends BearerConnector {
     healthPath: "/merchants/me",
     label: "Square",
   };
+
+  override async init(): Promise<void> {
+    await super.init();
+    this.webhookSignatureKey = process.env.SQUARE_WEBHOOK_SIGNATURE_KEY ?? "";
+  }
+
+  protected override buildUrl(path: string): string {
+    return `https://${this.baseHost}/v2${path}`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Webhook — Square HMAC-SHA256 signature verification
+  // ---------------------------------------------------------------------------
+
+  override async webhook(headers: Record<string, string>, body: string): Promise<WebhookEvent> {
+    const signature = headers["x-square-hmacsha256-signature"] ?? "";
+    const verified = this.verifyWebhookSignature(body, signature, headers["x-square-notification-url"] ?? "");
+
+    let parsed: Record<string, unknown>;
+    try { parsed = JSON.parse(body); } catch { parsed = {}; }
+
+    return {
+      id: (parsed.event_id as string) ?? crypto.randomUUID(),
+      source: this.name,
+      type: (parsed.type as string) ?? "square.webhook",
+      data: parsed,
+      verified,
+      received_at: new Date().toISOString(),
+    };
+  }
+
+  private verifyWebhookSignature(body: string, signature: string, notificationUrl: string): boolean {
+    if (!this.webhookSignatureKey || !signature) return false;
+    const payload = notificationUrl + body;
+    const expected = createHmac("sha256", this.webhookSignatureKey).update(payload).digest("base64");
+    if (expected.length !== signature.length) return false;
+    return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+  }
 
   protected override aliases(): Record<string, string> {
     return {

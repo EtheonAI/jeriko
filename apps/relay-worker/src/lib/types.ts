@@ -66,6 +66,81 @@ export interface Env {
   STRIPE_OAUTH_CLIENT_ID?: string;
   /** Stripe OAuth platform client secret. */
   STRIPE_OAUTH_CLIENT_SECRET?: string;
+
+  /** HubSpot OAuth client ID. */
+  HUBSPOT_OAUTH_CLIENT_ID?: string;
+  /** HubSpot OAuth client secret. */
+  HUBSPOT_OAUTH_CLIENT_SECRET?: string;
+
+  /** Shopify OAuth client ID. */
+  SHOPIFY_OAUTH_CLIENT_ID?: string;
+  /** Shopify OAuth client secret. */
+  SHOPIFY_OAUTH_CLIENT_SECRET?: string;
+
+  /** Slack OAuth client ID. */
+  SLACK_OAUTH_CLIENT_ID?: string;
+  /** Slack OAuth client secret. */
+  SLACK_OAUTH_CLIENT_SECRET?: string;
+
+  /** Discord OAuth client ID. */
+  DISCORD_OAUTH_CLIENT_ID?: string;
+  /** Discord OAuth client secret. */
+  DISCORD_OAUTH_CLIENT_SECRET?: string;
+
+  /** Square OAuth client ID. */
+  SQUARE_OAUTH_CLIENT_ID?: string;
+  /** Square OAuth client secret. */
+  SQUARE_OAUTH_CLIENT_SECRET?: string;
+
+  /** GitLab OAuth client ID. */
+  GITLAB_OAUTH_CLIENT_ID?: string;
+  /** GitLab OAuth client secret. */
+  GITLAB_OAUTH_CLIENT_SECRET?: string;
+
+  /** DigitalOcean OAuth client ID. */
+  DIGITALOCEAN_OAUTH_CLIENT_ID?: string;
+  /** DigitalOcean OAuth client secret. */
+  DIGITALOCEAN_OAUTH_CLIENT_SECRET?: string;
+
+  /** Notion OAuth client ID (public integration). */
+  NOTION_OAUTH_CLIENT_ID?: string;
+  /** Notion OAuth client secret (public integration). */
+  NOTION_OAUTH_CLIENT_SECRET?: string;
+
+  /** Linear OAuth client ID. */
+  LINEAR_OAUTH_CLIENT_ID?: string;
+  /** Linear OAuth client secret. */
+  LINEAR_OAUTH_CLIENT_SECRET?: string;
+
+  /** Atlassian OAuth client ID (Jira). */
+  ATLASSIAN_OAUTH_CLIENT_ID?: string;
+  /** Atlassian OAuth client secret (Jira). */
+  ATLASSIAN_OAUTH_CLIENT_SECRET?: string;
+
+  /** Airtable OAuth client ID. */
+  AIRTABLE_OAUTH_CLIENT_ID?: string;
+  /** Airtable OAuth client secret. */
+  AIRTABLE_OAUTH_CLIENT_SECRET?: string;
+
+  /** Asana OAuth client ID. */
+  ASANA_OAUTH_CLIENT_ID?: string;
+  /** Asana OAuth client secret. */
+  ASANA_OAUTH_CLIENT_SECRET?: string;
+
+  /** Mailchimp OAuth client ID. */
+  MAILCHIMP_OAUTH_CLIENT_ID?: string;
+  /** Mailchimp OAuth client secret. */
+  MAILCHIMP_OAUTH_CLIENT_SECRET?: string;
+
+  /** Dropbox OAuth client ID. */
+  DROPBOX_OAUTH_CLIENT_ID?: string;
+  /** Dropbox OAuth client secret. */
+  DROPBOX_OAUTH_CLIENT_SECRET?: string;
+
+  /** Salesforce OAuth client ID. */
+  SALESFORCE_OAUTH_CLIENT_ID?: string;
+  /** Salesforce OAuth client secret. */
+  SALESFORCE_OAUTH_CLIENT_SECRET?: string;
 }
 
 // ---------------------------------------------------------------------------

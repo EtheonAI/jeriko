@@ -27,14 +27,29 @@ export interface RelayOAuthCredentials {
  *   - outlook + onedrive → MICROSOFT_OAUTH_*
  */
 const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; clientSecretKey: keyof Env }> = new Map([
-  ["stripe",   { clientIdKey: "STRIPE_OAUTH_CLIENT_ID",    clientSecretKey: "STRIPE_OAUTH_CLIENT_SECRET" }],
-  ["github",   { clientIdKey: "GITHUB_OAUTH_CLIENT_ID",    clientSecretKey: "GITHUB_OAUTH_CLIENT_SECRET" }],
-  ["x",        { clientIdKey: "X_OAUTH_CLIENT_ID",         clientSecretKey: "X_OAUTH_CLIENT_SECRET" }],
-  ["gdrive",   { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",    clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
-  ["gmail",    { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",    clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
-  ["onedrive", { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
-  ["outlook",  { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
-  ["vercel",   { clientIdKey: "VERCEL_OAUTH_CLIENT_ID",    clientSecretKey: "VERCEL_OAUTH_CLIENT_SECRET" }],
+  ["stripe",       { clientIdKey: "STRIPE_OAUTH_CLIENT_ID",       clientSecretKey: "STRIPE_OAUTH_CLIENT_SECRET" }],
+  ["github",       { clientIdKey: "GITHUB_OAUTH_CLIENT_ID",       clientSecretKey: "GITHUB_OAUTH_CLIENT_SECRET" }],
+  ["x",            { clientIdKey: "X_OAUTH_CLIENT_ID",            clientSecretKey: "X_OAUTH_CLIENT_SECRET" }],
+  ["gdrive",       { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",       clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
+  ["gmail",        { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",       clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
+  ["onedrive",     { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID",    clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
+  ["outlook",      { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID",    clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
+  ["vercel",       { clientIdKey: "VERCEL_OAUTH_CLIENT_ID",       clientSecretKey: "VERCEL_OAUTH_CLIENT_SECRET" }],
+  ["hubspot",      { clientIdKey: "HUBSPOT_OAUTH_CLIENT_ID",      clientSecretKey: "HUBSPOT_OAUTH_CLIENT_SECRET" }],
+  ["shopify",      { clientIdKey: "SHOPIFY_OAUTH_CLIENT_ID",      clientSecretKey: "SHOPIFY_OAUTH_CLIENT_SECRET" }],
+  ["slack",        { clientIdKey: "SLACK_OAUTH_CLIENT_ID",        clientSecretKey: "SLACK_OAUTH_CLIENT_SECRET" }],
+  ["discord",      { clientIdKey: "DISCORD_OAUTH_CLIENT_ID",      clientSecretKey: "DISCORD_OAUTH_CLIENT_SECRET" }],
+  ["square",       { clientIdKey: "SQUARE_OAUTH_CLIENT_ID",       clientSecretKey: "SQUARE_OAUTH_CLIENT_SECRET" }],
+  ["gitlab",       { clientIdKey: "GITLAB_OAUTH_CLIENT_ID",       clientSecretKey: "GITLAB_OAUTH_CLIENT_SECRET" }],
+  ["digitalocean", { clientIdKey: "DIGITALOCEAN_OAUTH_CLIENT_ID", clientSecretKey: "DIGITALOCEAN_OAUTH_CLIENT_SECRET" }],
+  ["notion",       { clientIdKey: "NOTION_OAUTH_CLIENT_ID",       clientSecretKey: "NOTION_OAUTH_CLIENT_SECRET" }],
+  ["linear",       { clientIdKey: "LINEAR_OAUTH_CLIENT_ID",       clientSecretKey: "LINEAR_OAUTH_CLIENT_SECRET" }],
+  ["jira",         { clientIdKey: "ATLASSIAN_OAUTH_CLIENT_ID",    clientSecretKey: "ATLASSIAN_OAUTH_CLIENT_SECRET" }],
+  ["airtable",     { clientIdKey: "AIRTABLE_OAUTH_CLIENT_ID",     clientSecretKey: "AIRTABLE_OAUTH_CLIENT_SECRET" }],
+  ["asana",        { clientIdKey: "ASANA_OAUTH_CLIENT_ID",        clientSecretKey: "ASANA_OAUTH_CLIENT_SECRET" }],
+  ["mailchimp",    { clientIdKey: "MAILCHIMP_OAUTH_CLIENT_ID",    clientSecretKey: "MAILCHIMP_OAUTH_CLIENT_SECRET" }],
+  ["dropbox",      { clientIdKey: "DROPBOX_OAUTH_CLIENT_ID",      clientSecretKey: "DROPBOX_OAUTH_CLIENT_SECRET" }],
+  ["salesforce",   { clientIdKey: "SALESFORCE_OAUTH_CLIENT_ID",   clientSecretKey: "SALESFORCE_OAUTH_CLIENT_SECRET" }],
 ]);
 
 // ---------------------------------------------------------------------------

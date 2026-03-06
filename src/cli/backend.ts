@@ -7,7 +7,7 @@
  * which mode is active.
  */
 
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -1139,28 +1139,54 @@ export async function createBackend(): Promise<Backend> {
 }
 
 // ---------------------------------------------------------------------------
-// Setup persistence (used by Setup component)
+// Setup persistence (used by Setup component in Ink REPL)
 // ---------------------------------------------------------------------------
 
+/**
+ * Persist provider + API key from the in-REPL Setup component.
+ * Writes a full config (matching JerikoConfig schema), saves the API key,
+ * and starts the daemon — same outcome as the onboarding wizard.
+ */
 export async function persistSetup(
   provider: { envKey: string; model: string },
   apiKey: string,
 ): Promise<void> {
-  const { saveSecret } = await import("../shared/secrets.js");
   const { getConfigDir } = await import("../shared/config.js");
-
-  if (apiKey && provider.envKey) {
-    saveSecret(provider.envKey, apiKey);
-  }
+  const { spawnDaemon } = await import("./lib/daemon.js");
 
   const configDir = getConfigDir();
   if (!existsSync(configDir)) {
     mkdirSync(configDir, { recursive: true });
   }
 
+  // Write full config matching JerikoConfig schema
   const configPath = join(configDir, "config.json");
-  const config = { agent: { model: provider.model } };
+  const config = {
+    agent: { model: provider.model },
+    channels: {
+      telegram: { token: "", adminIds: [] },
+      whatsapp: { enabled: false },
+    },
+    connectors: {},
+    logging: { level: "info" },
+  };
   writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+
+  // Save API key to .env
+  if (apiKey && provider.envKey) {
+    const envPath = join(configDir, ".env");
+    const envLine = `${provider.envKey}=${apiKey}\n`;
+    const existing = existsSync(envPath)
+      ? readFileSync(envPath, "utf-8")
+      : "";
+    if (!existing.includes(`${provider.envKey}=`)) {
+      writeFileSync(envPath, existing + envLine);
+    }
+    process.env[provider.envKey] = apiKey;
+  }
+
+  // Start daemon so channels and triggers are ready
+  await spawnDaemon();
 }
 
 // ---------------------------------------------------------------------------

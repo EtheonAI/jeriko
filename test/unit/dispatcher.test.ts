@@ -22,7 +22,7 @@ describe("dispatcher", () => {
       // Only swallow the EXIT error from our process.exit mock
       if (e?.message !== "EXIT") throw e;
     }
-    expect(logSpy).toHaveBeenCalledWith("jeriko 2.0.0-alpha.0");
+    expect(logSpy).toHaveBeenCalledWith("jeriko 2.0.0-alpha.1");
   });
 
   it("--help prints help and exits", async () => {

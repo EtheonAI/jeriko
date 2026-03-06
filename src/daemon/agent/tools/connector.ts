@@ -65,15 +65,16 @@ export const connectorTool: ToolDefinition = {
   id: "connector",
   name: "connector",
   description:
-    "Call a configured connector API (Gmail, Stripe, GitHub, Twilio, etc.). " +
-    "Use this to send emails, list messages, create charges, manage repos, and more. " +
-    "Each connector has methods like 'messages.list', 'messages.send', 'customers.create'.",
+    "Call a configured connector API. Supports: Slack, Discord, Gmail, Stripe, GitHub, Twilio, Square, " +
+    "Notion, Linear, Jira, Airtable, Asana, GitLab, Salesforce, Dropbox, Mailchimp, HubSpot, Shopify, " +
+    "SendGrid, Cloudflare, DigitalOcean, PayPal, Vercel, OneDrive, Outlook, X, Google Drive. " +
+    "Use this to send messages, manage issues, create records, process payments, and more.",
   parameters: {
     type: "object",
     properties: {
       name: {
         type: "string",
-        description: "Connector name: gmail, stripe, github, twilio, outlook, gdrive, paypal",
+        description: "Connector name: slack, discord, gmail, stripe, github, twilio, square, notion, linear, jira, airtable, asana, gitlab, salesforce, dropbox, mailchimp, hubspot, shopify, sendgrid, cloudflare, digitalocean, paypal, vercel, onedrive, outlook, x, gdrive",
       },
       method: {
         type: "string",
@@ -87,7 +88,12 @@ export const connectorTool: ToolDefinition = {
     required: ["name", "method"],
   },
   execute,
-  aliases: ["connectors", "gmail", "stripe", "github", "twilio", "email_send", "send_email"],
+  aliases: [
+    "connectors", "gmail", "stripe", "github", "twilio", "email_send", "send_email",
+    "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare", "digitalocean",
+    "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox", "salesforce",
+    "hubspot", "shopify", "outlook", "onedrive", "gdrive", "vercel", "paypal", "x",
+  ],
 };
 
 registerTool(connectorTool);

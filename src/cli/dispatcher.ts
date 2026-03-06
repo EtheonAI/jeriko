@@ -29,6 +29,8 @@ export interface CommandHandler {
   name: string;
   /** One-line description shown in help output */
   description: string;
+  /** Category for grouping in discover/help (set during registration) */
+  category?: string;
   /** Execute the command with its own sub-arguments */
   run(args: string[]): Promise<void>;
 }
@@ -39,8 +41,22 @@ export interface CommandHandler {
 
 const registry = new Map<string, CommandHandler>();
 
-function register(handler: CommandHandler): void {
+function register(handler: CommandHandler, category?: string): void {
+  if (category) handler.category = category;
   registry.set(handler.name, handler);
+}
+
+function registerAll(handlers: CommandHandler[], category: string): void {
+  for (const h of handlers) register(h, category);
+}
+
+/**
+ * Return all registered commands. Loads them first if needed.
+ * Used by `discover` to enumerate commands without filesystem scanning.
+ */
+export async function getCommands(): Promise<ReadonlyMap<string, CommandHandler>> {
+  if (registry.size === 0) await loadBuiltinCommands();
+  return registry;
 }
 
 /** Lazily load and register all built-in commands. */
@@ -91,6 +107,21 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: outlook } = await import("./commands/integrations/outlook.js");
   const { command: hubspot } = await import("./commands/integrations/hubspot.js");
   const { command: shopify } = await import("./commands/integrations/shopify.js");
+  const { command: slack } = await import("./commands/integrations/slack.js");
+  const { command: discord } = await import("./commands/integrations/discord.js");
+  const { command: sendgrid } = await import("./commands/integrations/sendgrid.js");
+  const { command: square } = await import("./commands/integrations/square.js");
+  const { command: gitlab } = await import("./commands/integrations/gitlab.js");
+  const { command: cloudflare } = await import("./commands/integrations/cloudflare.js");
+  const { command: digitalocean } = await import("./commands/integrations/digitalocean.js");
+  const { command: notion } = await import("./commands/integrations/notion.js");
+  const { command: linear } = await import("./commands/integrations/linear.js");
+  const { command: jira } = await import("./commands/integrations/jira.js");
+  const { command: airtable } = await import("./commands/integrations/airtable.js");
+  const { command: asana } = await import("./commands/integrations/asana.js");
+  const { command: mailchimp } = await import("./commands/integrations/mailchimp.js");
+  const { command: dropbox } = await import("./commands/integrations/dropbox.js");
+  const { command: salesforce } = await import("./commands/integrations/salesforce.js");
   const { command: connectors } = await import("./commands/integrations/connectors.js");
 
   // Dev
@@ -124,23 +155,22 @@ async function loadBuiltinCommands(): Promise<void> {
   // Billing
   const { planCommand, upgradeCommand, billingCommand } = await import("./commands/billing.js");
 
-  const all = [
-    sys, exec, proc, net,
-    fs, doc,
-    browse, search, screenshot,
-    email, msg, notify, audio,
-    notes, remind, calendar, contacts, music, clipboard, window, camera, open, location,
-    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, hubspot, shopify, connectors,
-    code, create, dev, parallel,
-    ask, memory, discover, prompt, skill, share, provider,
-    init, onboard, server, task, setup, update,
-    install, trust, uninstall,
-    planCommand, upgradeCommand, billingCommand,
-  ];
-
-  for (const cmd of all) {
-    register(cmd);
-  }
+  registerAll([sys, exec, proc, net], "system");
+  registerAll([fs, doc], "files");
+  registerAll([browse, search, screenshot], "browser");
+  registerAll([email, msg, notify, audio], "comms");
+  registerAll([notes, remind, calendar, contacts, music, clipboard, window, camera, open, location], "os");
+  registerAll([
+    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, hubspot, shopify,
+    slack, discord, sendgrid, square, gitlab, cloudflare, digitalocean,
+    notion, linear, jira, airtable, asana, mailchimp, dropbox, salesforce,
+    connectors,
+  ], "integrations");
+  registerAll([code, create, dev, parallel], "dev");
+  registerAll([ask, memory, discover, prompt, skill, share, provider], "agent");
+  registerAll([init, onboard, server, task, setup, update], "automation");
+  registerAll([install, trust, uninstall], "plugin");
+  registerAll([planCommand, upgradeCommand, billingCommand], "billing");
 }
 
 // ---------------------------------------------------------------------------
@@ -265,10 +295,7 @@ export let outputFormat: OutputFormat = "json";
 export let quiet = false;
 
 export async function dispatcher(argv: string[]): Promise<void> {
-  // Load all built-in commands
-  await loadBuiltinCommands();
-
-  // Parse global flags
+  // Parse global flags early — before loading commands
   const parsed = parseArgs(argv);
   const formatFlag = flagStr(parsed, "format", "json");
   if (formatFlag === "json" || formatFlag === "text" || formatFlag === "logfmt") {
@@ -277,11 +304,14 @@ export async function dispatcher(argv: string[]): Promise<void> {
   }
   quiet = flagBool(parsed, "quiet");
 
-  // --version
+  // --version — fast path, no command loading needed
   if (flagBool(parsed, "version")) {
     printVersion();
     process.exit(0);
   }
+
+  // Load all built-in commands (deferred until actually needed)
+  await loadBuiltinCommands();
 
   // --help with no command
   if (flagBool(parsed, "help") && parsed.positional.length === 0) {

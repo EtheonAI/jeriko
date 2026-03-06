@@ -535,6 +535,7 @@ export class TriggerEngine {
         const cron = new CronTrigger(cronConfig.expression, cronConfig.timezone);
         cron.start(() => {
           this.executeTriggerAction(trigger).catch((err) => {
+            this.recordError(trigger);
             this.bus.emit("trigger:error", {
               triggerId: trigger.id,
               error: err instanceof Error ? err.message : String(err),
@@ -550,6 +551,7 @@ export class TriggerEngine {
         const watcher = new FileWatchTrigger(fileConfig);
         watcher.start((event, filePath) => {
           this.executeTriggerAction(trigger, { event, path: filePath }).catch((err) => {
+            this.recordError(trigger);
             this.bus.emit("trigger:error", {
               triggerId: trigger.id,
               error: err instanceof Error ? err.message : String(err),
@@ -591,6 +593,7 @@ export class TriggerEngine {
               });
             }
           } catch (err) {
+            this.recordError(trigger);
             this.bus.emit("trigger:error", {
               triggerId: trigger.id,
               error: err instanceof Error ? err.message : String(err),
@@ -623,6 +626,7 @@ export class TriggerEngine {
             snippet: message.snippet,
             uid: message.uid,
           }).catch((err) => {
+            this.recordError(trigger);
             this.bus.emit("trigger:error", {
               triggerId: trigger.id,
               error: err instanceof Error ? err.message : String(err),
@@ -648,6 +652,7 @@ export class TriggerEngine {
               this.executeTriggerAction(trigger).then(() => {
                 this.disable(trigger.id);
               }).catch((err) => {
+                this.recordError(trigger);
                 this.bus.emit("trigger:error", {
                   triggerId: trigger.id,
                   error: err instanceof Error ? err.message : String(err),
@@ -662,6 +667,7 @@ export class TriggerEngine {
             this.executeTriggerAction(trigger).then(() => {
               this.disable(trigger.id);
             }).catch((err) => {
+              this.recordError(trigger);
               this.bus.emit("trigger:error", {
                 triggerId: trigger.id,
                 error: err instanceof Error ? err.message : String(err),
@@ -798,6 +804,7 @@ export class TriggerEngine {
         this.executeAgentAction(trigger.id, action.prompt, payload).catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`Trigger ${trigger.id}: agent action failed — ${msg}`);
+          this.recordError(trigger);
           this.bus.emit("trigger:error", { triggerId: trigger.id, error: msg });
         });
         break;

@@ -7,10 +7,10 @@
  *   - Manually with `jeriko onboard`
  *   - From the REPL via `/onboard`
  *
- * Steps:
- *   1. Provider selection (Claude, GPT, Local)
- *   2. API key input + verification
- *   3. Optional Telegram bot setup
+ * Flow (channel-first):
+ *   1. Channel select — Telegram, WhatsApp, or skip
+ *   2. Provider selection (Claude, GPT, Local, or custom)
+ *   3. API key input + verification
  *   4. Persist config + env
  */
 
@@ -47,7 +47,7 @@ export const command: CommandHandler = {
     if (flagBool(parsed, "help")) {
       console.log("Usage: jeriko onboard");
       console.log("\nInteractive setup wizard for first-time configuration.");
-      console.log("Sets up your AI provider, API key, and optional Telegram bot.");
+      console.log("Sets up messaging channel, AI provider, and API key.");
       process.exit(0);
     }
 

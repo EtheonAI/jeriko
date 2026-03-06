@@ -8,17 +8,18 @@
  *   4. Provider select — Claude (recommended), GPT, Local/Ollama
  *   5. API key input — masked, validated
  *   6. API key verification — spinner testing the key works
- *   7. Outro — "You're all set!"
+ *   7. Auto-start daemon
+ *   8. Outro — "You're all set!"
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
 import { validateApiKey, getProviderOptions } from "../lib/setup.js";
 import { CHANNEL_OPTIONS, type ChannelChoice } from "../lib/setup.js";
 import { getConfigDir } from "../../shared/config.js";
-import { verifyApiKey } from "./verify.js";
+import { verifyApiKey, verifyOllamaRunning } from "./verify.js";
 import type { WizardPrompter } from "./prompter.js";
+import { JERIKO_DIR, spawnDaemon } from "../lib/daemon.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -83,7 +84,7 @@ export async function runOnboarding(
   } else if (channelId === "whatsapp") {
     whatsappEnabled = true;
     prompter.note(
-      "WhatsApp will pair via QR code when the daemon starts.\nRun: jeriko server start",
+      "WhatsApp will pair via QR code when the daemon starts.",
       "WhatsApp",
     );
   }
@@ -137,6 +138,21 @@ export async function runOnboarding(
     } else {
       s.stop("API key could not be verified (will try anyway)");
     }
+  } else if (provider.id === "local") {
+    // Verify Ollama is reachable
+    const s = prompter.spinner();
+    s.start("Checking Ollama...");
+
+    const running = await verifyOllamaRunning();
+    if (running) {
+      s.stop("Ollama is running");
+    } else {
+      s.stop("Ollama not detected");
+      prompter.note(
+        "Install Ollama: https://ollama.com\nThen run: ollama pull llama3",
+        "Ollama Required",
+      );
+    }
   }
 
   prompter.outro("You're all set! Type /help for commands.");
@@ -157,13 +173,12 @@ export async function runOnboarding(
 // ---------------------------------------------------------------------------
 
 /**
- * Write onboarding results to config + env files.
+ * Write onboarding results to config + env files, then start the daemon.
  */
 export async function persistSetup(result: OnboardingResult): Promise<void> {
-  const jerikoDir = join(homedir(), ".jeriko");
   const configDir = getConfigDir();
 
-  if (!existsSync(jerikoDir)) mkdirSync(jerikoDir, { recursive: true });
+  if (!existsSync(JERIKO_DIR)) mkdirSync(JERIKO_DIR, { recursive: true });
   if (!existsSync(configDir)) mkdirSync(configDir, { recursive: true });
 
   // Write config.json
@@ -201,6 +216,9 @@ export async function persistSetup(result: OnboardingResult): Promise<void> {
     // Also set in current process so backend picks it up
     process.env[result.envKey] = result.apiKey;
   }
+
+  // Auto-start daemon so WhatsApp QR pairing works immediately
+  await spawnDaemon();
 }
 
 // ---------------------------------------------------------------------------

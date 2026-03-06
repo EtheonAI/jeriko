@@ -23,18 +23,44 @@ declare const __BAKED_VERCEL_CLIENT_ID__: string | undefined;
 declare const __BAKED_STRIPE_CLIENT_ID__: string | undefined;
 declare const __BAKED_HUBSPOT_CLIENT_ID__: string | undefined;
 declare const __BAKED_SHOPIFY_CLIENT_ID__: string | undefined;
+declare const __BAKED_SLACK_CLIENT_ID__: string | undefined;
+declare const __BAKED_DISCORD_CLIENT_ID__: string | undefined;
+declare const __BAKED_SQUARE_CLIENT_ID__: string | undefined;
+declare const __BAKED_GITLAB_CLIENT_ID__: string | undefined;
+declare const __BAKED_DIGITALOCEAN_CLIENT_ID__: string | undefined;
+declare const __BAKED_NOTION_CLIENT_ID__: string | undefined;
+declare const __BAKED_LINEAR_CLIENT_ID__: string | undefined;
+declare const __BAKED_ATLASSIAN_CLIENT_ID__: string | undefined;
+declare const __BAKED_AIRTABLE_CLIENT_ID__: string | undefined;
+declare const __BAKED_ASANA_CLIENT_ID__: string | undefined;
+declare const __BAKED_MAILCHIMP_CLIENT_ID__: string | undefined;
+declare const __BAKED_DROPBOX_CLIENT_ID__: string | undefined;
+declare const __BAKED_SALESFORCE_CLIENT_ID__: string | undefined;
 
 /**
  * Baked-in OAuth client IDs, keyed by a logical group name.
  * Multiple providers can share the same client ID (e.g. gmail + gdrive share Google's).
  */
 export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>> = {
-  github:    typeof __BAKED_GITHUB_CLIENT_ID__    !== "undefined" ? __BAKED_GITHUB_CLIENT_ID__    : undefined,
-  google:    typeof __BAKED_GOOGLE_CLIENT_ID__    !== "undefined" ? __BAKED_GOOGLE_CLIENT_ID__    : undefined,
-  microsoft: typeof __BAKED_MICROSOFT_CLIENT_ID__ !== "undefined" ? __BAKED_MICROSOFT_CLIENT_ID__ : undefined,
-  x:         typeof __BAKED_X_CLIENT_ID__         !== "undefined" ? __BAKED_X_CLIENT_ID__         : undefined,
-  vercel:    typeof __BAKED_VERCEL_CLIENT_ID__    !== "undefined" ? __BAKED_VERCEL_CLIENT_ID__    : undefined,
-  stripe:    typeof __BAKED_STRIPE_CLIENT_ID__    !== "undefined" ? __BAKED_STRIPE_CLIENT_ID__    : undefined,
-  hubspot:   typeof __BAKED_HUBSPOT_CLIENT_ID__   !== "undefined" ? __BAKED_HUBSPOT_CLIENT_ID__   : undefined,
-  shopify:   typeof __BAKED_SHOPIFY_CLIENT_ID__   !== "undefined" ? __BAKED_SHOPIFY_CLIENT_ID__   : undefined,
+  github:       typeof __BAKED_GITHUB_CLIENT_ID__       !== "undefined" ? __BAKED_GITHUB_CLIENT_ID__       : undefined,
+  google:       typeof __BAKED_GOOGLE_CLIENT_ID__       !== "undefined" ? __BAKED_GOOGLE_CLIENT_ID__       : undefined,
+  microsoft:    typeof __BAKED_MICROSOFT_CLIENT_ID__    !== "undefined" ? __BAKED_MICROSOFT_CLIENT_ID__    : undefined,
+  x:            typeof __BAKED_X_CLIENT_ID__            !== "undefined" ? __BAKED_X_CLIENT_ID__            : undefined,
+  vercel:       typeof __BAKED_VERCEL_CLIENT_ID__       !== "undefined" ? __BAKED_VERCEL_CLIENT_ID__       : undefined,
+  stripe:       typeof __BAKED_STRIPE_CLIENT_ID__       !== "undefined" ? __BAKED_STRIPE_CLIENT_ID__       : undefined,
+  hubspot:      typeof __BAKED_HUBSPOT_CLIENT_ID__      !== "undefined" ? __BAKED_HUBSPOT_CLIENT_ID__      : undefined,
+  shopify:      typeof __BAKED_SHOPIFY_CLIENT_ID__      !== "undefined" ? __BAKED_SHOPIFY_CLIENT_ID__      : undefined,
+  slack:        typeof __BAKED_SLACK_CLIENT_ID__        !== "undefined" ? __BAKED_SLACK_CLIENT_ID__        : undefined,
+  discord:      typeof __BAKED_DISCORD_CLIENT_ID__      !== "undefined" ? __BAKED_DISCORD_CLIENT_ID__      : undefined,
+  square:       typeof __BAKED_SQUARE_CLIENT_ID__       !== "undefined" ? __BAKED_SQUARE_CLIENT_ID__       : undefined,
+  gitlab:       typeof __BAKED_GITLAB_CLIENT_ID__       !== "undefined" ? __BAKED_GITLAB_CLIENT_ID__       : undefined,
+  digitalocean: typeof __BAKED_DIGITALOCEAN_CLIENT_ID__ !== "undefined" ? __BAKED_DIGITALOCEAN_CLIENT_ID__ : undefined,
+  notion:       typeof __BAKED_NOTION_CLIENT_ID__       !== "undefined" ? __BAKED_NOTION_CLIENT_ID__       : undefined,
+  linear:       typeof __BAKED_LINEAR_CLIENT_ID__       !== "undefined" ? __BAKED_LINEAR_CLIENT_ID__       : undefined,
+  atlassian:    typeof __BAKED_ATLASSIAN_CLIENT_ID__    !== "undefined" ? __BAKED_ATLASSIAN_CLIENT_ID__    : undefined,
+  airtable:     typeof __BAKED_AIRTABLE_CLIENT_ID__     !== "undefined" ? __BAKED_AIRTABLE_CLIENT_ID__     : undefined,
+  asana:        typeof __BAKED_ASANA_CLIENT_ID__        !== "undefined" ? __BAKED_ASANA_CLIENT_ID__        : undefined,
+  mailchimp:    typeof __BAKED_MAILCHIMP_CLIENT_ID__    !== "undefined" ? __BAKED_MAILCHIMP_CLIENT_ID__    : undefined,
+  dropbox:      typeof __BAKED_DROPBOX_CLIENT_ID__      !== "undefined" ? __BAKED_DROPBOX_CLIENT_ID__      : undefined,
+  salesforce:   typeof __BAKED_SALESFORCE_CLIENT_ID__   !== "undefined" ? __BAKED_SALESFORCE_CLIENT_ID__   : undefined,
 };

@@ -1,5 +1,5 @@
 /**
- * API key verification — lightweight ping to validate credentials.
+ * API key and provider verification — lightweight pings to validate setup.
  */
 
 /**
@@ -39,11 +39,31 @@ export async function verifyApiKey(provider: string, apiKey: string): Promise<bo
       return res.status !== 401;
     }
 
-    // Local models don't need verification
+    // Local models don't need API key verification
     return true;
   } catch {
     // Network error — can't verify, assume key is OK
     return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Check if Ollama is running and reachable at localhost:11434.
+ * Returns true if Ollama responds, false otherwise.
+ */
+export async function verifyOllamaRunning(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 3_000);
+
+  try {
+    const res = await fetch("http://127.0.0.1:11434/api/tags", {
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
   } finally {
     clearTimeout(timer);
   }

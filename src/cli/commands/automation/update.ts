@@ -36,7 +36,7 @@ import { execSync } from "node:child_process";
 // Constants
 // ---------------------------------------------------------------------------
 
-const GITHUB_REPO = "khaleel737/jeriko";
+const GITHUB_REPO = "etheonai/jeriko";
 const CDN_URL = process.env.JERIKO_CDN_URL ?? "https://releases.jeriko.ai";
 const GITHUB_API = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 

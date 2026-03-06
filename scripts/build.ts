@@ -62,8 +62,21 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_X_CLIENT_ID__:         JSON.stringify(process.env.BAKED_X_CLIENT_ID         ?? ""),
   __BAKED_VERCEL_CLIENT_ID__:    JSON.stringify(process.env.BAKED_VERCEL_CLIENT_ID    ?? ""),
   __BAKED_STRIPE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
-  __BAKED_HUBSPOT_CLIENT_ID__:   JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID   ?? ""),
-  __BAKED_SHOPIFY_CLIENT_ID__:   JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID   ?? ""),
+  __BAKED_HUBSPOT_CLIENT_ID__:      JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID      ?? ""),
+  __BAKED_SHOPIFY_CLIENT_ID__:      JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID      ?? ""),
+  __BAKED_SLACK_CLIENT_ID__:        JSON.stringify(process.env.BAKED_SLACK_CLIENT_ID        ?? ""),
+  __BAKED_DISCORD_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DISCORD_CLIENT_ID      ?? ""),
+  __BAKED_SQUARE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_SQUARE_CLIENT_ID       ?? ""),
+  __BAKED_GITLAB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITLAB_CLIENT_ID       ?? ""),
+  __BAKED_DIGITALOCEAN_CLIENT_ID__: JSON.stringify(process.env.BAKED_DIGITALOCEAN_CLIENT_ID ?? ""),
+  __BAKED_NOTION_CLIENT_ID__:       JSON.stringify(process.env.BAKED_NOTION_CLIENT_ID       ?? ""),
+  __BAKED_LINEAR_CLIENT_ID__:       JSON.stringify(process.env.BAKED_LINEAR_CLIENT_ID       ?? ""),
+  __BAKED_ATLASSIAN_CLIENT_ID__:    JSON.stringify(process.env.BAKED_ATLASSIAN_CLIENT_ID    ?? ""),
+  __BAKED_AIRTABLE_CLIENT_ID__:     JSON.stringify(process.env.BAKED_AIRTABLE_CLIENT_ID     ?? ""),
+  __BAKED_ASANA_CLIENT_ID__:        JSON.stringify(process.env.BAKED_ASANA_CLIENT_ID        ?? ""),
+  __BAKED_MAILCHIMP_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MAILCHIMP_CLIENT_ID    ?? ""),
+  __BAKED_DROPBOX_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DROPBOX_CLIENT_ID      ?? ""),
+  __BAKED_SALESFORCE_CLIENT_ID__:   JSON.stringify(process.env.BAKED_SALESFORCE_CLIENT_ID   ?? ""),
 };
 
 /** Packages that are always external (optional deps, never bundled). */

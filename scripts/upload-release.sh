@@ -20,7 +20,7 @@ set -euo pipefail
 VERSION=$(grep '"version"' package.json | head -1 | sed 's/.*"\([0-9][^"]*\)".*/\1/')
 DIST_DIR="dist"
 R2_BUCKET="${JERIKO_R2_BUCKET:-jeriko-releases}"
-GITHUB_REPO="khaleel737/jeriko"
+GITHUB_REPO="etheonai/jeriko"
 RELEASES_URL="https://github.com/$GITHUB_REPO/releases"
 
 # Cloudflare account — required for R2 uploads

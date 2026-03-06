@@ -1,9 +1,10 @@
 // Storage — SQLite database lifecycle (init, migrate, close).
 
 import { Database } from "bun:sqlite";
-import { mkdirSync, existsSync, readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
+import { MIGRATIONS } from "./migrations.js";
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -12,9 +13,6 @@ const DATA_DIR = join(homedir(), ".jeriko", "data");
 
 /** Database file path. */
 const DB_PATH = join(DATA_DIR, "jeriko.db");
-
-/** Directory containing numbered .sql migration files. */
-const MIGRATIONS_DIR = join(import.meta.dir, "migrations");
 
 // ─── Singleton ──────────────────────────────────────────────────────────────
 
@@ -68,11 +66,11 @@ export function getDatabase(): Database {
 }
 
 /**
- * Run all pending SQL migration files from the migrations directory.
+ * Run all pending SQL migrations from the embedded migration registry.
  *
- * Migration files must be named `NNNN_<name>.sql` (e.g. `0001_init.sql`).
- * They are applied in lexicographic order. Each is tracked in the
- * `_migrations` table so it only runs once.
+ * Migrations are embedded at compile time (see migrations.ts) so they
+ * work in both development and compiled binary. Each migration is tracked
+ * in the `_migrations` table so it only runs once.
  */
 export function runMigrations(db: Database): void {
   // Ensure migration tracking table exists.
@@ -84,14 +82,7 @@ export function runMigrations(db: Database): void {
     );
   `);
 
-  // Discover migration files, sorted by name.
-  if (!existsSync(MIGRATIONS_DIR)) return;
-
-  const files = readdirSync(MIGRATIONS_DIR)
-    .filter((f) => f.endsWith(".sql"))
-    .sort();
-
-  if (files.length === 0) return;
+  if (MIGRATIONS.length === 0) return;
 
   // Determine which have already been applied.
   const applied = new Set<string>(
@@ -101,16 +92,14 @@ export function runMigrations(db: Database): void {
       .map((row) => row.name),
   );
 
-  for (const file of files) {
-    if (applied.has(file)) continue;
-
-    const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf-8");
+  for (const migration of MIGRATIONS) {
+    if (applied.has(migration.filename)) continue;
 
     // Run the entire migration inside a transaction.
     db.transaction(() => {
-      db.exec(sql);
+      db.exec(migration.sql);
       db.prepare("INSERT INTO _migrations (name, applied_at) VALUES (?, ?)")
-        .run(file, Date.now());
+        .run(migration.filename, Date.now());
     })();
   }
 }

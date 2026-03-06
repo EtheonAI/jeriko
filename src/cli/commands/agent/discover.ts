@@ -1,9 +1,6 @@
 import type { CommandHandler } from "../../dispatcher.js";
 import { parseArgs, flagBool, flagStr } from "../../../shared/args.js";
-import { ok, fail } from "../../../shared/output.js";
-import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { ok } from "../../../shared/output.js";
 
 export const command: CommandHandler = {
   name: "discover",
@@ -16,69 +13,59 @@ export const command: CommandHandler = {
       console.log("\nAuto-discover installed commands and generate a system prompt");
       console.log("listing all available capabilities.");
       console.log("\nFlags:");
+      console.log("  --list                 List all commands as JSON");
       console.log("  --format toon|verbose  Output format (default: toon)");
-      console.log("  --include-plugins      Include plugin commands");
       console.log("  --output <path>        Write to file instead of stdout");
       process.exit(0);
     }
 
     const format = flagStr(parsed, "format", "toon");
 
-    // Import dispatcher to access command registry
-    // We dynamically load the dispatcher to get the registered commands
-    const { dispatcher } = await import("../../dispatcher.js");
+    // Use the dispatcher registry — no filesystem scanning needed.
+    // This works in both dev mode and compiled binaries.
+    const { getCommands } = await import("../../dispatcher.js");
+    const registry = await getCommands();
 
-    // Build command list by scanning the commands directory
-    const commandsDir = join(dirname(fileURLToPath(import.meta.url)), "..");
-    const categories = readdirSync(commandsDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory())
-      .map((d) => d.name);
+    // Group commands by category
+    const grouped: Record<string, Array<{ name: string; description: string }>> = {};
+    for (const cmd of registry.values()) {
+      const cat = cmd.category ?? "other";
+      if (!grouped[cat]) grouped[cat] = [];
+      grouped[cat]!.push({ name: cmd.name, description: cmd.description });
+    }
 
-    const commands: Array<{ name: string; description: string; category: string }> = [];
-
-    for (const category of categories) {
-      const catDir = join(commandsDir, category);
-      const files = readdirSync(catDir).filter((f) => f.endsWith(".ts") || f.endsWith(".js"));
-
-      for (const file of files) {
-        try {
-          const mod = await import(join(catDir, file));
-          if (mod.command && mod.command.name && mod.command.description) {
-            commands.push({
-              name: mod.command.name,
-              description: mod.command.description,
-              category,
-            });
-          }
-        } catch {
-          // Skip files that fail to import
-        }
-      }
+    if (flagBool(parsed, "list")) {
+      const commands = [...registry.values()].map((c) => ({
+        name: c.name,
+        description: c.description,
+        category: c.category ?? "other",
+      }));
+      ok({ commands, count: commands.length });
+      return;
     }
 
     if (format === "toon") {
-      // Generate compact TOON-format prompt
-      const grouped: Record<string, string[]> = {};
-      for (const cmd of commands) {
-        if (!grouped[cmd.category]) grouped[cmd.category] = [];
-        grouped[cmd.category]!.push(`${cmd.name}: ${cmd.description}`);
-      }
-
       const sections = Object.entries(grouped)
-        .map(([cat, cmds]) => `## ${cat}\n${cmds.join("\n")}`)
+        .map(([cat, cmds]) => `## ${cat}\n${cmds.map((c) => `${c.name}: ${c.description}`).join("\n")}`)
         .join("\n\n");
 
-      const prompt = `# Jeriko CLI — Available Commands\n\n${sections}\n\nTotal: ${commands.length} commands`;
+      const total = [...registry.values()].length;
+      const prompt = `# Jeriko CLI — Available Commands\n\n${sections}\n\nTotal: ${total} commands`;
 
       const output = flagStr(parsed, "output", "");
       if (output) {
         const { writeFileSync } = await import("node:fs");
         writeFileSync(output, prompt);
-        ok({ written: output, commands: commands.length });
+        ok({ written: output, commands: total });
       } else {
-        ok({ prompt, commands: commands.length, categories: Object.keys(grouped) });
+        ok({ prompt, commands: total, categories: Object.keys(grouped) });
       }
     } else {
+      const commands = [...registry.values()].map((c) => ({
+        name: c.name,
+        description: c.description,
+        category: c.category ?? "other",
+      }));
       ok({ commands, count: commands.length });
     }
   },

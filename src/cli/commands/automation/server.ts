@@ -1,19 +1,19 @@
 import type { CommandHandler } from "../../dispatcher.js";
 import { parseArgs, flagBool, flagStr } from "../../../shared/args.js";
 import { ok, fail } from "../../../shared/output.js";
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  JERIKO_DIR,
+  PID_FILE,
+  SOCKET_PATH,
+  LOG_FILE,
+  readPid,
+  isDaemonRunning,
+  cleanupPidFile,
+  spawnDaemon,
+} from "../../lib/daemon.js";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
-
-const JERIKO_DIR = join(homedir(), ".jeriko");
-
-/** Ensure ~/.jeriko and ~/.jeriko/data exist on first run. */
-function ensureDirs(): void {
-  mkdirSync(join(JERIKO_DIR, "data"), { recursive: true });
-}
-const PID_FILE = join(JERIKO_DIR, "daemon.pid");
-const SOCKET_PATH = join(JERIKO_DIR, "daemon.sock");
-const LOG_FILE = join(JERIKO_DIR, "data", "daemon.log");
 
 export const command: CommandHandler = {
   name: "server",
@@ -50,57 +50,18 @@ export const command: CommandHandler = {
         const foreground = flagBool(parsed, "foreground");
         const logLevel = flagStr(parsed, "log-level", "info");
 
-        ensureDirs();
+        mkdirSync(join(JERIKO_DIR, "data"), { recursive: true });
 
         if (foreground) {
-          // Run in foreground — blocks until signal
           writeFileSync(PID_FILE, String(process.pid));
           const { boot, onShutdown } = await import("../../../daemon/kernel.js");
-          // Register PID cleanup with kernel so it runs during graceful shutdown
-          // before process.exit(). This avoids race conditions with competing signal handlers.
           onShutdown(() => cleanupPidFile());
           await boot({ port: parseInt(port, 10) });
-          // Keep process alive; kernel signal handlers perform graceful shutdown.
           await new Promise<void>(() => {});
           return;
         }
 
-        // Daemonize using node:child_process.spawn with detached + unref.
-        // Bun.spawn detached:true does not survive parent exit on macOS.
-        //
-        // In compiled Bun binaries:
-        //   process.execPath = "/path/to/jeriko"  (the binary itself)
-        //   process.argv[0]  = "bun"              (NOT the binary — internal Bun runtime name)
-        //   process.argv[1]  = "/$bunfs/root/..."  (internal VFS path)
-        // In dev mode (bun run src/index.ts):
-        //   process.execPath = "/path/to/.bun/bin/bun"
-        //   process.argv[1]  = "src/index.ts"
-        //
-        // So: always use process.execPath as the binary. For dev mode, pass the
-        // script as first arg. For compiled, execPath IS the binary.
-        cleanupPidFile();
-
-        const isBunVFS = process.argv[1]?.startsWith("/$bunfs/");
-        const isDevMode = !isBunVFS
-          && (process.argv[1]?.endsWith(".ts") || process.argv[1]?.endsWith(".js"));
-        const cmd = process.execPath;
-        const cmdArgs = isDevMode
-          ? [process.argv[1]!, "server", "start", "--foreground"]
-          : ["server", "start", "--foreground"];
-
-        const { spawn: nodeSpawn } = await import("node:child_process");
-        const { openSync: fsOpen, closeSync: fsClose } = await import("node:fs");
-        const logFd = fsOpen(LOG_FILE, "a");
-
-        const child = nodeSpawn(cmd, cmdArgs, {
-          detached: true,
-          stdio: ["ignore", logFd, logFd],
-          env: { ...process.env, JERIKO_PORT: port, LOG_LEVEL: logLevel },
-        });
-        child.unref();
-        fsClose(logFd);
-
-        const daemonPid = await waitForDaemonPid(5000);
+        const daemonPid = await spawnDaemon({ port, logLevel });
         if (daemonPid) {
           ok({ status: "started", pid: daemonPid, port: parseInt(port, 10) });
         } else {
@@ -132,7 +93,6 @@ export const command: CommandHandler = {
         break;
       }
       case "restart": {
-        // Stop then start
         if (isDaemonRunning()) {
           const pid = readPid();
           if (pid) {
@@ -141,10 +101,7 @@ export const command: CommandHandler = {
           }
         }
 
-        // Brief delay for cleanup
         await new Promise((r) => setTimeout(r, 500));
-
-        // Re-invoke start
         await command.run(["start", ...args.slice(1)]);
         break;
       }
@@ -176,42 +133,3 @@ export const command: CommandHandler = {
     }
   },
 };
-
-function readPid(): number | null {
-  if (!existsSync(PID_FILE)) return null;
-  try {
-    const pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
-    return isNaN(pid) ? null : pid;
-  } catch {
-    return null;
-  }
-}
-
-function isDaemonRunning(): boolean {
-  const pid = readPid();
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0); // Signal 0 = check existence
-    return true;
-  } catch {
-    cleanupPidFile();
-    return false;
-  }
-}
-
-function cleanupPidFile(): void {
-  try {
-    if (existsSync(PID_FILE)) unlinkSync(PID_FILE);
-    if (existsSync(SOCKET_PATH)) unlinkSync(SOCKET_PATH);
-  } catch { /* ignore */ }
-}
-
-async function waitForDaemonPid(timeoutMs: number): Promise<number | null> {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const pid = readPid();
-    if (pid) return pid;
-    await Bun.sleep(50);
-  }
-  return null;
-}

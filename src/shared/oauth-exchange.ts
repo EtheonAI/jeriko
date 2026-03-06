@@ -111,6 +111,71 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     tokenUrl: "https://{shop}.myshopify.com/admin/oauth/access_token",
     tokenExchangeAuth: "body",
   }],
+  ["slack", {
+    name: "slack",
+    tokenUrl: "https://slack.com/api/oauth.v2.access",
+    tokenExchangeAuth: "body",
+  }],
+  ["discord", {
+    name: "discord",
+    tokenUrl: "https://discord.com/api/oauth2/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["square", {
+    name: "square",
+    tokenUrl: "https://connect.squareup.com/oauth2/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["gitlab", {
+    name: "gitlab",
+    tokenUrl: "https://gitlab.com/oauth/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["digitalocean", {
+    name: "digitalocean",
+    tokenUrl: "https://cloud.digitalocean.com/v1/oauth/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["notion", {
+    name: "notion",
+    tokenUrl: "https://api.notion.com/v1/oauth/token",
+    tokenExchangeAuth: "basic",
+  }],
+  ["linear", {
+    name: "linear",
+    tokenUrl: "https://api.linear.app/oauth/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["jira", {
+    name: "jira",
+    tokenUrl: "https://auth.atlassian.com/oauth/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["airtable", {
+    name: "airtable",
+    tokenUrl: "https://airtable.com/oauth2/v1/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["asana", {
+    name: "asana",
+    tokenUrl: "https://app.asana.com/-/oauth_token",
+    tokenExchangeAuth: "body",
+  }],
+  ["mailchimp", {
+    name: "mailchimp",
+    tokenUrl: "https://login.mailchimp.com/oauth2/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["dropbox", {
+    name: "dropbox",
+    tokenUrl: "https://api.dropboxapi.com/oauth2/token",
+    tokenExchangeAuth: "body",
+  }],
+  ["salesforce", {
+    name: "salesforce",
+    tokenUrl: "https://login.salesforce.com/services/oauth2/token",
+    tokenExchangeAuth: "body",
+  }],
 ]);
 
 // ---------------------------------------------------------------------------
