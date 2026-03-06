@@ -20,6 +20,11 @@ beforeEach(() => {
   testDir = fs.mkdtempSync(path.join(os.tmpdir(), "jeriko-webdev-tool-test-"));
   originalHome = process.env.HOME;
   process.env.HOME = testDir;
+  // Git env vars so git commit works even when HOME is overridden (CI has no global gitconfig)
+  process.env.GIT_AUTHOR_NAME = process.env.GIT_AUTHOR_NAME ?? "Test";
+  process.env.GIT_AUTHOR_EMAIL = process.env.GIT_AUTHOR_EMAIL ?? "test@test.com";
+  process.env.GIT_COMMITTER_NAME = process.env.GIT_COMMITTER_NAME ?? "Test";
+  process.env.GIT_COMMITTER_EMAIL = process.env.GIT_COMMITTER_EMAIL ?? "test@test.com";
   clearTools();
   // Ensure no stale debug logs from prior tests
   try { fs.unlinkSync(DEBUG_LOGS_FILE); } catch { /* not found */ }
