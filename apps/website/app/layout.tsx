@@ -3,8 +3,8 @@ import { Footer } from "./components/footer";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Jeriko | Unix-First Autonomous AI",
-  description: "Jeriko is a Unix-first autonomous AI daemon and CLI for your operating system.",
+  title: "Jeriko | The New Intelligent OS for macOS",
+  description: "Jeriko transforms your Mac into an AI-powered operating system. One daemon, one CLI, total control.",
   icons: {
     icon: "/jeriko-logo-white.png",
     apple: "/jeriko-logo-white.png",

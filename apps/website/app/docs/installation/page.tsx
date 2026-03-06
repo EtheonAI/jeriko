@@ -4,7 +4,7 @@ import { PLATFORMS } from "../../../lib/install";
 
 export const metadata: Metadata = {
   title: "Installation | Jeriko",
-  description: "Install Jeriko on macOS, Linux, or Windows in one command.",
+  description: "Install Jeriko on macOS or Linux in one command.",
 };
 
 export default function InstallationPage() {
@@ -72,12 +72,6 @@ curl -fsSL https://jeriko.ai/install.sh | bash
 chmod +x jeriko
 mv jeriko /usr/local/bin/`,
           },
-          {
-            label: "Windows",
-            code: `# Download from releases, then add to PATH
-# Or use the PowerShell installer:
-irm https://jeriko.ai/install.ps1 | iex`,
-          },
         ]}
       />
 
@@ -90,10 +84,6 @@ irm https://jeriko.ai/install.ps1 | iex`,
         <div className="docs-requirement">
           <strong>Linux</strong>
           <span>x86_64 or ARM64, glibc 2.17+</span>
-        </div>
-        <div className="docs-requirement">
-          <strong>Windows</strong>
-          <span>10 or later (x64)</span>
         </div>
         <div className="docs-requirement">
           <strong>Disk</strong>

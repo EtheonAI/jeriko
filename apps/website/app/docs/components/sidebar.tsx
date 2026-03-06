@@ -35,6 +35,7 @@ const NAV: NavGroup[] = [
       { label: "Connectors", href: "/docs/endpoints/connectors" },
       { label: "Triggers", href: "/docs/endpoints/triggers" },
       { label: "Scheduler", href: "/docs/endpoints/scheduler" },
+      { label: "Billing", href: "/docs/endpoints/billing" },
       { label: "Shares", href: "/docs/endpoints/shares" },
       { label: "Webhooks", href: "/docs/endpoints/webhooks" },
       { label: "OAuth", href: "/docs/endpoints/oauth" },

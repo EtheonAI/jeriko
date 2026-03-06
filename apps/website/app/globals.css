@@ -800,6 +800,103 @@ h1 {
   text-decoration: none;
 }
 
+/* ===================================================================
+   Homepage — About, Steps, Audience sections
+   =================================================================== */
+
+.section-about {
+  margin-top: 48px;
+  padding: 0 4px;
+}
+
+.section-about h2 {
+  font-size: 24px;
+  margin: 0 0 12px;
+}
+
+.section-about .lead {
+  font-size: 16px;
+  max-width: 72ch;
+}
+
+.section-steps {
+  margin-top: 48px;
+}
+
+.section-steps > h2 {
+  font-size: 24px;
+  margin: 0 0 16px;
+}
+
+.section-steps .grid {
+  margin-top: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 840px) {
+  .section-steps .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .section-steps .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.section-steps h3 {
+  font-size: 16px;
+  margin: 0 0 6px;
+}
+
+.section-steps p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 14px;
+}
+
+.section-steps code {
+  background: var(--bg-elev);
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.section-audience {
+  margin-top: 48px;
+}
+
+.section-audience > h2 {
+  font-size: 24px;
+  margin: 0 0 16px;
+}
+
+.section-audience .grid {
+  margin-top: 0;
+}
+
+.section-audience h3 {
+  font-size: 16px;
+  margin: 0 0 6px;
+  color: var(--brand);
+}
+
 /* Mobile responsive */
 
 @media (max-width: 768px) {
