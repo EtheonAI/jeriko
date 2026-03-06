@@ -38,7 +38,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Relay E2E tests
         run: bun test test/integration/relay-e2e.test.ts --timeout 60000
@@ -62,7 +62,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Channel connector integration
         run: bun test test/integration/channel-connectors.test.ts --timeout 60000
@@ -86,7 +86,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Command integration tests
         run: bun test test/integration/commands.test.ts --timeout 60000
@@ -110,7 +110,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: E2E channel commands
         run: bun test test/e2e/ --timeout 60000
@@ -134,7 +134,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Billing unit tests
         run: bun test test/unit/billing/ --timeout 30000
@@ -158,7 +158,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Connector tests
         run: bun test test/unit/connectors.test.ts test/unit/oauth.test.ts --timeout 30000
@@ -182,7 +182,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Trigger tests
         run: bun test test/unit/trigger-engine.test.ts test/unit/trigger-routes.test.ts test/unit/email-trigger.test.ts --timeout 30000

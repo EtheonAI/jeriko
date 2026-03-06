@@ -30,7 +30,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Build all platforms
         run: bash scripts/release.sh
@@ -259,7 +259,7 @@ jobs:
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
 
-      - run: bun install --frozen-lockfile
+      - run: bun install
 
       - name: Run unix-install.sh
         run: bash scripts/unix-install.sh

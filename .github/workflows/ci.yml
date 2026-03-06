@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  BUN_VERSION: "1.1.45"
+  BUN_VERSION: "latest"
 
 jobs:
   # ─── Stage 1: Fast gates ────────────────────────────────────────────────
@@ -47,7 +47,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun run check
 
   smoke:
@@ -66,7 +66,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun run test:smoke
 
   # ─── Stage 2: Unit tests by subsystem ───────────────────────────────────
@@ -107,7 +107,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - name: "Run ${{ matrix.suite }} unit tests"
         run: bun run test:unit:${{ matrix.suite }} --timeout 30000
 
@@ -140,7 +140,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - name: "Run ${{ matrix.suite }} integration tests"
         run: bun run test:integration:${{ matrix.suite }} --timeout 60000
 
@@ -165,7 +165,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - name: Run E2E tests
         run: bun run test:e2e --timeout 60000
 
@@ -189,7 +189,7 @@ jobs:
             node_modules
           key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
           restore-keys: deps-${{ runner.os }}-
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - name: Build binary (Linux x64)
         run: bun run build:linux-x64
       - name: Verify binary runs
