@@ -60,7 +60,8 @@ describe("HELP_ENTRIES", () => {
     expect(commands).toContain("/help");
     expect(commands).toContain("/new");
     expect(commands).toContain("/sessions");
-    expect(commands).toContain("/models");
+    expect(commands).toContain("/model");
+    expect(commands).toContain("/model add [id]");
     expect(commands).toContain("/status");
     expect(commands).toContain("/skills");
   });

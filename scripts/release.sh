@@ -37,7 +37,7 @@ echo ""
 mkdir -p "$DIST_DIR"
 
 # Determine which platforms to build
-if [ -n "$1" ]; then
+if [ -n "${1:-}" ]; then
     PLATFORMS="$1"
 else
     PLATFORMS="$ALL_PLATFORMS"

@@ -89,6 +89,8 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: onedrive } = await import("./commands/integrations/onedrive.js");
   const { command: gmail } = await import("./commands/integrations/gmail.js");
   const { command: outlook } = await import("./commands/integrations/outlook.js");
+  const { command: hubspot } = await import("./commands/integrations/hubspot.js");
+  const { command: shopify } = await import("./commands/integrations/shopify.js");
   const { command: connectors } = await import("./commands/integrations/connectors.js");
 
   // Dev
@@ -108,6 +110,7 @@ async function loadBuiltinCommands(): Promise<void> {
 
   // Automation
   const { command: init } = await import("./commands/automation/init.js");
+  const { command: onboard } = await import("./commands/automation/onboard.js");
   const { command: server } = await import("./commands/automation/server.js");
   const { command: task } = await import("./commands/automation/task.js");
   const { command: setup } = await import("./commands/automation/setup.js");
@@ -127,10 +130,10 @@ async function loadBuiltinCommands(): Promise<void> {
     browse, search, screenshot,
     email, msg, notify, audio,
     notes, remind, calendar, contacts, music, clipboard, window, camera, open, location,
-    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, connectors,
+    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, hubspot, shopify, connectors,
     code, create, dev, parallel,
     ask, memory, discover, prompt, skill, share, provider,
-    init, server, task, setup, update,
+    init, onboard, server, task, setup, update,
     install, trust, uninstall,
     planCommand, upgradeCommand, billingCommand,
   ];
@@ -144,7 +147,7 @@ async function loadBuiltinCommands(): Promise<void> {
 // Version
 // ---------------------------------------------------------------------------
 
-const VERSION = "2.0.0-alpha.0";
+const VERSION = "2.0.0-alpha.1";
 
 function printVersion(): void {
   console.log(`jeriko ${VERSION}`);

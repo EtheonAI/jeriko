@@ -1,8 +1,11 @@
 /**
- * Tests for InputHistory — ring buffer with deduplication and navigation.
+ * Tests for InputHistory — ring buffer with deduplication, navigation, and persistence.
  */
 
-import { describe, test, expect, beforeEach } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach } from "bun:test";
+import { existsSync, unlinkSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { InputHistory } from "../../../../src/cli/lib/history.js";
 
 // ---------------------------------------------------------------------------
@@ -12,7 +15,7 @@ import { InputHistory } from "../../../../src/cli/lib/history.js";
 let history: InputHistory;
 
 beforeEach(() => {
-  history = new InputHistory();
+  history = new InputHistory({ filePath: null });
 });
 
 // ---------------------------------------------------------------------------
@@ -77,7 +80,7 @@ describe("push", () => {
 
 describe("ring buffer", () => {
   test("respects max size", () => {
-    const small = new InputHistory(3);
+    const small = new InputHistory({ maxSize: 3, filePath: null });
     small.push("a");
     small.push("b");
     small.push("c");
@@ -87,7 +90,7 @@ describe("ring buffer", () => {
   });
 
   test("drops oldest entries when full", () => {
-    const small = new InputHistory(2);
+    const small = new InputHistory({ maxSize: 2, filePath: null });
     small.push("first");
     small.push("second");
     small.push("third");
@@ -96,7 +99,7 @@ describe("ring buffer", () => {
   });
 
   test("max size of 1 works", () => {
-    const single = new InputHistory(1);
+    const single = new InputHistory({ maxSize: 1, filePath: null });
     single.push("a");
     single.push("b");
     expect(single.length).toBe(1);
@@ -256,5 +259,88 @@ describe("full navigation cycle", () => {
     idx = history.next(idx);
     expect(idx).toBe(3);
     expect(history.get(idx)).toBe("");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persistence — save/load
+// ---------------------------------------------------------------------------
+
+describe("persistence", () => {
+  const testDir = join(tmpdir(), `jeriko-test-history-${process.pid}`);
+  const testFile = join(testDir, "cli_history.json");
+
+  beforeEach(() => {
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    try { unlinkSync(testFile); } catch { /* ignore */ }
+  });
+
+  test("save and load round-trip", () => {
+    const h1 = new InputHistory({ filePath: testFile });
+    h1.push("alpha");
+    h1.push("beta");
+    h1.push("gamma");
+    h1.save();
+
+    expect(existsSync(testFile)).toBe(true);
+
+    const h2 = new InputHistory({ filePath: testFile });
+    h2.load();
+    expect(h2.length).toBe(3);
+    expect(h2.toArray()).toEqual(["alpha", "beta", "gamma"]);
+  });
+
+  test("load from non-existent file does not throw", () => {
+    const h = new InputHistory({ filePath: join(testDir, "nope.json") });
+    h.load();
+    expect(h.length).toBe(0);
+  });
+
+  test("load from corrupt file starts fresh", () => {
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(testFile, "not valid json {{{{");
+    const h = new InputHistory({ filePath: testFile });
+    h.load();
+    expect(h.length).toBe(0);
+  });
+
+  test("load enforces maxSize", () => {
+    const big = new InputHistory({ filePath: testFile });
+    for (let i = 0; i < 50; i++) big.push(`entry-${i}`);
+    big.save();
+
+    const small = new InputHistory({ maxSize: 10, filePath: testFile });
+    small.load();
+    expect(small.length).toBe(10);
+    expect(small.get(9)).toBe("entry-49");
+  });
+
+  test("save only when dirty", () => {
+    const h = new InputHistory({ filePath: testFile });
+    h.save(); // no push → not dirty → no file created
+    expect(existsSync(testFile)).toBe(false);
+
+    h.push("test");
+    h.save(); // dirty → writes
+    expect(existsSync(testFile)).toBe(true);
+  });
+
+  test("filePath null disables persistence", () => {
+    const h = new InputHistory({ filePath: null });
+    h.push("test");
+    h.save(); // no-op
+    h.load(); // no-op
+    expect(h.length).toBe(1);
+  });
+
+  test("load filters non-string entries", () => {
+    const { writeFileSync } = require("node:fs");
+    writeFileSync(testFile, JSON.stringify(["valid", 123, null, "also valid", ""]));
+    const h = new InputHistory({ filePath: testFile });
+    h.load();
+    expect(h.toArray()).toEqual(["valid", "also valid"]);
   });
 });

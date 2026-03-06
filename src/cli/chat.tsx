@@ -17,6 +17,9 @@ import { App } from "./app.js";
 import { printBanner } from "./components/Banner.js";
 import { createBackend } from "./backend.js";
 import { needsSetup } from "./lib/setup.js";
+import { runOnboarding } from "./wizard/onboarding.js";
+import { ClackPrompter } from "./wizard/clack-prompter.js";
+import { persistSetup } from "./wizard/onboarding.js";
 import type { Phase } from "./types.js";
 
 // Re-export for backward compat (tests, dispatcher)
@@ -46,6 +49,12 @@ export async function startChat(): Promise<void> {
 
   const version = await getVersion();
 
+  // First-run onboarding wizard (before Ink mounts)
+  if (needsSetup()) {
+    const result = await runOnboarding(new ClackPrompter(), version);
+    if (result) await persistSetup(result);
+  }
+
   // Choose backend (daemon or in-process)
   const backend = await createBackend();
   const model = backend.model;
@@ -54,8 +63,8 @@ export async function startChat(): Promise<void> {
   // Print banner before Ink takes over (stays in scrollback)
   printBanner(version, model, cwd);
 
-  // Determine initial phase
-  const initialPhase: Phase = needsSetup() ? "setup" : "idle";
+  // Always start idle (setup handled by wizard above)
+  const initialPhase: Phase = "idle";
 
   // Render Ink app
   const { waitUntilExit } = render(

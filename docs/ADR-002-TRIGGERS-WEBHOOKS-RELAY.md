@@ -1,6 +1,6 @@
 # ADR-002: Triggers, Webhooks & Relay Infrastructure — System Audit
 
-**Status:** Verified + 2 bugs found and fixed
+**Status:** Verified + 4 bugs found and fixed
 **Date:** 2026-03-06
 **Author:** System audit — full trace of trigger/webhook/relay pipeline
 **Test coverage:** 171 tests, 0 failures across 9 test files
@@ -236,6 +236,20 @@ Created (add)
 **Fix:** Updated test payloads to match current API contracts.
 
 **Files:** `test/unit/billing/webhook.test.ts`, `test/unit/billing/relay-proxy.test.ts`
+
+### Bug 4: Null bytes in env vars crash Bun.spawn — CRITICAL (live-test only)
+
+**Symptom:** Trigger fires (run_count increments, error_count stays 0) but shell action silently fails — no file created on disk, no error in trigger engine logs.
+
+**Root cause:** `GMAIL_REFRESH_TOKEN` in `~/.config/jeriko/.env` had 23 trailing null bytes (`\0`). When `executeTriggerAction()` spreads `process.env` into `Bun.spawn`'s env, the null bytes cause `ERR_INVALID_ARG_VALUE`. The error propagated to the relay client's webhook handler catch block, bypassing the trigger engine's own error handling — so `error_count` stayed 0 and no warning was logged.
+
+**Fix (two-part):**
+1. Cleaned the corrupted env file (23 null bytes removed)
+2. Added defensive null-byte stripping in `executeTriggerAction()` — sanitizes all env values before passing to `Bun.spawn`
+
+**File:** `src/daemon/services/triggers/engine.ts` — safeEnv sanitization before Bun.spawn
+
+**Discovery:** Only detectable through live E2E testing. Unit tests don't load the real env file, so this class of corruption is invisible to the test suite.
 
 ### Minor Observations (Not Bugs)
 

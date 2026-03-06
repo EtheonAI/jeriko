@@ -4,8 +4,11 @@ import { ok, fail } from "../../../shared/output.js";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { createInterface } from "node:readline";
 import { getConfigDir } from "../../../shared/config.js";
+import { ClackPrompter } from "../../wizard/clack-prompter.js";
+import { validateApiKey, getProviderOptions } from "../../lib/setup.js";
+import { verifyApiKey } from "../../wizard/verify.js";
+import type { WizardPrompter } from "../../wizard/prompter.js";
 
 const JERIKO_DIR = join(homedir(), ".jeriko");
 const CONFIG_DIR = getConfigDir();              // ~/.config/jeriko/
@@ -24,20 +27,16 @@ function deployAgentPrompt(): void {
     const candidate = join(dir, "AGENT.md");
     if (existsSync(candidate)) {
       copyFileSync(candidate, dest);
-      console.log(`  Agent prompt deployed to ${dest}`);
       return;
     }
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
+}
 
-  // If no AGENT.md found, leave existing or skip
-  if (existsSync(dest)) {
-    console.log("  Agent prompt already deployed (no AGENT.md found to update).");
-  } else {
-    console.log("  Warning: No AGENT.md found. Agent will have no system prompt.");
-  }
+function isCancel(value: unknown): value is symbol {
+  return typeof value === "symbol";
 }
 
 export const command: CommandHandler = {
@@ -53,11 +52,9 @@ export const command: CommandHandler = {
       console.log("  1. API keys (Claude, OpenAI, or local model)");
       console.log("  2. Telegram bot setup");
       console.log("  3. Security (NODE_AUTH_SECRET)");
-      console.log("  4. Tunnel configuration (for webhooks)");
-      console.log("  5. Integration credentials");
-      console.log("  6. Verify setup");
+      console.log("  4. Connectors");
+      console.log("  5. Verify setup");
       console.log("\nFlags:");
-      console.log("  --step <n>        Start from specific step");
       console.log("  --non-interactive Use env vars instead of prompts");
       console.log("  --force           Overwrite existing config");
       process.exit(0);
@@ -72,9 +69,8 @@ export const command: CommandHandler = {
 
     // Check for existing config
     if (existsSync(CONFIG_FILE) && !force) {
-      const existing = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"));
-      console.log("Existing configuration found. Use --force to overwrite.");
-      ok({ status: "exists", config_path: CONFIG_FILE, configured: Object.keys(existing) });
+      console.log("\n  Configuration already exists at " + CONFIG_FILE);
+      console.log("  Run with --force to reconfigure.\n");
       return;
     }
 
@@ -111,54 +107,107 @@ export const command: CommandHandler = {
       return;
     }
 
-    // Interactive mode
-    console.log("\n  Jeriko Setup Wizard\n");
-    console.log("  This wizard will configure your Jeriko installation.\n");
+    // Interactive mode with @clack/prompts
+    const prompter: WizardPrompter = new ClackPrompter();
 
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    const ask = (q: string): Promise<string> =>
-      new Promise((resolve) => rl.question(`  ${q}: `, resolve));
+    prompter.intro("Jeriko Setup");
 
     try {
       // Step 1: AI Provider
-      console.log("  Step 1/6 — AI Provider");
-      const hasAnthropic = !!process.env.ANTHROPIC_API_KEY;
-      const hasOpenAI = !!process.env.OPENAI_API_KEY;
-      console.log(`    ANTHROPIC_API_KEY: ${hasAnthropic ? "set" : "not set"}`);
-      console.log(`    OPENAI_API_KEY: ${hasOpenAI ? "set" : "not set"}`);
+      const providerOptions = getProviderOptions();
+      const providerId = await prompter.select({
+        message: "Choose your AI provider",
+        options: providerOptions.map((p, i) => ({
+          value: p.id,
+          label: p.name,
+          hint: i === 0 ? "recommended" : !p.needsApiKey ? "no API key needed" : undefined,
+        })),
+      });
 
-      // Step 2: Telegram
-      console.log("\n  Step 2/6 — Telegram");
-      const hasTelegram = !!process.env.TELEGRAM_BOT_TOKEN;
-      console.log(`    TELEGRAM_BOT_TOKEN: ${hasTelegram ? "set" : "not set"}`);
-
-      // Step 3: Security
-      console.log("\n  Step 3/6 — Security");
-      const hasAuth = !!process.env.NODE_AUTH_SECRET;
-      console.log(`    NODE_AUTH_SECRET: ${hasAuth ? "set" : "NOT SET (required!)"}`);
-
-      // Step 4: Tunnel
-      console.log("\n  Step 4/6 — Tunnel (for webhooks)");
-      console.log("    Options: cloudflare-named, cloudflare-quick, localtunnel");
-
-      // Step 5: Integrations
-      console.log("\n  Step 5/6 — Integrations");
-      const integrations = ["STRIPE_SECRET_KEY", "GITHUB_TOKEN", "TWILIO_ACCOUNT_SID"];
-      for (const key of integrations) {
-        console.log(`    ${key}: ${process.env[key] ? "set" : "not set"}`);
+      if (isCancel(providerId)) {
+        prompter.outro("Setup cancelled.");
+        return;
       }
 
-      // Step 6: Verify
-      console.log("\n  Step 6/6 — Verification");
+      const provider = providerOptions.find((p) => p.id === providerId)!;
 
-      // Build config matching JerikoConfig schema (see shared/config.ts)
+      // Step 2: API key (if needed)
+      let apiKey = "";
+      if (provider.needsApiKey) {
+        // Check env first
+        const envValue = process.env[provider.envKey];
+        if (envValue) {
+          prompter.note(`${provider.envKey} already set in environment`, "API Key");
+          apiKey = envValue;
+        } else {
+          const key = await prompter.password({
+            message: `Enter your ${provider.name} API key`,
+            validate: (value) => {
+              if (!validateApiKey(value)) {
+                return value.trim().length < 10
+                  ? "API key must be at least 10 characters"
+                  : "API key must not contain whitespace";
+              }
+            },
+          });
+
+          if (isCancel(key)) {
+            prompter.outro("Setup cancelled.");
+            return;
+          }
+
+          apiKey = (key as string).trim();
+
+          // Verify
+          const s = prompter.spinner();
+          s.start("Verifying API key...");
+          const valid = await verifyApiKey(provider.id, apiKey);
+          s.stop(valid ? "API key verified" : "Could not verify (continuing anyway)");
+        }
+      }
+
+      // Step 3: Telegram
+      let telegramToken = process.env.TELEGRAM_BOT_TOKEN ?? "";
+      const wantTelegram = await prompter.confirm({
+        message: "Set up Telegram bot?",
+        initialValue: !!telegramToken,
+      });
+
+      if (!isCancel(wantTelegram) && wantTelegram && !telegramToken) {
+        const token = await prompter.text({
+          message: "Telegram bot token (from @BotFather)",
+          placeholder: "123456:ABC-DEF...",
+          validate: (value) => {
+            if (value.trim().length < 10) return "Token too short";
+          },
+        });
+
+        if (!isCancel(token)) {
+          telegramToken = (token as string).trim();
+        }
+      }
+
+      // Step 4: Security token
+      let authSecret = process.env.NODE_AUTH_SECRET ?? "";
+      if (!authSecret) {
+        const wantAuth = await prompter.confirm({
+          message: "Generate a security token? (recommended for daemon API)",
+          initialValue: true,
+        });
+
+        if (!isCancel(wantAuth) && wantAuth) {
+          const { randomBytes } = await import("node:crypto");
+          authSecret = randomBytes(32).toString("hex");
+          prompter.note(`NODE_AUTH_SECRET=${authSecret}`, "Security Token");
+        }
+      }
+
+      // Build and write config
       const config: Record<string, unknown> = {
-        agent: {
-          model: hasAnthropic ? "claude" : hasOpenAI ? "gpt4" : "local",
-        },
+        agent: { model: provider.model },
         channels: {
           telegram: {
-            token: process.env.TELEGRAM_BOT_TOKEN ?? "",
+            token: telegramToken,
             adminIds: process.env.ADMIN_TELEGRAM_IDS
               ? process.env.ADMIN_TELEGRAM_IDS.split(",").map(s => s.trim())
               : [],
@@ -177,14 +226,28 @@ export const command: CommandHandler = {
       };
 
       writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n");
-      console.log(`\n  Configuration saved to ${CONFIG_FILE}`);
       deployAgentPrompt();
-      console.log();
 
-      rl.close();
+      // Write secrets to .env
+      const envPath = join(CONFIG_DIR, ".env");
+      const envLines: string[] = [];
+      if (apiKey && provider.envKey) {
+        envLines.push(`${provider.envKey}=${apiKey}`);
+      }
+      if (authSecret) {
+        envLines.push(`NODE_AUTH_SECRET=${authSecret}`);
+      }
+      if (envLines.length > 0) {
+        const existing = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
+        const newLines = envLines.filter((l) => !existing.includes(l.split("=")[0]!));
+        if (newLines.length > 0) {
+          writeFileSync(envPath, existing + newLines.join("\n") + "\n");
+        }
+      }
+
+      prompter.outro("Setup complete! Run `jeriko` to start chatting.");
       ok({ status: "configured", config_path: CONFIG_FILE });
     } catch (err) {
-      rl.close();
       const msg = err instanceof Error ? err.message : String(err);
       fail(`Setup failed: ${msg}`);
     }

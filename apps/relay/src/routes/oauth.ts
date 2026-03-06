@@ -1,30 +1,25 @@
-// Relay — OAuth proxy (start + callback).
+// Relay — OAuth proxy (start + callback + refresh).
 //
-// Forwards OAuth requests from browsers to the correct user's daemon.
-// The daemon handles all OAuth logic locally (secrets never leave the machine).
+// Two modes of operation for /callback:
+//   1. Relay-side exchange (when relay has client secret): exchanges code for
+//      tokens, sends tokens to daemon via WebSocket, returns success HTML.
+//   2. Daemon-side exchange (fallback): forwards raw callback to daemon.
 //
-// Two proxied routes (userId extracted from composite state parameter):
-//   GET /oauth/:provider/start?state=userId.token   → daemon builds auth URL → 302 redirect
-//   GET /oauth/:provider/callback?code=...&state=... → daemon exchanges code → HTML response
-//
-// Flow (start):
-//   1. User clicks OAuth link → relay extracts userId from state → forwards to daemon via WebSocket
-//   2. Daemon builds authorization URL (has client_id + scopes locally)
-//   3. Relay redirects browser to provider's consent page
-//
-// Flow (callback):
-//   1. Provider redirects browser to relay with auth code
-//   2. Relay extracts userId from state → forwards code + params to daemon via WebSocket
-//   3. Daemon exchanges code for token, returns HTML response
-//   4. Relay sends HTML back to the user's browser
+// Start flow is always proxied to daemon (daemon builds auth URL with PKCE).
 
 import { Hono } from "hono";
 import { randomUUID } from "node:crypto";
 import { getConnection, sendTo } from "../connections.js";
+import {
+  TOKEN_EXCHANGE_PROVIDERS,
+  exchangeCodeForTokens,
+  refreshAccessToken,
+} from "../../../../src/shared/oauth-exchange.js";
 import type {
   RelayOAuthCallbackMessage,
   RelayOAuthStartMessage,
   RelayOAuthResultMessage,
+  RelayOAuthTokensMessage,
 } from "../../../../src/shared/relay-protocol.js";
 import { RELAY_MAX_PENDING_OAUTH, parseCompositeState } from "../../../../src/shared/relay-protocol.js";
 
@@ -39,14 +34,75 @@ interface PendingOAuth {
 
 const pendingCallbacks = new Map<string, PendingOAuth>();
 
+/** Pending PKCE verifiers — stored between /start and /callback. */
+interface PendingPKCE {
+  codeVerifier: string;
+  createdAt: number;
+}
+
+const pendingPKCE = new Map<string, PendingPKCE>();
+
+/** PKCE verifier timeout — must complete callback within 10 minutes. */
+const PKCE_TIMEOUT_MS = 10 * 60 * 1000;
+
 /** OAuth request timeout — how long to wait for daemon response. */
 const OAUTH_TIMEOUT_MS = 30_000;
+
+// ---------------------------------------------------------------------------
+// OAuth credentials for relay-side exchange (from env vars)
+// ---------------------------------------------------------------------------
+
+interface RelayOAuthCredentials {
+  clientId: string;
+  clientSecret: string;
+}
+
+/**
+ * Provider → env var mapping for relay-specific credentials.
+ *
+ * Uses RELAY_ prefix to avoid collision with daemon/user env vars (which share
+ * the same process.env in Bun). The CF Worker uses separate Env bindings and
+ * doesn't need this prefix.
+ */
+const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: string; clientSecretKey: string }> = new Map([
+  ["stripe",   { clientIdKey: "RELAY_STRIPE_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_STRIPE_OAUTH_CLIENT_SECRET" }],
+  ["github",   { clientIdKey: "RELAY_GITHUB_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_GITHUB_OAUTH_CLIENT_SECRET" }],
+  ["x",        { clientIdKey: "RELAY_X_OAUTH_CLIENT_ID",         clientSecretKey: "RELAY_X_OAUTH_CLIENT_SECRET" }],
+  ["gdrive",   { clientIdKey: "RELAY_GOOGLE_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_GOOGLE_OAUTH_CLIENT_SECRET" }],
+  ["gmail",    { clientIdKey: "RELAY_GOOGLE_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_GOOGLE_OAUTH_CLIENT_SECRET" }],
+  ["onedrive", { clientIdKey: "RELAY_MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "RELAY_MICROSOFT_OAUTH_CLIENT_SECRET" }],
+  ["outlook",  { clientIdKey: "RELAY_MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "RELAY_MICROSOFT_OAUTH_CLIENT_SECRET" }],
+  ["vercel",   { clientIdKey: "RELAY_VERCEL_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_VERCEL_OAUTH_CLIENT_SECRET" }],
+]);
+
+function getRelayCredentials(provider: string): RelayOAuthCredentials | undefined {
+  const mapping = PROVIDER_CREDENTIAL_MAP.get(provider);
+  if (!mapping) return undefined;
+
+  const clientId = process.env[mapping.clientIdKey];
+  const clientSecret = process.env[mapping.clientSecretKey];
+
+  if (!clientId || !clientSecret) return undefined;
+  return { clientId, clientSecret };
+}
+
+// ---------------------------------------------------------------------------
+// Callback resolution
+// ---------------------------------------------------------------------------
 
 /**
  * Resolve a pending OAuth result from a daemon's `oauth_result` message.
  * Called by the WebSocket message handler when it receives an oauth_result.
  */
 export function resolveOAuthCallback(result: RelayOAuthResultMessage): void {
+  // Store PKCE verifier if the daemon sent one
+  if (result.codeVerifier) {
+    pendingPKCE.set(result.requestId, {
+      codeVerifier: result.codeVerifier,
+      createdAt: Date.now(),
+    });
+  }
+
   const pending = pendingCallbacks.get(result.requestId);
   if (pending) {
     clearTimeout(pending.timer);
@@ -56,12 +112,43 @@ export function resolveOAuthCallback(result: RelayOAuthResultMessage): void {
 }
 
 // ---------------------------------------------------------------------------
-// Shared: send to daemon and wait for response
+// Helpers
 // ---------------------------------------------------------------------------
+
+/** Extract userId from the composite state query parameter. */
+function extractUserId(c: { req: { url: string } }): string | null {
+  const url = new URL(c.req.url);
+  const state = url.searchParams.get("state");
+  if (!state) return null;
+  const parsed = parseCompositeState(state);
+  return parsed?.userId ?? null;
+}
+
+function extractStateToken(c: { req: { url: string } }): string | null {
+  const url = new URL(c.req.url);
+  const state = url.searchParams.get("state");
+  if (!state) return null;
+  const parsed = parseCompositeState(state);
+  return parsed?.token ?? state;
+}
+
+function prunePKCE(): void {
+  const now = Date.now();
+  for (const [key, entry] of pendingPKCE) {
+    if (now - entry.createdAt > PKCE_TIMEOUT_MS) {
+      pendingPKCE.delete(key);
+    }
+  }
+}
+
+const ERROR_MESSAGES: Record<string, string> = {
+  daemon_offline: "Your Jeriko daemon is not connected. Start it with `jeriko server start`.",
+  too_many_requests: "Too many pending OAuth requests. Please try again.",
+  connection_lost: "Failed to reach your daemon (connection lost).",
+};
 
 /**
  * Forward an OAuth request to the daemon and wait for a response.
- * Shared by both /start and /callback routes — same send/wait/timeout pattern.
  */
 async function forwardToDaemon(
   userId: string,
@@ -104,39 +191,19 @@ async function forwardToDaemon(
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/** Extract userId from the composite state query parameter. */
-function extractUserId(c: { req: { url: string } }): string | null {
-  const url = new URL(c.req.url);
-  const state = url.searchParams.get("state");
-  if (!state) return null;
-  const parsed = parseCompositeState(state);
-  return parsed?.userId ?? null;
-}
-
-const ERROR_MESSAGES: Record<string, string> = {
-  daemon_offline: "Your Jeriko daemon is not connected. Start it with `jeriko server start`.",
-  too_many_requests: "Too many pending OAuth requests. Please try again.",
-  connection_lost: "Failed to reach your daemon (connection lost).",
-};
-
-// ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
 
 export function oauthRoutes(): Hono {
   const router = new Hono();
 
-  // Legacy redirect: /oauth/:userId/:provider/start → /oauth/:provider/start
+  // Legacy redirects
   router.get("/:userId/:provider/start", (c) => {
     const provider = c.req.param("provider");
     const qs = new URL(c.req.url).search;
     return c.redirect(`/oauth/${provider}/start${qs}`, 301);
   });
 
-  // Legacy redirect: /oauth/:userId/:provider/callback → /oauth/:provider/callback
   router.get("/:userId/:provider/callback", (c) => {
     const provider = c.req.param("provider");
     const qs = new URL(c.req.url).search;
@@ -144,15 +211,13 @@ export function oauthRoutes(): Hono {
   });
 
   /**
-   * GET /oauth/:provider/start?state=userId.token — Forward to daemon.
-   *
-   * The daemon has the OAuth client_id and builds the authorization URL
-   * locally. We forward the request via WebSocket and redirect the browser
-   * to the provider's consent page. userId is extracted from composite state.
+   * GET /oauth/:provider/start — Forward to daemon.
+   * Daemon builds auth URL with PKCE, relay stores verifier for callback.
    */
   router.get("/:provider/start", async (c) => {
     const provider = c.req.param("provider");
     const userId = extractUserId(c);
+    const stateToken = extractStateToken(c);
 
     if (!userId) {
       return c.html(errorHtml("Missing or invalid state parameter."), 400);
@@ -177,7 +242,16 @@ export function oauthRoutes(): Hono {
       return c.html(errorHtml(ERROR_MESSAGES[result.error]!), result.statusCode);
     }
 
-    // Daemon returned a redirect URL — issue a 302 to the provider
+    // Store PKCE verifier keyed by state token
+    if (result.codeVerifier && stateToken) {
+      pendingPKCE.set(stateToken, {
+        codeVerifier: result.codeVerifier,
+        createdAt: Date.now(),
+      });
+      // Clean up requestId-keyed entry
+      pendingPKCE.delete(result.requestId);
+    }
+
     if (result.redirectUrl) {
       return c.redirect(result.redirectUrl, 302);
     }
@@ -186,39 +260,180 @@ export function oauthRoutes(): Hono {
   });
 
   /**
-   * GET /oauth/:provider/callback?code=...&state=userId.token — Forward to daemon.
-   *
-   * This is where providers redirect after user consent.
-   * userId is extracted from the composite state parameter.
+   * GET /oauth/:provider/callback — Relay-side or daemon-side exchange.
    */
   router.get("/:provider/callback", async (c) => {
     const provider = c.req.param("provider");
     const userId = extractUserId(c);
+    const stateToken = extractStateToken(c);
 
     if (!userId) {
       return c.html(errorHtml("Missing or invalid state parameter."), 400);
     }
 
-    // Collect all query parameters
+    const conn = getConnection(userId);
+    if (!conn) {
+      return c.html(errorHtml(ERROR_MESSAGES.daemon_offline), 503);
+    }
+
+    // Check for OAuth error from provider
+    const url = new URL(c.req.url);
+    const oauthError = url.searchParams.get("error");
+    if (oauthError) {
+      const desc = url.searchParams.get("error_description") ?? oauthError;
+      return c.html(errorHtml(desc), 400);
+    }
+
+    const code = url.searchParams.get("code");
+    if (!code) {
+      return c.html(errorHtml("Missing authorization code."), 400);
+    }
+
+    // Attempt relay-side token exchange
+    const credentials = getRelayCredentials(provider);
+    const exchangeProvider = TOKEN_EXCHANGE_PROVIDERS.get(provider);
+
+    if (credentials && exchangeProvider) {
+      // Look up PKCE verifier
+      let codeVerifier: string | undefined;
+      if (stateToken) {
+        prunePKCE();
+        const pkce = pendingPKCE.get(stateToken);
+        if (pkce) {
+          codeVerifier = pkce.codeVerifier;
+          pendingPKCE.delete(stateToken);
+        }
+      }
+
+      // Build redirect URI — must match what was used in /start
+      // The Bun relay uses a configurable base URL for dev
+      const relayBaseUrl = process.env.RELAY_PUBLIC_URL ?? `http://127.0.0.1:${process.env.RELAY_PORT ?? "8080"}`;
+      const redirectUri = `${relayBaseUrl}/oauth/${provider}/callback`;
+
+      try {
+        const tokens = await exchangeCodeForTokens({
+          provider: exchangeProvider,
+          code,
+          redirectUri,
+          clientId: credentials.clientId,
+          clientSecret: credentials.clientSecret,
+          codeVerifier,
+        });
+
+        // Send tokens to daemon via WebSocket
+        const tokenMessage: RelayOAuthTokensMessage = {
+          type: "oauth_tokens",
+          requestId: randomUUID(),
+          provider,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+          scope: tokens.scope,
+          tokenType: tokens.tokenType,
+        };
+
+        const sent = sendTo(userId, tokenMessage);
+        if (!sent) {
+          return c.html(
+            errorHtml("Token exchange succeeded but your daemon disconnected. Restart and try again."),
+            503,
+          );
+        }
+
+        const label = provider.charAt(0).toUpperCase() + provider.slice(1);
+        return c.html(successHtml(label), 200);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[relay] OAuth exchange failed for ${provider}: ${message}`);
+        return c.html(errorHtml("Token exchange failed. Please try again."), 502);
+      }
+    }
+
+    // Fallback: forward to daemon for exchange
     const params: Record<string, string> = {};
-    for (const [key, value] of new URL(c.req.url).searchParams) {
+    for (const [key, value] of url.searchParams) {
       params[key] = value;
     }
 
-    const message: RelayOAuthCallbackMessage = {
+    const callbackMessage: RelayOAuthCallbackMessage = {
       type: "oauth_callback",
       requestId: randomUUID(),
       provider,
       params,
     };
 
-    const result = await forwardToDaemon(userId, message);
+    const result = await forwardToDaemon(userId, callbackMessage);
 
     if ("error" in result) {
       return c.html(errorHtml(ERROR_MESSAGES[result.error]!), result.statusCode);
     }
 
     return c.html(result.html, result.statusCode);
+  });
+
+  /**
+   * POST /oauth/:provider/refresh — Relay-side token refresh.
+   */
+  router.post("/:provider/refresh", async (c) => {
+    const provider = c.req.param("provider");
+
+    // Verify auth
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader) {
+      return c.json({ ok: false, error: "Missing authorization" }, 401);
+    }
+
+    const relaySecret = process.env.RELAY_AUTH_SECRET;
+    if (!relaySecret) {
+      return c.json({ ok: false, error: "Relay not configured" }, 500);
+    }
+
+    const token = authHeader.replace(/^Bearer\s+/i, "");
+    if (token !== relaySecret) {
+      return c.json({ ok: false, error: "Invalid authorization" }, 403);
+    }
+
+    const credentials = getRelayCredentials(provider);
+    const exchangeProvider = TOKEN_EXCHANGE_PROVIDERS.get(provider);
+
+    if (!credentials || !exchangeProvider) {
+      return c.json({ ok: false, error: `No relay credentials for ${provider}` }, 404);
+    }
+
+    let body: Record<string, string>;
+    try {
+      body = await c.req.json() as Record<string, string>;
+    } catch {
+      return c.json({ ok: false, error: "Invalid JSON body" }, 400);
+    }
+
+    const refreshToken = body.refreshToken;
+    if (!refreshToken) {
+      return c.json({ ok: false, error: "Missing refreshToken" }, 400);
+    }
+
+    try {
+      const result = await refreshAccessToken({
+        provider: exchangeProvider,
+        refreshToken,
+        clientId: credentials.clientId,
+        clientSecret: credentials.clientSecret,
+        scope: body.scope,
+      });
+
+      return c.json({
+        ok: true,
+        data: {
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresIn: result.expiresIn,
+        },
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[relay] Token refresh failed for ${provider}: ${msg}`);
+      return c.json({ ok: false, error: "Token refresh failed" }, 502);
+    }
   });
 
   return router;
@@ -239,4 +454,17 @@ function errorHtml(message: string): string {
 .card{text-align:center;padding:2rem;border:1px solid #333;border-radius:12px;max-width:400px}
 h1{font-size:1.4rem;margin-bottom:.5rem;color:#f87171}p{color:#888;margin-top:.5rem}</style></head>
 <body><div class="card"><h1>Connection Error</h1><p>${safe}</p></div></body></html>`;
+}
+
+function successHtml(label: string): string {
+  const safe = label.replace(/[&<>"']/g, (ch) => {
+    const map: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;" };
+    return map[ch]!;
+  });
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Jeriko — Connected</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0a0a0a;color:#fafafa}
+.card{text-align:center;padding:2rem;border:1px solid #333;border-radius:12px;max-width:400px}
+h1{font-size:1.4rem;margin-bottom:.5rem}p{color:#888;margin-top:.5rem}</style></head>
+<body><div class="card"><h1>${safe} connected</h1><p>You can close this tab.</p></div></body></html>`;
 }

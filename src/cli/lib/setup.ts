@@ -1,6 +1,10 @@
 /**
  * CLI Setup — Detection logic and provider options for first-launch setup.
  *
+ * Provider options are derived from the preset registry (presets.ts) plus
+ * built-in drivers. This ensures onboarding shows the same providers
+ * available throughout the system — no hardcoded subset.
+ *
  * Pure logic with no UI dependencies — fully testable in isolation.
  */
 
@@ -12,8 +16,19 @@ import { getConfigDir } from "../../shared/config.js";
 // Types
 // ---------------------------------------------------------------------------
 
+export type ChannelChoice = "telegram" | "whatsapp" | "skip";
+
+export interface ChannelOption {
+  /** Internal identifier */
+  id: ChannelChoice;
+  /** Display name shown in the wizard */
+  name: string;
+  /** Short hint shown beside the option */
+  hint?: string;
+}
+
 export interface ProviderOption {
-  /** Internal identifier: "anthropic", "openai", "local" */
+  /** Internal identifier: "anthropic", "openai", "local", or preset ID */
   id: string;
   /** Display name shown in the setup wizard */
   name: string;
@@ -26,10 +41,33 @@ export interface ProviderOption {
 }
 
 // ---------------------------------------------------------------------------
-// Provider options
+// Channel options
 // ---------------------------------------------------------------------------
 
-export const PROVIDER_OPTIONS: readonly ProviderOption[] = [
+export const CHANNEL_OPTIONS: readonly ChannelOption[] = [
+  {
+    id: "telegram",
+    name: "Telegram",
+    hint: "requires bot token from @BotFather",
+  },
+  {
+    id: "whatsapp",
+    name: "WhatsApp",
+    hint: "pairs via QR code at daemon start",
+  },
+  {
+    id: "skip",
+    name: "Skip — I'll set it up later",
+    hint: "/channel add",
+  },
+] as const;
+
+// ---------------------------------------------------------------------------
+// Provider options — built from preset registry + built-in drivers
+// ---------------------------------------------------------------------------
+
+/** Built-in providers that are always available (not from presets). */
+const BUILT_IN_PROVIDERS: readonly ProviderOption[] = [
   {
     id: "anthropic",
     name: "Claude (Anthropic)",
@@ -51,7 +89,50 @@ export const PROVIDER_OPTIONS: readonly ProviderOption[] = [
     model: "local",
     needsApiKey: false,
   },
-] as const;
+];
+
+/**
+ * Build the full provider option list for setup/onboarding.
+ *
+ * Order: built-in first (Anthropic, OpenAI, Ollama), then presets from the
+ * registry sorted by tier (major cloud → inference platforms → local servers).
+ *
+ * Presets that overlap with built-in drivers (e.g. "lmstudio") are included
+ * since they have different base URLs and auth requirements.
+ */
+export function getProviderOptions(): ProviderOption[] {
+  const options: ProviderOption[] = [...BUILT_IN_PROVIDERS];
+  const builtInIds = new Set(BUILT_IN_PROVIDERS.map((p) => p.id));
+
+  try {
+    // Dynamic import to avoid circular dependency — presets.ts is in daemon layer
+    const { PROVIDER_PRESETS } = require("../../daemon/agent/drivers/presets.js");
+
+    for (const preset of PROVIDER_PRESETS) {
+      if (builtInIds.has(preset.id)) continue;
+
+      options.push({
+        id: preset.id,
+        name: preset.name,
+        envKey: preset.envKey,
+        model: preset.defaultModel
+          ? `${preset.id}:${preset.defaultModel}`
+          : preset.id,
+        needsApiKey: true,
+      });
+    }
+  } catch {
+    // Presets not available (e.g. in test) — built-in only
+  }
+
+  return options;
+}
+
+/**
+ * Static subset for backward compatibility.
+ * Used by tests that import PROVIDER_OPTIONS directly.
+ */
+export const PROVIDER_OPTIONS: readonly ProviderOption[] = BUILT_IN_PROVIDERS;
 
 // ---------------------------------------------------------------------------
 // Detection

@@ -23,7 +23,7 @@ import { persistSetup } from "./backend.js";
 import { isExitCommand, parseSlashCommand, SUB_AGENT_TOOLS } from "./commands.js";
 import { capitalize, formatError, safeParseJson } from "./format.js";
 import { t } from "./theme.js";
-import type { Phase, DisplayToolCall, ProviderInfo } from "./types.js";
+import type { Phase, DisplayToolCall } from "./types.js";
 import type { ProviderOption } from "./lib/setup.js";
 import { useAppState } from "./hooks/useAppReducer.js";
 import { useSlashCommands } from "./hooks/useSlashCommands.js";
@@ -32,9 +32,11 @@ import { Messages, StreamingText } from "./components/Messages.js";
 import { Input } from "./components/Input.js";
 import { StatusBar } from "./components/StatusBar.js";
 import { Setup } from "./components/Setup.js";
-import { ProviderPicker, type PickerResult } from "./components/ProviderPicker.js";
+
 import { ToolCallView } from "./components/ToolCall.js";
 import { SubAgentView, SubAgentList } from "./components/SubAgent.js";
+import { Wizard } from "./components/Wizard.js";
+import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { useSubAgents } from "./hooks/useSubAgents.js";
 
 // ---------------------------------------------------------------------------
@@ -65,6 +67,7 @@ export const App: React.FC<AppProps> = ({
   // Refs for mutable state used in callbacks
   const turnStartRef = useRef(0);
   const hasThinkingRef = useRef(false);
+  const abortedRef = useRef(false);
 
   // ----- Helpers -----
 
@@ -83,7 +86,7 @@ export const App: React.FC<AppProps> = ({
 
   // ----- Slash command dispatch (extracted to handlers/) -----
 
-  const { handleSlashCommand, pickerProvidersRef } = useSlashCommands({
+  const { handleSlashCommand, wizardConfigRef } = useSlashCommands({
     backend,
     state,
     dispatch,
@@ -126,6 +129,7 @@ export const App: React.FC<AppProps> = ({
       dispatch({ type: "CLEAR_SUB_AGENTS" });
       turnStartRef.current = Date.now();
       hasThinkingRef.current = false;
+      abortedRef.current = false;
 
       // Mutable accumulator for stream text (used to freeze into message)
       let accumulatedText = "";
@@ -133,16 +137,19 @@ export const App: React.FC<AppProps> = ({
 
       const callbacks: BackendCallbacks = {
         onThinking() {
+          if (abortedRef.current) return;
           hasThinkingRef.current = true;
         },
 
         onTextDelta(content) {
+          if (abortedRef.current) return;
           dispatch({ type: "SET_PHASE", phase: "streaming" });
           accumulatedText += content;
           dispatch({ type: "APPEND_STREAM_TEXT", content });
         },
 
         onToolCallStart(tc) {
+          if (abortedRef.current) return;
           dispatch({ type: "SET_PHASE", phase: "tool-executing" });
           const toolName = capitalize(tc.name);
           dispatch({ type: "SET_CURRENT_TOOL", name: toolName });
@@ -160,6 +167,7 @@ export const App: React.FC<AppProps> = ({
         },
 
         onToolResult(id, result, isError) {
+          if (abortedRef.current) return;
           accumulatedToolCalls = accumulatedToolCalls.map((tc) =>
             tc.id === id
               ? {
@@ -175,6 +183,9 @@ export const App: React.FC<AppProps> = ({
         },
 
         onTurnComplete(tokensIn, tokensOut) {
+          // If the turn was aborted, don't freeze partial state into history
+          if (abortedRef.current) return;
+
           const durationMs = Date.now() - turnStartRef.current;
 
           // Freeze the assistant response into a static message
@@ -209,8 +220,9 @@ export const App: React.FC<AppProps> = ({
           addSystemMessage(formatError(message));
         },
 
-        // Sub-agent callbacks
+        // Sub-agent callbacks — all guarded against post-abort dispatch
         onSubAgentStarted(data) {
+          if (abortedRef.current) return;
           dispatch({ type: "SET_PHASE", phase: "sub-executing" });
           dispatch({
             type: "SUB_AGENT_STARTED",
@@ -222,18 +234,22 @@ export const App: React.FC<AppProps> = ({
         },
 
         onSubAgentTextDelta(childSessionId, content) {
+          if (abortedRef.current) return;
           dispatch({ type: "SUB_AGENT_TEXT_DELTA", childSessionId, content });
         },
 
         onSubAgentToolCall(childSessionId, toolName) {
+          if (abortedRef.current) return;
           dispatch({ type: "SUB_AGENT_TOOL_CALL", childSessionId, toolName });
         },
 
         onSubAgentToolResult(childSessionId, toolCallId, isError) {
+          if (abortedRef.current) return;
           dispatch({ type: "SUB_AGENT_TOOL_RESULT", childSessionId, toolCallId, isError });
         },
 
         onSubAgentComplete(childSessionId, _label, status, durationMs) {
+          if (abortedRef.current) return;
           dispatch({
             type: "SUB_AGENT_COMPLETE",
             childSessionId,
@@ -243,7 +259,14 @@ export const App: React.FC<AppProps> = ({
         },
       };
 
-      await backend.send(text, callbacks);
+      try {
+        await backend.send(text, callbacks);
+      } catch (err: unknown) {
+        // Ensure the UI always recovers — never leave phase stuck on "thinking"
+        const errMsg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(formatError(errMsg));
+        dispatch({ type: "RESET_TURN" });
+      }
     },
     [backend, handleSlashCommand, exit, addSystemMessage, dispatch],
   );
@@ -258,6 +281,7 @@ export const App: React.FC<AppProps> = ({
       phase === "tool-executing" ||
       phase === "sub-executing"
     ) {
+      abortedRef.current = true;
       backend.abort();
       dispatch({ type: "RESET_TURN" });
       addSystemMessage("⏎ Interrupted.");
@@ -270,40 +294,27 @@ export const App: React.FC<AppProps> = ({
 
   const handleSetupComplete = useCallback(
     async (provider: ProviderOption, apiKey: string) => {
-      await persistSetup(provider, apiKey);
-      dispatch({ type: "SET_MODEL", model: provider.model });
-      backend.setModel(provider.model);
-      dispatch({ type: "SET_PHASE", phase: "idle" });
-      addSystemMessage(t.green("✓ Setup complete!"));
-    },
-    [backend, addSystemMessage, dispatch],
-  );
-
-  // ----- Provider picker handlers -----
-
-  const handleProviderPickerComplete = useCallback(
-    async (result: PickerResult) => {
-      dispatch({ type: "SET_PHASE", phase: "idle" });
       try {
-        const added = await backend.addProvider({
-          id: result.id,
-          name: result.name,
-          baseUrl: result.baseUrl,
-          apiKey: result.apiKey,
-          defaultModel: result.defaultModel,
-        });
-        const modelHint = result.defaultModel
-          ? `\n  Use: ${t.muted(`/model ${result.id}:${result.defaultModel}`)}`
-          : "";
-        addSystemMessage(`${t.green("✓")} ${t.blue(added.name)} added · default model: ${t.muted(result.defaultModel ?? "none")}${modelHint}`);
-      } catch (err) {
-        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        await persistSetup(provider, apiKey);
+        dispatch({ type: "SET_MODEL", model: provider.model });
+        backend.setModel(provider.model);
+        dispatch({ type: "SET_PHASE", phase: "idle" });
+        addSystemMessage(t.green("✓ Setup complete!"));
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(formatError(`Setup failed: ${msg}`));
+        dispatch({ type: "SET_PHASE", phase: "idle" });
       }
     },
     [backend, addSystemMessage, dispatch],
   );
 
-  const handleProviderPickerCancel = useCallback(() => {
+  const handleSetupCancel = useCallback(() => {
+    dispatch({ type: "SET_PHASE", phase: "idle" });
+    addSystemMessage("Setup cancelled. Run /config to configure later.");
+  }, [dispatch, addSystemMessage]);
+
+  const handleWizardCancel = useCallback(() => {
     dispatch({ type: "SET_PHASE", phase: "idle" });
   }, [dispatch]);
 
@@ -313,57 +324,58 @@ export const App: React.FC<AppProps> = ({
   // ----- Render -----
 
   return (
-    <Box flexDirection="column">
-      {/* Static message history */}
-      <Messages messages={state.messages} />
+    <ErrorBoundary>
+      <Box flexDirection="column">
+        {/* Static message history */}
+        <Messages messages={state.messages} />
 
-      {/* Live tool calls (during tool execution) */}
-      {state.liveToolCalls.map((tc) =>
-        SUB_AGENT_TOOLS.has(tc.name) ? (
-          <SubAgentView key={tc.id} toolCall={tc} />
-        ) : (
-          <ToolCallView key={tc.id} toolCall={tc} />
-        ),
-      )}
+        {/* Live tool calls (during tool execution) */}
+        {state.liveToolCalls.map((tc) =>
+          SUB_AGENT_TOOLS.has(tc.name) ? (
+            <SubAgentView key={tc.id} toolCall={tc} />
+          ) : (
+            <ToolCallView key={tc.id} toolCall={tc} />
+          ),
+        )}
 
-      {/* Live sub-agent monitoring (during sub-executing phase) */}
-      {subAgentDerived.total > 0 && (
-        <SubAgentList agents={subAgentDerived.sorted} />
-      )}
+        {/* Live sub-agent monitoring (during sub-executing phase) */}
+        {subAgentDerived.total > 0 && (
+          <SubAgentList agents={subAgentDerived.sorted} />
+        )}
 
-      {/* Streaming text (during streaming) */}
-      <StreamingText text={state.streamText} phase={state.phase} />
+        {/* Streaming text (during streaming) */}
+        <StreamingText text={state.streamText} phase={state.phase} />
 
-      {/* Status bar */}
-      <StatusBar
-        phase={state.phase}
-        model={state.model}
-        stats={state.stats}
-        currentTool={state.currentTool}
-        context={state.context}
-        sessionSlug={state.sessionSlug}
-        subAgents={state.subAgents}
-        streamLength={state.streamText.length}
-      />
-
-      {/* Input prompt (idle only) */}
-      <Input
-        phase={state.phase}
-        onSubmit={handleSubmit}
-        onInterrupt={handleInterrupt}
-      />
-
-      {/* Setup wizard (first launch) */}
-      {state.phase === "setup" && <Setup onComplete={handleSetupComplete} />}
-
-      {/* Interactive provider picker (/provider add) */}
-      {state.phase === "provider-add" && (
-        <ProviderPicker
-          providers={pickerProvidersRef.current}
-          onComplete={handleProviderPickerComplete}
-          onCancel={handleProviderPickerCancel}
+        {/* Status bar */}
+        <StatusBar
+          phase={state.phase}
+          model={state.model}
+          stats={state.stats}
+          currentTool={state.currentTool}
+          context={state.context}
+          sessionSlug={state.sessionSlug}
+          subAgents={state.subAgents}
+          streamLength={state.streamText.length}
         />
-      )}
-    </Box>
+
+        {/* Input prompt (idle only) */}
+        <Input
+          phase={state.phase}
+          onSubmit={handleSubmit}
+          onInterrupt={handleInterrupt}
+        />
+
+        {/* Setup wizard (first launch) */}
+        {state.phase === "setup" && <Setup onComplete={handleSetupComplete} onCancel={handleSetupCancel} />}
+
+        {/* Generic interactive wizard */}
+        {state.phase === "wizard" && wizardConfigRef.current && (
+          <Wizard
+            config={wizardConfigRef.current}
+            onCancel={handleWizardCancel}
+          />
+        )}
+      </Box>
+    </ErrorBoundary>
   );
 };

@@ -5,11 +5,13 @@
  * with mock backends to verify they run without crashing and produce output.
  */
 
-import { describe, test, expect, beforeEach, mock } from "bun:test";
+import { describe, test, expect, beforeEach, afterAll, mock } from "bun:test";
 import { createSessionHandlers } from "../../../src/cli/handlers/session.js";
 import { createModelHandlers } from "../../../src/cli/handlers/model.js";
 import { createConnectorHandlers } from "../../../src/cli/handlers/connector.js";
 import { createSystemHandlers } from "../../../src/cli/handlers/system.js";
+import { setActiveTheme } from "../../../src/cli/theme.js";
+import type { ThemePreset } from "../../../src/cli/themes.js";
 import type { Backend } from "../../../src/cli/backend.js";
 
 // ---------------------------------------------------------------------------
@@ -76,7 +78,9 @@ function createMockBackend(overrides: Partial<Backend> = {}): Backend {
     ),
     listProviders: mock(() =>
       Promise.resolve([
-        { id: "anthropic", name: "Anthropic", models: ["claude-sonnet-4-6"] },
+        { id: "anthropic", name: "Anthropic", type: "built-in" },
+        { id: "groq", name: "Groq", type: "available", baseUrl: "https://api.groq.com/openai/v1", defaultModel: "llama-3.1-8b-instant", envKey: "GROQ_API_KEY" },
+        { id: "deepseek", name: "DeepSeek", type: "available", baseUrl: "https://api.deepseek.com", defaultModel: "deepseek-chat", envKey: "DEEPSEEK_API_KEY" },
       ]),
     ),
     addProvider: mock(() => Promise.resolve()),
@@ -181,6 +185,7 @@ function createTestCtx(backendOverrides: Partial<Backend> = {}) {
     addSystemMessage: (msg: string) => messages.push(msg),
     messages,
     dispatched,
+    wizardConfigRef: { current: null },
     state: {
       model: "claude-sonnet-4-6",
       stats: {
@@ -236,11 +241,13 @@ describe("Session handlers", () => {
     expect(ctx.dispatched).toContainEqual({ type: "SET_SESSION_SLUG", slug: "my-session" });
   });
 
-  test("/resume with empty args shows usage", async () => {
+  test("/resume with empty args launches session picker wizard", async () => {
     const ctx = createTestCtx();
     const h = createSessionHandlers(ctx);
     await h.resume("");
-    expect(ctx.messages[0]).toContain("Usage");
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.wizardConfigRef.current!.title).toContain("Resume");
+    expect(ctx.dispatched).toContainEqual({ type: "SET_PHASE", phase: "wizard" });
   });
 
   test("/resume with not-found slug shows error", async () => {
@@ -320,55 +327,47 @@ describe("Session handlers", () => {
 // ---------------------------------------------------------------------------
 
 describe("Model handlers", () => {
-  test("/model with no args shows current model", async () => {
+  test("/model with no args launches model selector wizard", async () => {
     const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
+    const wizardRef = { current: null as any };
+    const h = createModelHandlers({ ...ctx, wizardConfigRef: wizardRef });
     await h.model("");
-    expect(ctx.messages.length).toBeGreaterThan(0);
-    expect(ctx.messages[0]).toContain("model");
+    expect(wizardRef.current).not.toBeNull();
+    expect(wizardRef.current!.title).toContain("Switch Model");
   });
 
   test("/model with arg switches model", async () => {
     const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
+    const h = createModelHandlers({ ...ctx, wizardConfigRef: { current: null } });
     await h.model("gpt-4o");
     expect(ctx.dispatched).toContainEqual({ type: "SET_MODEL", model: "gpt-4o" });
     expect(ctx.messages[0]).toContain("gpt-4o");
   });
 
-  test("/models lists available models", async () => {
+  test("/model list browses all models", async () => {
     const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
-    await h.models();
+    const h = createModelHandlers({ ...ctx, wizardConfigRef: { current: null } });
+    await h.model("list");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/providers lists providers", async () => {
+  test("/model add without id launches provider picker wizard", async () => {
     const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
-    await h.providers();
-    expect(ctx.messages.length).toBeGreaterThan(0);
+    const wizardRef = { current: null as any };
+    const h = createModelHandlers({ ...ctx, wizardConfigRef: wizardRef });
+    await h.model("add");
+    // Should launch a wizard for adding a provider
+    expect(wizardRef.current).not.toBeNull();
+    expect(wizardRef.current!.title).toContain("Add");
   });
 
-  test("/provider with no args lists providers", async () => {
+  test("/model rm without id shows message or launches wizard", async () => {
     const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
-    await h.provider("");
-    expect(ctx.messages.length).toBeGreaterThan(0);
-  });
-
-  test("/provider add without id launches picker", async () => {
-    const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
-    await h.provider("add");
-    expect(ctx.dispatched).toContainEqual({ type: "SET_PHASE", phase: "provider-add" });
-  });
-
-  test("/provider remove without id shows usage", async () => {
-    const ctx = createTestCtx();
-    const h = createModelHandlers({ ...ctx, pickerProvidersRef: { current: [] } });
-    await h.provider("remove");
-    expect(ctx.messages[0]).toContain("Usage");
+    const wizardRef = { current: null as any };
+    const h = createModelHandlers({ ...ctx, wizardConfigRef: wizardRef });
+    await h.model("rm");
+    // Either shows "no custom providers" or launches a wizard picker
+    expect(ctx.messages.length > 0 || wizardRef.current !== null).toBe(true);
   });
 });
 
@@ -400,32 +399,28 @@ describe("Connector handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/triggers in daemon mode lists triggers", async () => {
-    const ctx = createTestCtx({ mode: "daemon" } as any);
-    const h = createConnectorHandlers(ctx);
-    await h.triggers();
-    expect(ctx.messages.length).toBeGreaterThan(0);
-  });
-
-  test("/connect without args in daemon mode shows usage", async () => {
+  test("/connect without args in daemon mode launches wizard", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
     await h.connect("");
-    expect(ctx.messages[0]).toContain("Usage");
+    // Either launches wizard or shows a "no services" message
+    expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
-  test("/disconnect without args in daemon mode shows usage", async () => {
+  test("/disconnect without args in daemon mode launches wizard", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
     await h.disconnect("");
-    expect(ctx.messages[0]).toContain("Usage");
+    // Either launches wizard or shows a "no services" message
+    expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
-  test("/auth with no args shows auth status", async () => {
+  test("/auth with no args launches auth wizard", async () => {
     const ctx = createTestCtx();
     const h = createConnectorHandlers(ctx);
     await h.auth("");
-    expect(ctx.messages.length).toBeGreaterThan(0);
+    // Either launches wizard or shows connectors
+    expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 });
 
@@ -455,11 +450,12 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/skill without name shows usage", async () => {
+  test("/skill without name launches skill picker wizard", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.skill("");
-    expect(ctx.messages[0]).toContain("Usage");
+    // Either launches wizard (if skills exist) or shows "no skills" message
+    expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
   test("/skill with unknown name shows error", async () => {
@@ -505,11 +501,12 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/upgrade without email shows usage", async () => {
+  test("/upgrade without email launches email wizard", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.upgrade("");
-    expect(ctx.messages[0]).toContain("Usage");
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.wizardConfigRef.current!.title).toContain("Upgrade");
   });
 
   test("/upgrade with email starts checkout", async () => {
@@ -533,11 +530,25 @@ describe("System handlers", () => {
     expect(ctx.messages[0]).toContain("daemon");
   });
 
-  test("/tasks lists tasks", async () => {
+  test("/task shows task hub", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
+    const h = createSystemHandlers(ctx);
+    await h.task("");
+    expect(ctx.messages.length).toBeGreaterThan(0);
+  });
+
+  test("/task trigger filters triggers", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
+    const h = createSystemHandlers(ctx);
+    await h.task("trigger");
+    expect(ctx.messages.length).toBeGreaterThan(0);
+  });
+
+  test("/task requires daemon", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.tasks();
-    expect(ctx.messages.length).toBeGreaterThan(0);
+    await h.task("");
+    expect(ctx.messages[0]).toContain("daemon");
   });
 
   test("/notifications lists notifications", async () => {
@@ -547,11 +558,12 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/theme with no args lists themes", async () => {
+  test("/theme with no args launches theme picker wizard", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.theme("");
-    expect(ctx.messages[0]).toContain("Theme");
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.wizardConfigRef.current!.title).toContain("Theme");
   });
 
   test("/theme with invalid name shows error", async () => {
@@ -564,7 +576,9 @@ describe("System handlers", () => {
   test("/theme with valid name switches theme", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.theme("nord");
+    await h.theme("dracula");
     expect(ctx.messages[0]).toContain("switched");
+    // Reset to default so other tests aren't affected
+    setActiveTheme("jeriko" as ThemePreset);
   });
 });

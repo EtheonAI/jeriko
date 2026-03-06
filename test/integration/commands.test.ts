@@ -829,7 +829,7 @@ describe("OAuth state (live)", () => {
   });
 
   it("state tokens work for all channels", () => {
-    for (const channelName of ["telegram", "whatsapp", "imessage", "googlechat"]) {
+    for (const channelName of ["telegram", "whatsapp"]) {
       const token = generateState("github", "chat-1", channelName);
       const entry = consumeState(token);
       expect(entry!.channelName).toBe(channelName);
@@ -858,6 +858,21 @@ describe("OAuth state (live)", () => {
     const token = generateState("github", "chat-1", "telegram");
     expect(token).toMatch(/^[0-9a-f]{64}$/);
     expect(token).not.toContain(".");
+  });
+
+  it("PKCE verifier works with composite state", () => {
+    const { setCodeVerifier, generateCodeVerifier } = require("../../src/daemon/services/oauth/state.js");
+
+    const state = generateState("x", "chat-1", "telegram", "user-pkce-123");
+    expect(state).toContain("user-pkce-123.");
+
+    const verifier = generateCodeVerifier();
+    setCodeVerifier(state, verifier);
+
+    const entry = consumeState(state);
+    expect(entry).not.toBeNull();
+    expect(entry!.provider).toBe("x");
+    expect(entry!.codeVerifier).toBe(verifier);
   });
 });
 

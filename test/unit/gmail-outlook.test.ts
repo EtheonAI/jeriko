@@ -439,12 +439,12 @@ describe("OutlookConnector", () => {
 // ---------------------------------------------------------------------------
 
 describe("Registry totals", () => {
-  it("CONNECTOR_DEFS has 10 entries", () => {
-    expect(CONNECTOR_DEFS.length).toBe(10);
+  it("CONNECTOR_DEFS has 12 entries", () => {
+    expect(CONNECTOR_DEFS.length).toBe(12);
   });
 
-  it("OAUTH_PROVIDERS has 8 entries", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(8);
+  it("OAUTH_PROVIDERS has 10 entries", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(10);
   });
 
   it("all OAuth providers have matching ConnectorDef", () => {

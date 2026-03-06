@@ -41,6 +41,31 @@ const ROOT = path.resolve(import.meta.dirname, "..");
 const ENTRY = path.join(ROOT, "src/index.ts");
 const DIST = path.join(ROOT, "dist");
 
+/**
+ * Build-time OAuth client IDs — baked into the binary via `define`.
+ *
+ * These are PUBLIC values (OAuth app client IDs, not secrets). They enable
+ * zero-config OAuth for new users. The matching client secrets live on the
+ * relay server as Cloudflare Worker secrets.
+ *
+ * Set these env vars in CI before building the release binary:
+ *   BAKED_GITHUB_CLIENT_ID, BAKED_GOOGLE_CLIENT_ID, BAKED_MICROSOFT_CLIENT_ID,
+ *   BAKED_X_CLIENT_ID, BAKED_VERCEL_CLIENT_ID, BAKED_STRIPE_CLIENT_ID
+ *
+ * If not set, the define injects `undefined` and users must provide client IDs
+ * via their own env vars (self-hosted mode).
+ */
+const BAKED_OAUTH_DEFINES: Record<string, string> = {
+  __BAKED_GITHUB_CLIENT_ID__:    JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),
+  __BAKED_GOOGLE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_GOOGLE_CLIENT_ID    ?? ""),
+  __BAKED_MICROSOFT_CLIENT_ID__: JSON.stringify(process.env.BAKED_MICROSOFT_CLIENT_ID ?? ""),
+  __BAKED_X_CLIENT_ID__:         JSON.stringify(process.env.BAKED_X_CLIENT_ID         ?? ""),
+  __BAKED_VERCEL_CLIENT_ID__:    JSON.stringify(process.env.BAKED_VERCEL_CLIENT_ID    ?? ""),
+  __BAKED_STRIPE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
+  __BAKED_HUBSPOT_CLIENT_ID__:   JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID   ?? ""),
+  __BAKED_SHOPIFY_CLIENT_ID__:   JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID   ?? ""),
+};
+
 /** Packages that are always external (optional deps, never bundled). */
 const STATIC_EXTERNALS = [
   "qrcode-terminal",
@@ -150,6 +175,7 @@ async function buildOne(bt: BuildTarget): Promise<void> {
     minify: !flags["no-minify"],
     sourcemap: flags.sourcemap ? "external" : "none",
     external: STATIC_EXTERNALS,
+    define: BAKED_OAUTH_DEFINES,
     plugins: [devShimPlugin],
     compile: {
       target: bt.target,

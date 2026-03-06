@@ -5,13 +5,13 @@
  *   1. Provider selection — arrow key navigation, Enter to confirm
  *   2. API key input — masked text entry with validation
  *
- * Uses PROVIDER_OPTIONS from lib/setup.ts for the provider list.
+ * Uses getProviderOptions() from lib/setup.ts for the dynamic provider list.
  */
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { Text, Box, useInput } from "ink";
 import { PALETTE } from "../theme.js";
-import { PROVIDER_OPTIONS, validateApiKey, type ProviderOption } from "../lib/setup.js";
+import { getProviderOptions, validateApiKey, type ProviderOption } from "../lib/setup.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -21,13 +21,15 @@ type SetupPhase = "provider" | "apikey" | "complete";
 
 interface SetupProps {
   onComplete: (provider: ProviderOption, apiKey: string) => void;
+  onCancel?: () => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
+export const Setup: React.FC<SetupProps> = ({ onComplete, onCancel }) => {
+  const providers = useMemo(() => getProviderOptions(), []);
   const [phase, setPhase] = useState<SetupPhase>("provider");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [selectedProvider, setSelectedProvider] = useState<ProviderOption | null>(null);
@@ -38,20 +40,28 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
     (input, key) => {
       // ── Provider selection phase ─────────────────────────────────────
       if (phase === "provider") {
+        if (key.escape || (key.ctrl && input === "c")) {
+          if (onCancel) {
+            onCancel();
+          } else {
+            process.exit(0);
+          }
+          return;
+        }
         if (key.upArrow) {
           setSelectedIndex((i) =>
-            i > 0 ? i - 1 : PROVIDER_OPTIONS.length - 1,
+            i > 0 ? i - 1 : providers.length - 1,
           );
           return;
         }
         if (key.downArrow) {
           setSelectedIndex((i) =>
-            i < PROVIDER_OPTIONS.length - 1 ? i + 1 : 0,
+            i < providers.length - 1 ? i + 1 : 0,
           );
           return;
         }
         if (key.return) {
-          const provider = PROVIDER_OPTIONS[selectedIndex]!;
+          const provider = providers[selectedIndex]!;
           setSelectedProvider(provider);
           if (provider.needsApiKey) {
             setPhase("apikey");
@@ -61,14 +71,26 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
           }
           return;
         }
-        if (key.ctrl && input === "c") {
-          process.exit(0);
-        }
         return;
       }
 
       // ── API key input phase ──────────────────────────────────────────
       if (phase === "apikey") {
+        if (key.escape) {
+          // Go back to provider selection
+          setPhase("provider");
+          setApiKeyBuffer("");
+          setError(null);
+          return;
+        }
+        if (key.ctrl && input === "c") {
+          if (onCancel) {
+            onCancel();
+          } else {
+            process.exit(0);
+          }
+          return;
+        }
         if (key.return) {
           const trimmed = apiKeyBuffer.trim();
           if (!validateApiKey(trimmed)) {
@@ -89,10 +111,6 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
           setApiKeyBuffer((b) => b.slice(0, -1));
           setError(null);
           return;
-        }
-
-        if (key.ctrl && input === "c") {
-          process.exit(0);
         }
 
         if (key.ctrl && input === "u") {
@@ -118,9 +136,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
   }
 
   if (phase === "apikey" && selectedProvider) {
-    const masked = apiKeyBuffer.length > 4
-      ? apiKeyBuffer.slice(0, 4) + "•".repeat(apiKeyBuffer.length - 4)
-      : "•".repeat(apiKeyBuffer.length);
+    const masked = "•".repeat(apiKeyBuffer.length);
 
     return (
       <Box flexDirection="column">
@@ -137,6 +153,8 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
             <Text color={PALETTE.red}>  {error}</Text>
           </Box>
         )}
+        <Text />
+        <Text color={PALETTE.dim}>  Enter to confirm · Esc back</Text>
       </Box>
     );
   }
@@ -150,7 +168,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
       <Text color={PALETTE.muted}>  Choose your AI provider:</Text>
       <Text />
 
-      {PROVIDER_OPTIONS.map((p, i) => {
+      {providers.map((p, i) => {
         const isSelected = i === selectedIndex;
         const marker = isSelected ? "  ▸ " : "    ";
         const recommended = i === 0 ? " (recommended)" : "";
@@ -171,7 +189,7 @@ export const Setup: React.FC<SetupProps> = ({ onComplete }) => {
       })}
 
       <Text />
-      <Text color={PALETTE.dim}>  ↑↓ to navigate · Enter to select</Text>
+      <Text color={PALETTE.dim}>  ↑↓ navigate · Enter select · Esc cancel</Text>
     </Box>
   );
 };

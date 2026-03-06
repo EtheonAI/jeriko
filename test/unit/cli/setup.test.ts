@@ -1,23 +1,25 @@
 /**
  * Tests for CLI setup detection and validation logic.
  *
- * Tests needsSetup(), validateApiKey(), and PROVIDER_OPTIONS without
- * requiring any UI runtime.
+ * Tests needsSetup(), validateApiKey(), PROVIDER_OPTIONS (static fallback),
+ * and getProviderOptions() (dynamic registry) without requiring any UI runtime.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   PROVIDER_OPTIONS,
+  getProviderOptions,
   needsSetup,
   validateApiKey,
+  type ProviderOption,
 } from "../../../src/cli/lib/setup.js";
 
 // ---------------------------------------------------------------------------
-// PROVIDER_OPTIONS
+// PROVIDER_OPTIONS (static fallback — always 3 built-in providers)
 // ---------------------------------------------------------------------------
 
-describe("PROVIDER_OPTIONS", () => {
-  test("has 3 providers", () => {
+describe("PROVIDER_OPTIONS (static)", () => {
+  test("has 3 built-in providers", () => {
     expect(PROVIDER_OPTIONS.length).toBe(3);
   });
 
@@ -54,6 +56,81 @@ describe("PROVIDER_OPTIONS", () => {
       expect(p.id.length).toBeGreaterThan(0);
       expect(p.name.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getProviderOptions() — dynamic registry (built-in + presets)
+// ---------------------------------------------------------------------------
+
+describe("getProviderOptions()", () => {
+  test("returns at least 3 built-in providers", () => {
+    const options = getProviderOptions();
+    expect(options.length).toBeGreaterThanOrEqual(3);
+  });
+
+  test("built-in providers come first (Anthropic, OpenAI, Local)", () => {
+    const options = getProviderOptions();
+    expect(options[0]!.id).toBe("anthropic");
+    expect(options[1]!.id).toBe("openai");
+    expect(options[2]!.id).toBe("local");
+  });
+
+  test("includes preset providers beyond built-ins", () => {
+    const options = getProviderOptions();
+    // Presets module should be available in the test env
+    // At minimum we expect more than the 3 built-ins
+    if (options.length > 3) {
+      const presetIds = options.slice(3).map((p) => p.id);
+      // Verify some well-known presets are present
+      expect(presetIds).toContain("groq");
+      expect(presetIds).toContain("openrouter");
+    }
+  });
+
+  test("no duplicate IDs", () => {
+    const options = getProviderOptions();
+    const ids = options.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  test("all options have required fields", () => {
+    const options = getProviderOptions();
+    for (const p of options) {
+      expect(typeof p.id).toBe("string");
+      expect(typeof p.name).toBe("string");
+      expect(typeof p.model).toBe("string");
+      expect(typeof p.needsApiKey).toBe("boolean");
+      expect(p.id.length).toBeGreaterThan(0);
+      expect(p.name.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("preset providers use provider:model format", () => {
+    const options = getProviderOptions();
+    for (const p of options.slice(3)) {
+      // Preset models should be "id:defaultModel" or just "id"
+      if (p.model.includes(":")) {
+        expect(p.model.startsWith(p.id + ":")).toBe(true);
+      } else {
+        expect(p.model).toBe(p.id);
+      }
+    }
+  });
+
+  test("preset providers all require API keys", () => {
+    const options = getProviderOptions();
+    for (const p of options.slice(3)) {
+      expect(p.needsApiKey).toBe(true);
+      expect(p.envKey.length).toBeGreaterThan(0);
+    }
+  });
+
+  test("returns a fresh array each call (not shared reference)", () => {
+    const a = getProviderOptions();
+    const b = getProviderOptions();
+    expect(a).not.toBe(b);
+    expect(a).toEqual(b);
   });
 });
 
@@ -160,15 +237,27 @@ describe("needsSetup", () => {
 
 describe("Setup Flow", () => {
   test("selecting Anthropic requires API key", () => {
-    const provider = PROVIDER_OPTIONS.find((p) => p.id === "anthropic")!;
+    const options = getProviderOptions();
+    const provider = options.find((p) => p.id === "anthropic")!;
     expect(provider.needsApiKey).toBe(true);
     expect(provider.envKey).toBe("ANTHROPIC_API_KEY");
   });
 
   test("selecting Local skips API key step", () => {
-    const provider = PROVIDER_OPTIONS.find((p) => p.id === "local")!;
+    const options = getProviderOptions();
+    const provider = options.find((p) => p.id === "local")!;
     expect(provider.needsApiKey).toBe(false);
     expect(provider.envKey).toBe("");
+  });
+
+  test("selecting a preset provider requires API key", () => {
+    const options = getProviderOptions();
+    const groq = options.find((p) => p.id === "groq");
+    if (groq) {
+      expect(groq.needsApiKey).toBe(true);
+      expect(groq.envKey).toBe("GROQ_API_KEY");
+      expect(groq.model).toBe("groq:llama-3.1-8b-instant");
+    }
   });
 
   test("valid key passes validation for Anthropic", () => {

@@ -8,9 +8,9 @@
  * is a pure function factory that returns async command handlers.
  */
 
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useRef } from "react";
 import type { Backend } from "../backend.js";
-import type { AppAction, AppState, ProviderInfo } from "../types.js";
+import type { AppAction, AppState, WizardConfig } from "../types.js";
 import { createSessionHandlers } from "../handlers/session.js";
 import { createModelHandlers } from "../handlers/model.js";
 import { createConnectorHandlers } from "../handlers/connector.js";
@@ -39,7 +39,7 @@ export function useSlashCommands({
   dispatch,
   addSystemMessage,
 }: UseSlashCommandsOptions) {
-  const pickerProvidersRef = useRef<ProviderInfo[]>([]);
+  const wizardConfigRef = useRef<WizardConfig | null>(null);
 
   /**
    * Dispatch map: slash command name → handler function.
@@ -56,6 +56,7 @@ export function useSlashCommands({
         dispatch,
         addSystemMessage,
         state: { model: state.model, stats: state.stats },
+        wizardConfigRef,
       };
       const session = createSessionHandlers(sessionCtx);
 
@@ -64,14 +65,14 @@ export function useSlashCommands({
         dispatch,
         addSystemMessage,
         state: { model: state.model },
-        pickerProvidersRef,
+        wizardConfigRef,
       };
       const model = createModelHandlers(modelCtx);
 
-      const connectorCtx = { backend, dispatch, addSystemMessage };
+      const connectorCtx = { backend, dispatch, addSystemMessage, wizardConfigRef };
       const connector = createConnectorHandlers(connectorCtx);
 
-      const systemCtx = { backend, dispatch, addSystemMessage };
+      const systemCtx = { backend, dispatch, addSystemMessage, wizardConfigRef };
       const system = createSystemHandlers(systemCtx);
 
       // Dispatch table
@@ -91,11 +92,9 @@ export function useSlashCommands({
         "/kill":          () => session.kill(),
         "/archive":       () => session.archive(),
 
-        // Model & Providers
+        // Model (includes provider management)
         "/model":         () => model.model(args),
-        "/models":        () => model.models(),
-        "/providers":     () => model.providers(),
-        "/provider":      () => model.provider(args),
+        "/models":        () => model.model("list"),     // alias → /model list
 
         // Connectors & Channels
         "/connectors":    () => connector.connectors(),
@@ -103,12 +102,17 @@ export function useSlashCommands({
         "/disconnect":    () => connector.disconnect(args),
         "/channels":      () => connector.channels(),
         "/channel":       () => connector.channel(args),
-        "/triggers":      () => connector.triggers(),
         "/auth":          () => connector.auth(args),
+
+        // Tasks (unified: trigger, schedule, cron)
+        "/task":          () => system.task(args),
 
         // Skills
         "/skills":        () => system.skills(),
         "/skill":         () => system.skill(args),
+
+        // Onboarding
+        "/onboard":       () => system.onboard(),
 
         // System
         "/status":        () => system.status(),
@@ -122,8 +126,7 @@ export function useSlashCommands({
         "/billing":       () => system.billing(),
         "/cancel":        () => system.cancel(),
 
-        // Tasks & Notifications
-        "/tasks":         () => system.tasks(),
+        // Notifications
         "/notifications": () => system.notifications(),
 
         // Theme
@@ -133,11 +136,16 @@ export function useSlashCommands({
       const handler = handlers[name];
       if (!handler) return false;
 
-      await handler(args);
+      try {
+        await handler(args);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        addSystemMessage(`Error: ${msg}`);
+      }
       return true;
     },
     [backend, state.model, state.stats, addSystemMessage, dispatch],
   );
 
-  return { handleSlashCommand, pickerProvidersRef };
+  return { handleSlashCommand, wizardConfigRef };
 }

@@ -17,7 +17,7 @@ import { cors } from "hono/cors";
 import { ConnectionManager } from "./connections.js";
 import { createWebhookRoutes } from "./routes/webhook.js";
 import { createOAuthRoutes, resolveOAuthCallback } from "./routes/oauth.js";
-import type { PendingOAuth } from "./routes/oauth.js";
+import type { PendingOAuth, PendingPKCE } from "./routes/oauth.js";
 import { createShareRoutes, resolveShareRequest } from "./routes/share.js";
 import type { PendingShare } from "./routes/share.js";
 import { createBillingRoutes, LicenseStore } from "./routes/billing.js";
@@ -35,6 +35,7 @@ export class RelayDO {
 
   private readonly connections: ConnectionManager;
   private readonly pendingOAuth: Map<string, PendingOAuth>;
+  private readonly pendingPKCE: Map<string, PendingPKCE>;
   private readonly pendingShares: Map<string, PendingShare>;
   private readonly licenseStore: LicenseStore;
   private readonly startTime: number;
@@ -48,6 +49,7 @@ export class RelayDO {
     // Initialize state containers
     this.connections = new ConnectionManager(env);
     this.pendingOAuth = new Map();
+    this.pendingPKCE = new Map();
     this.pendingShares = new Map();
     this.licenseStore = new LicenseStore(state.storage, new Map());
 
@@ -175,7 +177,7 @@ export class RelayDO {
       }
 
       case "oauth_result": {
-        resolveOAuthCallback(this.pendingOAuth, parsed);
+        resolveOAuthCallback(this.pendingOAuth, this.pendingPKCE, parsed);
         break;
       }
 
@@ -232,9 +234,19 @@ export class RelayDO {
     // Mount routes with their dependencies
     app.route("/health", createHealthRoutes(this.connections, this.env, this.startTime));
     app.route("/hooks", createWebhookRoutes(this.connections));
-    app.route("/oauth", createOAuthRoutes(this.connections, this.pendingOAuth));
+    app.route("/oauth", createOAuthRoutes(this.connections, this.pendingOAuth, this.env, this.pendingPKCE));
     app.route("/billing", createBillingRoutes(this.connections, this.env, this.licenseStore));
     app.route("/s", createShareRoutes(this.connections, this.pendingShares));
+
+    // Root — serves minimal HTML with site verification meta tags
+    app.get("/", (c) => {
+      return c.html(`<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="google-site-verification" content="XMwA3aeIs1QVjZDvGva0j-ES7EwfSkOcJGUwjmaM_pM" />
+<title>Jeriko Relay</title>
+</head><body></body></html>`);
+    });
 
     // 404 fallback
     app.notFound((c) => c.json({ ok: false, error: "Not found" }, 404));

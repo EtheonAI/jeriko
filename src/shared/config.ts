@@ -22,8 +22,6 @@ export interface AgentConfig {
 export interface ChannelsConfig {
   telegram: { token: string; adminIds: string[] };
   whatsapp: { enabled: boolean };
-  imessage: { serverUrl: string; password: string; allowedAddresses: string[] };
-  googlechat: { serviceAccountKeyPath: string; spaceIds: string[] };
 }
 
 export interface ConnectorsConfig {
@@ -121,8 +119,6 @@ const DEFAULTS: JerikoConfig = {
   channels: {
     telegram: { token: "", adminIds: [] },
     whatsapp: { enabled: false },
-    imessage: { serverUrl: "", password: "", allowedAddresses: [] },
-    googlechat: { serviceAccountKeyPath: "", spaceIds: [] },
   },
   connectors: {
     stripe:  { webhookSecret: "" },
@@ -149,7 +145,6 @@ const DEFAULTS: JerikoConfig = {
       "DATABASE_URL",
       "REDIS_URL",
       "GOOGLE_API_KEY",
-      "BLUEBUBBLES_PASSWORD",
       "WHATSAPP_TOKEN",
       "CLOUDFLARE_API_TOKEN",
       "VERCEL_TOKEN",
@@ -290,9 +285,6 @@ function deepMerge(target: Record<string, unknown>, source: Record<string, unkno
  *   JERIKO_TELEGRAM_TOKEN / TELEGRAM_BOT_TOKEN → channels.telegram.token
  *   JERIKO_ADMIN_IDS / ADMIN_TELEGRAM_IDS      → channels.telegram.adminIds
  *   WHATSAPP_ENABLED=true                       → channels.whatsapp.enabled
- *   JERIKO_BLUEBUBBLES_URL / BLUEBUBBLES_SERVER_URL → channels.imessage.serverUrl
- *   JERIKO_BLUEBUBBLES_PASSWORD / BLUEBUBBLES_PASSWORD → channels.imessage.password
- *   JERIKO_GOOGLE_CHAT_KEY / GOOGLE_CHAT_SERVICE_ACCOUNT_KEY → channels.googlechat.serviceAccountKeyPath
  *   JERIKO_DB_PATH / (none)              → storage.dbPath
  *
  *   Standard connector env vars (from .env):
@@ -319,18 +311,6 @@ function applyEnvOverrides(config: JerikoConfig): void {
   if (env.WHATSAPP_ENABLED === "true" || env.WHATSAPP_ENABLED === "1") {
     config.channels.whatsapp.enabled = true;
   }
-
-  // iMessage — BlueBubbles server URL + password
-  const bbUrl = env.JERIKO_BLUEBUBBLES_URL || env.BLUEBUBBLES_SERVER_URL;
-  const bbPass = env.JERIKO_BLUEBUBBLES_PASSWORD || env.BLUEBUBBLES_PASSWORD;
-  if (bbUrl) config.channels.imessage.serverUrl = bbUrl;
-  if (bbPass) config.channels.imessage.password = bbPass;
-  if (env.IMESSAGE_ALLOWED_ADDRESSES) config.channels.imessage.allowedAddresses = env.IMESSAGE_ALLOWED_ADDRESSES.split(",").map(s => s.trim());
-
-  // Google Chat — service account key file + space restrictions
-  const gcKeyPath = env.JERIKO_GOOGLE_CHAT_KEY || env.GOOGLE_CHAT_SERVICE_ACCOUNT_KEY;
-  if (gcKeyPath) config.channels.googlechat.serviceAccountKeyPath = gcKeyPath;
-  if (env.GOOGLE_CHAT_SPACE_IDS) config.channels.googlechat.spaceIds = env.GOOGLE_CHAT_SPACE_IDS.split(",").map(s => s.trim());
 
   // Connectors
   if (env.STRIPE_WEBHOOK_SECRET)  config.connectors.stripe.webhookSecret = env.STRIPE_WEBHOOK_SECRET;

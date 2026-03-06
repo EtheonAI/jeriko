@@ -2,16 +2,18 @@
  * Input — Advanced text input with multi-line, history, and autocomplete.
  *
  * Features:
- *   - Multi-line: Shift+Enter inserts newline, Enter submits on last line
+ *   - Multi-line: Ctrl+J inserts newline, pasted newlines create continuation lines
  *   - History: Up/down arrow navigates input history (on first/last line)
+ *   - History persistence: Saved to ~/.jeriko/data/cli_history.json across sessions
  *   - Autocomplete: Arrow-navigated popup for slash commands
  *   - Paste detection: Pasted newlines become continuation lines (not submit)
- *   - Emacs keybindings: Ctrl+A/E/U/W/K
+ *   - Emacs keybindings: Ctrl+A/E/U/W/K/J
+ *   - Always visible: Input area stays rendered in all phases (disabled when busy)
  *
  * Prompt:
- *   > first line
- *   ... continuation
- *   ... continuation
+ *   ❯ first line
+ *     continuation
+ *     continuation
  *
  * Always listens for Ctrl+C regardless of phase (interrupt/abort).
  */
@@ -40,10 +42,11 @@ const COMMANDS_FOR_AUTOCOMPLETE: ReadonlyMap<string, { description: string }> = 
 );
 
 // ---------------------------------------------------------------------------
-// Shared history instance (persists across re-renders)
+// Shared history instance (persists across re-renders and sessions)
 // ---------------------------------------------------------------------------
 
 const inputHistory = new InputHistory();
+inputHistory.load();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -77,6 +80,7 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
   });
 
   const isIdle = phase === "idle";
+  const isInteractive = phase === "wizard" || phase === "setup";
 
   // ----- Helpers -----
 
@@ -119,35 +123,52 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
 
   useInput(
     (input, key) => {
-      // Ctrl+C always works — abort or interrupt regardless of phase
+      // During interactive phases (wizard, setup), their own components handle
+      // all key input — Input should not interfere.
+      if (isInteractive) return;
+
+      // Ctrl+C and Escape always work — abort or interrupt regardless of phase.
+      // During active phases (thinking, streaming, tool-executing, sub-executing)
+      // both keys abort the current operation. When idle, Ctrl+C exits the app
+      // and Escape dismisses autocomplete or clears the input line.
       if (key.ctrl && input === "c") {
         onInterrupt();
+        return;
+      }
+      if (key.escape) {
+        if (!isIdle) {
+          onInterrupt();
+          return;
+        }
+        if (autocomplete.visible) {
+          setAutocomplete({ items: [], selectedIndex: -1, visible: false });
+          return;
+        }
+        // Clear input line if non-empty
+        if (lines.some((l) => l.length > 0)) {
+          setLines([""]);
+          setCursorLine(0);
+          setCursorCol(0);
+          return;
+        }
         return;
       }
 
       // Only accept input when idle
       if (!isIdle) return;
 
-      // ── Escape → dismiss autocomplete ─────────────────────────
-      if (key.escape) {
-        if (autocomplete.visible) {
-          setAutocomplete({ items: [], selectedIndex: -1, visible: false });
-        }
-        return;
-      }
-
-      // ── Enter → accept autocomplete selection or submit ──────
+      // ── Enter → execute autocomplete selection or submit ──────
       if (key.return) {
-        // If autocomplete is visible with a selection, accept it into the
-        // input buffer (don't submit yet — user may want to add arguments).
         if (autocomplete.visible && autocomplete.selectedIndex >= 0) {
           const selected = autocomplete.items[autocomplete.selectedIndex];
           if (selected) {
-            const completed = selected.name + " ";
-            setLines([completed]);
-            setCursorLine(0);
-            setCursorCol(completed.length);
-            setAutocomplete({ items: [], selectedIndex: -1, visible: false });
+            // Execute the command immediately
+            const command = selected.name.trim();
+            inputHistory.push(command);
+            inputHistory.save();
+            onSubmit(command);
+            resetInput();
+            setHistoryIdx(inputHistory.length);
           }
           return;
         }
@@ -157,13 +178,14 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
 
         // Submit
         inputHistory.push(fullText);
+        inputHistory.save();
         onSubmit(fullText);
         resetInput();
         setHistoryIdx(inputHistory.length);
         return;
       }
 
-      // ── Tab → accept autocomplete or complete slash command ────
+      // ── Tab → fill autocomplete into input (for adding args) ───
       if (key.tab) {
         if (autocomplete.visible && autocomplete.selectedIndex >= 0) {
           const selected = autocomplete.items[autocomplete.selectedIndex];
@@ -234,20 +256,18 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
           const newIdx = inputHistory.next(historyIdx);
           setHistoryIdx(newIdx);
 
+          let restored: string[];
           if (newIdx === inputHistory.length) {
             // Restore draft
-            const newLines = draftRef.current.split("\n");
-            setLines(newLines.length > 0 ? newLines : [""]);
-            setCursorLine(newLines.length - 1);
-            setCursorCol((newLines[newLines.length - 1] ?? "").length);
+            restored = draftRef.current.split("\n");
+            if (restored.length === 0) restored = [""];
           } else {
-            const entry = inputHistory.get(newIdx);
-            const newLines = entry.split("\n");
-            setLines(newLines);
-            setCursorLine(newLines.length - 1);
-            setCursorCol((newLines[newLines.length - 1] ?? "").length);
+            restored = inputHistory.get(newIdx).split("\n");
           }
-          updateAutocomplete(lines);
+          setLines(restored);
+          setCursorLine(restored.length - 1);
+          setCursorCol((restored[restored.length - 1] ?? "").length);
+          updateAutocomplete(restored);
           return;
         }
         // Multi-line: move cursor down
@@ -346,6 +366,20 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
         updateAutocomplete(newLines);
         return;
       }
+      if (key.ctrl && input === "j") {
+        // Insert newline at cursor position (Ctrl+J = standard Unix newline)
+        const newLines = [...lines];
+        const line = newLines[cursorLine] ?? "";
+        const before = line.slice(0, cursorCol);
+        const after = line.slice(cursorCol);
+        newLines[cursorLine] = before;
+        newLines.splice(cursorLine + 1, 0, after);
+        setLines(newLines);
+        setCursorLine(cursorLine + 1);
+        setCursorCol(0);
+        setAutocomplete({ items: [], selectedIndex: -1, visible: false });
+        return;
+      }
 
       // ── Regular character input ───────────────────────────────
       if (input && !key.ctrl && !key.meta) {
@@ -388,15 +422,35 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
     { isActive: true },
   );
 
-  // Don't render prompt during non-idle phases
-  if (!isIdle) return null;
+  // Always render — input stays visible in all phases
+  const ruleWidth = 80;
+  const rule = "\u2500".repeat(ruleWidth);
+
+  // When not idle, show a disabled/dimmed input
+  if (!isIdle) {
+    return (
+      <Box flexDirection="column">
+        <Text color={PALETTE.faint}>{rule}</Text>
+        <Text>
+          <Text color={PALETTE.dim}>{"\u276F "}</Text>
+          <Text color={PALETTE.dim}>
+            {lines[0] || " "}
+          </Text>
+        </Text>
+        <Text color={PALETTE.faint}>{rule}</Text>
+      </Box>
+    );
+  }
 
   // Render input lines with cursor
   return (
     <Box flexDirection="column">
+      {/* Top border */}
+      <Text color={PALETTE.faint}>{rule}</Text>
+
       {lines.map((line, lineIdx) => {
         const isCurrentLine = lineIdx === cursorLine;
-        const prompt = lineIdx === 0 ? "> " : "... ";
+        const prompt = lineIdx === 0 ? "\u276F " : "  ";
         const promptColor = lineIdx === 0 ? PALETTE.brand : PALETTE.dim;
 
         if (isCurrentLine) {
@@ -421,6 +475,9 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
           </Text>
         );
       })}
+
+      {/* Bottom border */}
+      <Text color={PALETTE.faint}>{rule}</Text>
 
       {/* Autocomplete popup */}
       {autocomplete.visible && (

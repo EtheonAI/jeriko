@@ -28,20 +28,20 @@ describe("PALETTE", () => {
     }
   });
 
-  test("brand is warm amber (#e8a468)", () => {
-    expect(PALETTE.brand).toBe("#e8a468");
+  test("brand is lightning blue (#38bdf8)", () => {
+    expect(PALETTE.brand).toBe("#38bdf8");
   });
 
-  test("blue is tool blue (#7aa2f7)", () => {
-    expect(PALETTE.blue).toBe("#7aa2f7");
+  test("blue is lightning blue (#38bdf8)", () => {
+    expect(PALETTE.blue).toBe("#38bdf8");
   });
 
-  test("red is error red (#f7768e)", () => {
-    expect(PALETTE.red).toBe("#f7768e");
+  test("red is error red (#f87171)", () => {
+    expect(PALETTE.red).toBe("#f87171");
   });
 
-  test("green is success teal (#73daca)", () => {
-    expect(PALETTE.green).toBe("#73daca");
+  test("green is success green (#4ade80)", () => {
+    expect(PALETTE.green).toBe("#4ade80");
   });
 
   test("three-tier text hierarchy has decreasing visibility", () => {

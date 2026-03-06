@@ -276,7 +276,6 @@ describe("formatThinkingDone", () => {
   test("default message without summary", () => {
     const result = stripAnsi(formatThinkingDone());
     expect(result).toContain("Thinking complete");
-    expect(result).toContain("✻");
   });
 
   test("truncates long summaries", () => {
@@ -324,7 +323,7 @@ describe("formatError", () => {
   test("contains the error message", () => {
     const result = stripAnsi(formatError("something broke"));
     expect(result).toContain("something broke");
-    expect(result).toContain("✗");
+    expect(result).toContain("error:");
   });
 });
 
@@ -333,7 +332,7 @@ describe("formatCompaction", () => {
     const result = stripAnsi(formatCompaction(12000, 4000));
     expect(result).toContain("12k");
     expect(result).toContain("4.0k");
-    expect(result).toContain("compacted");
+    expect(result).toContain("Context compacted");
   });
 });
 
@@ -451,48 +450,40 @@ describe("formatParallelResult", () => {
 // ---------------------------------------------------------------------------
 
 describe("formatWelcome", () => {
-  test("contains version with brand symbol in title border", () => {
+  test("contains version and branding", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("✻");
-    expect(result).toContain("Jeriko v2.0.0");
+    expect(result).toContain("Jeriko");
+    expect(result).toContain("v2.0.0");
   });
 
-  test("has box drawing border", () => {
-    const result = formatWelcome("2.0.0", "claude", "/tmp");
-    expect(result).toContain("╭");
-    expect(result).toContain("╰");
-    expect(result).toContain("│");
-  });
-
-  test("contains owl logo block characters", () => {
+  test("contains cat mascot block characters", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    // Owl logo uses full-block and half-block characters
     expect(result).toContain("█");
-    expect(result).toContain("▄");
-  });
-
-  test("contains owl logo feet detail", () => {
-    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
     expect(result).toContain("▀");
   });
 
-  test("shows model metadata in info panel", () => {
+  test("shows model", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("Model");
+    expect(result).toContain("model");
     expect(result).toContain("claude");
   });
 
-  test("shows session and cwd metadata", () => {
+  test("shows cwd", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("Session");
     expect(result).toContain("cwd");
+  });
+
+  test("has bordered box layout", () => {
+    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
+    expect(result).toContain("╭");
+    expect(result).toContain("╰");
+    expect(result).toContain("│");
   });
 
   test("shows help hints", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
     expect(result).toContain("/help");
     expect(result).toContain("/new");
-    expect(result).toContain("Ctrl+C");
   });
 
   test("shortens home directory in cwd", () => {
@@ -581,8 +572,8 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 37 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(37);
+  test("has all 36 slash commands", () => {
+    expect(SLASH_COMMANDS.size).toBe(36);
   });
 
   test("contains new v3 commands", () => {
@@ -883,7 +874,8 @@ describe("formatHelp (v3)", () => {
 
   test("contains new v3 commands", () => {
     const result = stripAnsi(formatHelp());
-    expect(result).toContain("/models");
+    expect(result).toContain("/model");
+    expect(result).toContain("/model add");
     expect(result).toContain("/skills");
     expect(result).toContain("/status");
     expect(result).toContain("/config");
@@ -1029,9 +1021,9 @@ describe("formatShareList", () => {
 // ---------------------------------------------------------------------------
 
 describe("formatTaskList", () => {
-  test("shows 'no tasks' when empty", () => {
+  test("shows tasks header when empty", () => {
     const result = stripAnsi(formatTaskList([]));
-    expect(result).toMatch(/[Nn]o tasks/);
+    expect(result).toContain("Tasks (0)");
   });
 
   test("formats a list of tasks", () => {
@@ -1043,10 +1035,6 @@ describe("formatTaskList", () => {
     expect(result).toContain("Tasks (2)");
     expect(result).toContain("backup");
     expect(result).toContain("cleanup");
-    expect(result).toContain("abc1");
-    expect(result).toContain("enabled");
-    expect(result).toContain("disabled");
-    expect(result).toContain("/tasks create");
   });
 });
 

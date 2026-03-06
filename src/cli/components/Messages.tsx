@@ -95,7 +95,6 @@ const AssistantMessage: React.FC<{
 
 const SystemMessage: React.FC<{ content: string }> = ({ content }) => (
   <Box marginTop={1}>
-    <Text color={PALETTE.dim}>{ICONS.info} </Text>
     <Text color={PALETTE.muted}>{content}</Text>
   </Box>
 );

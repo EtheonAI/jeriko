@@ -6,7 +6,7 @@
  */
 
 import type { Backend } from "../backend.js";
-import type { AppAction, SessionStats } from "../types.js";
+import type { AppAction, SessionStats, WizardConfig } from "../types.js";
 import type { CommandDefinition, CommandContext, CommandResult } from "../../shared/command-handler.js";
 import { ALL_SURFACES, surfaces } from "../../shared/command-handler.js";
 import {
@@ -31,6 +31,7 @@ export interface SlashCommandContext {
   dispatch: (action: AppAction) => void;
   addSystemMessage: (content: string) => void;
   state: { model: string; stats: SessionStats };
+  wizardConfigRef: React.MutableRefObject<WizardConfig | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -77,7 +78,45 @@ export function createSessionHandlers(ctx: SlashCommandContext) {
     async resume(args: string): Promise<void> {
       const target = args.trim();
       if (!target) {
-        addSystemMessage(t.yellow("Usage: /resume <slug-or-id>"));
+        // Interactive session picker
+        try {
+          const sessions = await backend.listSessions();
+          if (sessions.length === 0) {
+            addSystemMessage(t.muted("No sessions to resume."));
+            return;
+          }
+          ctx.wizardConfigRef.current = {
+            title: "Resume Session",
+            steps: [
+              {
+                type: "select",
+                message: "Choose a session to resume:",
+                options: sessions.map((s) => ({
+                  value: s.slug,
+                  label: s.slug,
+                  hint: s.title !== s.slug ? s.title : s.model,
+                })),
+              },
+            ],
+            onComplete: async ([slug]) => {
+              dispatch({ type: "SET_PHASE", phase: "idle" });
+              try {
+                const resumed = await backend.resumeSession(slug!);
+                if (!resumed) {
+                  addSystemMessage(formatError(`Session "${slug}" not found.`));
+                } else {
+                  dispatch({ type: "SET_SESSION_SLUG", slug: resumed.slug });
+                  addSystemMessage(formatSessionResume(resumed.slug));
+                }
+              } catch (err: unknown) {
+                addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+              }
+            },
+          };
+          dispatch({ type: "SET_PHASE", phase: "wizard" });
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
         return;
       }
       const resumed = await backend.resumeSession(target);

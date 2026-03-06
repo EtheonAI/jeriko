@@ -42,6 +42,10 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./gmail/connector.js")).GmailConnector,
   outlook: async () =>
     (await import("./outlook/connector.js")).OutlookConnector,
+  hubspot: async () =>
+    (await import("./hubspot/connector.js")).HubSpotConnector,
+  shopify: async () =>
+    (await import("./shopify/connector.js")).ShopifyConnector,
 };
 
 // ---------------------------------------------------------------------------

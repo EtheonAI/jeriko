@@ -28,6 +28,44 @@ export interface Env {
 
   /** Deployment environment identifier. */
   ENVIRONMENT: string;
+
+  // -------------------------------------------------------------------------
+  // OAuth provider client secrets — for relay-side code→token exchange.
+  //
+  // These are set via `wrangler secret put`. The matching client IDs are
+  // baked into the daemon binary (public values). The secrets never leave
+  // the relay — tokens are sent to the daemon via WebSocket.
+  // -------------------------------------------------------------------------
+
+  /** GitHub OAuth app client ID. */
+  GITHUB_OAUTH_CLIENT_ID?: string;
+  /** GitHub OAuth app client secret. */
+  GITHUB_OAUTH_CLIENT_SECRET?: string;
+
+  /** Google OAuth client ID (shared by Gmail + GDrive). */
+  GOOGLE_OAUTH_CLIENT_ID?: string;
+  /** Google OAuth client secret (shared by Gmail + GDrive). */
+  GOOGLE_OAUTH_CLIENT_SECRET?: string;
+
+  /** Microsoft OAuth client ID (shared by OneDrive + Outlook). */
+  MICROSOFT_OAUTH_CLIENT_ID?: string;
+  /** Microsoft OAuth client secret (shared by OneDrive + Outlook). */
+  MICROSOFT_OAUTH_CLIENT_SECRET?: string;
+
+  /** X (Twitter) OAuth client ID. */
+  X_OAUTH_CLIENT_ID?: string;
+  /** X (Twitter) OAuth client secret. */
+  X_OAUTH_CLIENT_SECRET?: string;
+
+  /** Vercel OAuth integration client ID. */
+  VERCEL_OAUTH_CLIENT_ID?: string;
+  /** Vercel OAuth integration client secret. */
+  VERCEL_OAUTH_CLIENT_SECRET?: string;
+
+  /** Stripe OAuth platform client ID. */
+  STRIPE_OAUTH_CLIENT_ID?: string;
+  /** Stripe OAuth platform client secret. */
+  STRIPE_OAUTH_CLIENT_SECRET?: string;
 }
 
 // ---------------------------------------------------------------------------

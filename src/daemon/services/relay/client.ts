@@ -28,6 +28,7 @@ import {
   type RelayWebhookMessage,
   type RelayOAuthCallbackMessage,
   type RelayOAuthStartMessage,
+  type RelayOAuthTokensMessage,
   type RelayShareRequestMessage,
 } from "../../../shared/relay-protocol.js";
 
@@ -57,7 +58,20 @@ export type OAuthStartHandler = (
   provider: string,
   params: Record<string, string>,
   requestId: string,
-) => Promise<{ statusCode: number; html: string; redirectUrl?: string }>;
+) => Promise<{ statusCode: number; html: string; redirectUrl?: string; codeVerifier?: string }>;
+
+/** Handler called when the relay sends pre-exchanged OAuth tokens. */
+export type OAuthTokensHandler = (
+  provider: string,
+  tokens: {
+    accessToken: string;
+    refreshToken?: string;
+    expiresIn?: number;
+    scope?: string;
+    tokenType?: string;
+  },
+  requestId: string,
+) => Promise<void>;
 
 /** Handler called when the relay forwards a share page request. */
 export type ShareRequestHandler = (
@@ -91,6 +105,7 @@ export class RelayClient {
   private webhookHandler: WebhookHandler | null = null;
   private oauthHandler: OAuthCallbackHandler | null = null;
   private oauthStartHandler: OAuthStartHandler | null = null;
+  private oauthTokensHandler: OAuthTokensHandler | null = null;
   private shareHandler: ShareRequestHandler | null = null;
 
   constructor(opts: { userId: string; token: string; version?: string }) {
@@ -126,6 +141,15 @@ export class RelayClient {
    */
   onOAuthStart(handler: OAuthStartHandler): void {
     this.oauthStartHandler = handler;
+  }
+
+  /**
+   * Set the handler for relay-exchanged OAuth tokens.
+   * Called when the relay performs the code→token exchange and sends
+   * the resulting tokens to the daemon for local storage.
+   */
+  onOAuthTokens(handler: OAuthTokensHandler): void {
+    this.oauthTokensHandler = handler;
   }
 
   /**
@@ -273,6 +297,10 @@ export class RelayClient {
         this.handleOAuthStartRequest(parsed);
         break;
 
+      case "oauth_tokens":
+        this.handleOAuthTokens(parsed);
+        break;
+
       case "share_request":
         this.handleShareRequest(parsed);
         break;
@@ -402,6 +430,7 @@ export class RelayClient {
           statusCode: result.statusCode,
           html: result.html,
           redirectUrl: result.redirectUrl,
+          codeVerifier: result.codeVerifier,
         });
       })
       .catch((err) => {
@@ -413,6 +442,27 @@ export class RelayClient {
           html: "Internal error processing OAuth start",
         });
       });
+  }
+
+  private handleOAuthTokens(message: RelayOAuthTokensMessage): void {
+    if (!this.oauthTokensHandler) {
+      log.warn(`Relay client: OAuth tokens received but no handler registered (provider: ${message.provider})`);
+      return;
+    }
+
+    this.oauthTokensHandler(
+      message.provider,
+      {
+        accessToken: message.accessToken,
+        refreshToken: message.refreshToken,
+        expiresIn: message.expiresIn,
+        scope: message.scope,
+        tokenType: message.tokenType,
+      },
+      message.requestId,
+    ).catch((err) => {
+      log.error(`Relay client: OAuth tokens handler error — ${err}`);
+    });
   }
 
   private handleShareRequest(message: RelayShareRequestMessage): void {

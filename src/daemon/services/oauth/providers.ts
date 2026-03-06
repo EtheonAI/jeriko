@@ -3,6 +3,14 @@
 // Defines authorization endpoints, token endpoints, scopes, and env var mappings
 // for each connector that supports OAuth. API-key-only connectors (Twilio, PayPal)
 // are not listed here — they continue using /auth.
+//
+// Baked-in client IDs:
+//   Each provider has a `bakedIdKey` that maps to a build-time constant in
+//   `src/shared/baked-oauth-ids.ts`. At compile time, Bun's `define` injects
+//   the real OAuth app client IDs. At dev time, they're undefined and users
+//   must provide client IDs via env vars.
+
+import { BAKED_OAUTH_CLIENT_IDS } from "../../../shared/baked-oauth-ids.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -19,6 +27,11 @@ export interface OAuthProvider {
   tokenUrl: string;
   /** Scopes to request. */
   scopes: string[];
+  /**
+   * Key into BAKED_OAUTH_CLIENT_IDS for the build-time client ID.
+   * Multiple providers can share the same key (e.g. gmail + gdrive → "google").
+   */
+  bakedIdKey: string;
   /** Env var for OAuth client ID (e.g. "GITHUB_OAUTH_CLIENT_ID"). */
   clientIdVar: string;
   /**
@@ -55,6 +68,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
     scopes: [],
+    bakedIdKey: "stripe",
     clientIdVar: "STRIPE_OAUTH_CLIENT_ID",
     clientSecretVar: "STRIPE_SECRET_KEY",
     tokenEnvVar: "STRIPE_ACCESS_TOKEN",
@@ -67,6 +81,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://github.com/login/oauth/authorize",
     tokenUrl: "https://github.com/login/oauth/access_token",
     scopes: ["repo", "read:user", "read:org"],
+    bakedIdKey: "github",
     clientIdVar: "GITHUB_OAUTH_CLIENT_ID",
     clientSecretVar: "GITHUB_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "GITHUB_TOKEN",
@@ -77,6 +92,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://twitter.com/i/oauth2/authorize",
     tokenUrl: "https://api.twitter.com/2/oauth2/token",
     scopes: ["tweet.read", "tweet.write", "users.read", "dm.read", "dm.write", "offline.access"],
+    bakedIdKey: "x",
     clientIdVar: "X_OAUTH_CLIENT_ID",
     clientSecretVar: "X_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "X_BEARER_TOKEN",
@@ -89,6 +105,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
     scopes: ["https://www.googleapis.com/auth/drive"],
+    bakedIdKey: "google",
     clientIdVar: "GDRIVE_OAUTH_CLIENT_ID",
     clientSecretVar: "GDRIVE_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "GDRIVE_ACCESS_TOKEN",
@@ -101,6 +118,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     scopes: ["Files.ReadWrite.All", "offline_access"],
+    bakedIdKey: "microsoft",
     clientIdVar: "ONEDRIVE_OAUTH_CLIENT_ID",
     clientSecretVar: "ONEDRIVE_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "ONEDRIVE_ACCESS_TOKEN",
@@ -112,6 +130,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://vercel.com/oauth/authorize",
     tokenUrl: "https://api.vercel.com/login/oauth/token",
     scopes: ["openid", "email", "profile", "offline_access"],
+    bakedIdKey: "vercel",
     clientIdVar: "VERCEL_OAUTH_CLIENT_ID",
     clientSecretVar: "VERCEL_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "VERCEL_TOKEN",
@@ -124,6 +143,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
     scopes: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
+    bakedIdKey: "google",
     clientIdVar: "GMAIL_OAUTH_CLIENT_ID",
     clientSecretVar: "GMAIL_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "GMAIL_ACCESS_TOKEN",
@@ -136,10 +156,53 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
     scopes: ["Mail.ReadWrite", "Mail.Send", "offline_access"],
+    bakedIdKey: "microsoft",
     clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID",
     clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "OUTLOOK_ACCESS_TOKEN",
     refreshTokenEnvVar: "OUTLOOK_REFRESH_TOKEN",
+  },
+  {
+    name: "hubspot",
+    label: "HubSpot",
+    authUrl: "https://app.hubspot.com/oauth/authorize",
+    tokenUrl: "https://api.hubapi.com/oauth/v1/token",
+    scopes: [
+      "crm.objects.contacts.read",
+      "crm.objects.contacts.write",
+      "crm.objects.companies.read",
+      "crm.objects.companies.write",
+      "crm.objects.deals.read",
+      "crm.objects.deals.write",
+      "crm.objects.owners.read",
+      "tickets",
+    ],
+    bakedIdKey: "hubspot",
+    clientIdVar: "HUBSPOT_OAUTH_CLIENT_ID",
+    clientSecretVar: "HUBSPOT_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "HUBSPOT_ACCESS_TOKEN",
+    refreshTokenEnvVar: "HUBSPOT_REFRESH_TOKEN",
+  },
+  {
+    name: "shopify",
+    label: "Shopify",
+    authUrl: "https://{shop}.myshopify.com/admin/oauth/authorize",
+    tokenUrl: "https://{shop}.myshopify.com/admin/oauth/access_token",
+    scopes: [
+      "read_products",
+      "write_products",
+      "read_orders",
+      "write_orders",
+      "read_customers",
+      "write_customers",
+      "read_inventory",
+      "write_inventory",
+    ],
+    bakedIdKey: "shopify",
+    clientIdVar: "SHOPIFY_OAUTH_CLIENT_ID",
+    clientSecretVar: "SHOPIFY_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "SHOPIFY_ACCESS_TOKEN",
+    // Shopify tokens are permanent — no refresh token
   },
 ] as const;
 
@@ -151,4 +214,26 @@ export function getOAuthProvider(name: string): OAuthProvider | undefined {
 /** Check whether a connector supports OAuth (vs API-key-only). */
 export function isOAuthCapable(name: string): boolean {
   return OAUTH_PROVIDERS.some((p) => p.name === name);
+}
+
+/**
+ * Resolve the OAuth client ID for a provider.
+ *
+ * Resolution order:
+ *   1. Env var override (e.g. GITHUB_OAUTH_CLIENT_ID) — user-provided credentials
+ *   2. Baked-in client ID from build-time constants — Jeriko's registered OAuth apps
+ *   3. undefined — provider not configured
+ */
+export function getClientId(provider: OAuthProvider): string | undefined {
+  return process.env[provider.clientIdVar]
+    || BAKED_OAUTH_CLIENT_IDS[provider.bakedIdKey]
+    || undefined;
+}
+
+/**
+ * Check whether the daemon has local OAuth client credentials for token exchange.
+ * When false, the relay server handles the code→token exchange using its secrets.
+ */
+export function hasLocalSecret(provider: OAuthProvider): boolean {
+  return !!process.env[provider.clientSecretVar];
 }

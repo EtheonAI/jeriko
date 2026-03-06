@@ -762,8 +762,6 @@ export class TriggerEngine {
           JERIKO_FORMAT: "json",
         };
 
-        log.info(`Trigger ${trigger.id}: spawning shell — sh -c ${action.command}`);
-
         // Sanitize env: strip null bytes from values — corrupted env vars
         // (e.g. OAuth tokens with trailing \0) crash Bun.spawn.
         const safeEnv: Record<string, string> = {};
@@ -778,10 +776,8 @@ export class TriggerEngine {
         });
 
         const exitCode = await proc.exited;
-        const stdout = await new Response(proc.stdout).text();
-        const stderr = await new Response(proc.stderr).text();
-        log.info(`Trigger ${trigger.id}: shell exited ${exitCode}, stdout=${stdout.slice(0, 200)}, stderr=${stderr.slice(0, 200)}`);
         if (exitCode !== 0) {
+          const stderr = await new Response(proc.stderr).text();
           log.warn(`Trigger ${trigger.id} shell action exited ${exitCode}: ${stderr}`);
           this.recordError(trigger);
         } else {

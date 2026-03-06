@@ -1,9 +1,9 @@
 /**
- * Banner — Welcome banner printed to console before Ink takes over.
+ * Banner — Minimal startup banner printed to console before Ink takes over.
  *
- * Uses formatWelcome from format.ts. Called once at startup via
- * console.log (not rendered as an Ink component) so it stays in
- * the terminal's scrollback buffer.
+ * Clean 2-line format:
+ *   jeriko v2.1.0
+ *   model: claude-sonnet-4  cwd: ~/projects/myapp
  */
 
 import { formatWelcome } from "../format.js";

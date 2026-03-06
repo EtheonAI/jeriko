@@ -1,21 +1,29 @@
 /**
- * InputHistory — Ring buffer for input history with deduplication.
+ * InputHistory — Ring buffer for input history with deduplication and persistence.
  *
- * Pure class — no React, no state, no side effects.
  * Used by the Input component for up/down arrow history navigation.
+ * History is persisted to disk so it survives across CLI sessions.
  *
  * Behavior:
  *   - push() appends a new entry, skipping consecutive duplicates
  *   - prev()/next() navigate the history by returning an index
  *   - get() retrieves an entry by index
+ *   - save()/load() persist to/from a JSON file
  *   - When navigating, the "draft" position is length (past the last entry)
  */
+
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_SIZE = 200;
+const DEFAULT_MAX_SIZE = 500;
+
+/** Default persistence path — co-located with other CLI data. */
+const DEFAULT_HISTORY_PATH = join(homedir(), ".jeriko", "data", "cli_history.json");
 
 // ---------------------------------------------------------------------------
 // Class
@@ -24,10 +32,13 @@ const DEFAULT_MAX_SIZE = 200;
 export class InputHistory {
   private entries: string[];
   private maxSize: number;
+  private filePath: string | null;
+  private dirty = false;
 
-  constructor(maxSize: number = DEFAULT_MAX_SIZE) {
+  constructor(opts?: { maxSize?: number; filePath?: string | null }) {
     this.entries = [];
-    this.maxSize = maxSize;
+    this.maxSize = opts?.maxSize ?? DEFAULT_MAX_SIZE;
+    this.filePath = opts?.filePath !== undefined ? opts.filePath : DEFAULT_HISTORY_PATH;
   }
 
   /**
@@ -50,6 +61,8 @@ export class InputHistory {
     if (this.entries.length > this.maxSize) {
       this.entries = this.entries.slice(this.entries.length - this.maxSize);
     }
+
+    this.dirty = true;
   }
 
   /**
@@ -103,5 +116,50 @@ export class InputHistory {
   /** Clear all history entries. */
   clear(): void {
     this.entries = [];
+    this.dirty = true;
+  }
+
+  // ── Persistence ──────────────────────────────────────────────────────
+
+  /**
+   * Load history from disk. Silently no-ops if file doesn't exist or is
+   * malformed — the user just starts with an empty history.
+   */
+  load(): void {
+    if (!this.filePath) return;
+    try {
+      if (!existsSync(this.filePath)) return;
+      const raw = readFileSync(this.filePath, "utf-8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        // Only keep strings, trim, and enforce maxSize
+        this.entries = parsed
+          .filter((e): e is string => typeof e === "string")
+          .map((e) => e.trim())
+          .filter((e) => e.length > 0)
+          .slice(-this.maxSize);
+      }
+    } catch {
+      // Corrupt or unreadable file — start fresh
+    }
+    this.dirty = false;
+  }
+
+  /**
+   * Save history to disk. Only writes if entries have changed since last
+   * save/load. Creates parent directories if needed.
+   */
+  save(): void {
+    if (!this.filePath || !this.dirty) return;
+    try {
+      const dir = dirname(this.filePath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true });
+      }
+      writeFileSync(this.filePath, JSON.stringify(this.entries), "utf-8");
+      this.dirty = false;
+    } catch {
+      // Best effort — don't crash on write failure
+    }
   }
 }

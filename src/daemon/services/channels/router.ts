@@ -37,7 +37,7 @@ import {
 import { kvGet, kvSet } from "../../storage/kv.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 
 const log = getLogger();
 
@@ -72,6 +72,8 @@ export interface ChannelRouterOptions {
   systemPrompt?: string;
   /** Lazy accessor for trigger engine (created after router in kernel boot). */
   getTriggerEngine?: () => import("../triggers/engine.js").TriggerEngine | null;
+  /** Lazy accessor for connector manager (created after router in kernel boot). */
+  getConnectors?: () => import("../connectors/manager.js").ConnectorManager | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +445,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             [
               { label: "Connectors", data: "/connectors" },
               { label: "Skills", data: "/skill" },
-              { label: "Triggers", data: "/triggers" },
+              { label: "Tasks", data: "/task" },
             ],
             [
               { label: "Providers", data: "/providers" },
@@ -451,13 +453,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               { label: "Share", data: "/share" },
             ],
             [
-              { label: "Tasks", data: "/tasks" },
-              { label: "Config", data: "/config" },
-              { label: "Status", data: "/status" },
-            ],
-            [
               { label: "Billing", data: "/billing" },
               { label: "Notifications", data: "/notifications" },
+              { label: "Config", data: "/config" },
+            ],
+            [
+              { label: "Status", data: "/status" },
               { label: "System", data: "/sys" },
             ],
           ],
@@ -794,21 +795,25 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeKeyboard(
             metadata,
             [
-              "Add a custom AI provider:",
+              "*Add a custom AI provider:*",
               "",
-              "Option 1 — Environment variable (auto-discovery):",
-              "  Set OPENROUTER_API_KEY, GROQ_API_KEY, etc.",
-              "  Restart daemon. Provider appears automatically.",
+              "*Option 1* — Environment variable (auto-discovery):",
+              "Set `OPENROUTER_API_KEY`, `GROQ_API_KEY`, etc.",
+              "Restart daemon. Provider appears automatically.",
               "",
-              "Option 2 — Config file:",
-              "  ~/.config/jeriko/config.json",
-              '  { "providers": [{ "id": "my-ai",',
-              '    "baseUrl": "https://api.example.com/v1",',
-              '    "apiKey": "{env:MY_API_KEY}",',
-              '    "type": "openai",',
-              '    "defaultModel": "model-name" }] }',
+              "*Option 2* — Config file:",
+              "`~/.config/jeriko/config.json`",
+              '```',
+              '{ "providers": [{',
+              '  "id": "my-ai",',
+              '  "baseUrl": "https://api.example.com/v1",',
+              '  "apiKey": "{env:MY_API_KEY}",',
+              '  "type": "openai-compatible",',
+              '  "defaultModel": "model-name"',
+              '}]}',
+              '```',
               "",
-              "Then use: /model my-ai:model-name",
+              "Then use: `/model my-ai:model-name`",
             ].join("\n"),
             [[{ label: "« Model", data: "/model" }]],
           );
@@ -816,29 +821,52 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         // /model — hub menu (no args)
+        // Show active providers with their default models + add provider option.
+        // Like OpenCode: pick provider → see models → switch.
         if (!arg) {
-          const drivers = listDrivers();
           const { backend: activeBackend } = parseModelSpec(state.model);
+          const drivers = listDrivers();
+
+          // Load custom provider config (dynamic import — not available at top level)
+          let providerConfigs: Array<{ id: string; defaultModel?: string }> = [];
+          try {
+            const { loadConfig: loadCfg } = await import("../../../shared/config.js");
+            const cfg = loadCfg();
+            providerConfigs = cfg.providers ?? [];
+          } catch { /* config not available — show drivers only */ }
+
           const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data?: string }> = [];
-          for (const driver of drivers) {
-            const isCurrent = state.model === driver || activeBackend === driver;
+          const builtInSet = new Set(["anthropic", "openai", "local", "claude-code"]);
+
+          // Built-in providers as a row
+          const builtInRow: Array<{ label: string; data?: string }> = [];
+          for (const driver of ["anthropic", "openai", "local"]) {
+            if (!drivers.includes(driver)) continue;
+            const isCurrent = activeBackend === driver;
             const label = isCurrent ? `${driver} ●` : driver;
-            row.push({ label, data: `/model ${driver}` });
-            if (row.length === 3) {
-              buttons.push(row);
-              row = [];
-            }
+            builtInRow.push({ label, data: `/model list ${driver}` });
           }
-          if (row.length > 0) buttons.push(row);
+          if (builtInRow.length > 0) buttons.push(builtInRow);
+
+          // Custom/discovered providers — each gets a button
+          for (const driver of drivers) {
+            if (builtInSet.has(driver)) continue;
+            const isCurrent = activeBackend === driver;
+            const label = isCurrent ? `${driver} ●` : driver;
+            buttons.push([
+              { label, data: `/model list ${driver}` },
+            ]);
+          }
+
+          // Action row
           buttons.push([
-            { label: "Browse Models", data: "/model list" },
-            { label: "Add Provider", data: "/model add" },
+            { label: "Browse All", data: "/model list" },
+            { label: "+ Add Provider", data: "/provider add" },
           ]);
 
           await safeKeyboard(
             metadata,
-            `Current: ${describeModel(state.model)}\n\nTap provider to switch (uses default model):`,
+            `Current: ${describeModel(state.model)}\n\nTap a provider to see its models:`,
             buttons,
           );
           return;
@@ -1053,6 +1081,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           for (const entry of def.required) {
             deleteSecret(primaryVarName(entry));
           }
+        }
+
+        // Evict from connector manager cache so next get() re-initializes
+        const connectorMgr = opts.getConnectors?.();
+        if (connectorMgr) {
+          await connectorMgr.evict(connectorName);
         }
 
         await safeKeyboard(
@@ -1590,6 +1624,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           addChannel: addCh,
           removeChannel: removeCh,
           renderQRText,
+          renderQRImage,
         } = await import("./lifecycle.js");
 
         const channelList = opts.channels.status();
@@ -1659,10 +1694,6 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           let channelConfig: Record<string, unknown> | undefined;
           if (channelArg === "telegram") {
             channelConfig = { token: tokens[0] };
-          } else if (channelArg === "imessage") {
-            channelConfig = { serverUrl: tokens[0], password: tokens[1] };
-          } else if (channelArg === "googlechat") {
-            channelConfig = { serviceAccountKeyPath: tokens[0] };
           } else if (channelArg === "whatsapp") {
             channelConfig = { enabled: true };
           }
@@ -1679,18 +1710,44 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           // Add the channel live — WhatsApp gets a QR callback so the
           // requesting channel receives the QR code directly in chat.
           try {
+            // Baileys emits QR codes on each socket creation and rotates them
+            // every ~20s. We send exactly ONE QR to the user — subsequent QR
+            // events just update the stored data silently. The QR stays valid
+            // until the connection timeout (120s). If it expires, the connect
+            // call fails and the user can retry with /channel add whatsapp.
             let qrSent = false;
+            let latestQrData = "";
+
             const onQR = channelArg === "whatsapp"
               ? async (qr: string) => {
-                  const text = await renderQRText(qr);
-                  if (text) {
-                    await safeSend(metadata, `Scan this QR code with WhatsApp:\n\n${text}`);
-                    qrSent = true;
+                  latestQrData = qr;
+                  if (qrSent) return;
+                  qrSent = true;
+
+                  const imgBuf = await renderQRImage(latestQrData);
+                  if (imgBuf) {
+                    const tmpPath = join(tmpdir(), `jeriko-whatsapp-qr-${Date.now()}.png`);
+                    writeFileSync(tmpPath, imgBuf);
+                    try {
+                      await opts.channels.sendPhoto(
+                        metadata.channel,
+                        metadata.chat_id,
+                        tmpPath,
+                        "Scan this QR with WhatsApp → Linked Devices → Link a Device",
+                      );
+                    } finally {
+                      try { unlinkSync(tmpPath); } catch { /* cleanup */ }
+                    }
+                  } else {
+                    const text = await renderQRText(latestQrData);
+                    if (text) {
+                      await safeSend(metadata, `Scan this QR code with WhatsApp:\n\n${text}`);
+                    }
                   }
                 }
               : undefined;
 
-            if (channelArg === "whatsapp" && !qrSent) {
+            if (channelArg === "whatsapp") {
               await safeSend(metadata, "Connecting WhatsApp — QR code will appear shortly...");
             }
 
@@ -1961,81 +2018,606 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
-      case "tasks":
+      case "trigger":
+      case "triggers": {
+        // Simple trigger management — flat list with enable/disable/detail.
+        // The user's primary need: see all triggers, toggle them on/off.
+        const triggerEngine = opts.getTriggerEngine?.();
+        if (!triggerEngine) {
+          await safeSend(metadata, "Trigger engine not available.");
+          return;
+        }
+
+        const triggerSub = rest[0]?.toLowerCase();
+        const triggerId = rest[1];
+
+        // /triggers enable <id>
+        if (triggerSub === "enable" && triggerId) {
+          const ok = triggerEngine.enable(triggerId);
+          await safeSend(metadata, ok ? `Trigger enabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
+          return;
+        }
+
+        // /triggers disable <id>
+        if ((triggerSub === "disable" || triggerSub === "pause") && triggerId) {
+          const ok = triggerEngine.disable(triggerId);
+          await safeSend(metadata, ok ? `Trigger disabled: ${triggerId}` : `Trigger not found: ${triggerId}`);
+          return;
+        }
+
+        // /triggers delete <id>
+        if ((triggerSub === "delete" || triggerSub === "remove") && triggerId) {
+          const ok = triggerEngine.remove(triggerId);
+          await safeSend(metadata, ok ? `Trigger deleted: ${triggerId}` : `Trigger not found: ${triggerId}`);
+          return;
+        }
+
+        // /triggers test <id>
+        if ((triggerSub === "test" || triggerSub === "run") && triggerId) {
+          const t = triggerEngine.get(triggerId);
+          if (!t) { await safeSend(metadata, `Trigger not found: ${triggerId}`); return; }
+          await safeSend(metadata, `Firing: ${t.label ?? triggerId}...`);
+          try {
+            await triggerEngine.fire(triggerId, { test: true, timestamp: new Date().toISOString() });
+            await safeSend(metadata, `Trigger fired: ${t.label ?? triggerId} (run #${(t.run_count ?? 0) + 1})`);
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            await safeSend(metadata, `Trigger failed: ${msg.slice(0, 500)}`);
+          }
+          return;
+        }
+
+        // /triggers <id> — detail view
+        if (triggerSub && !["list", "all"].includes(triggerSub)) {
+          const t = triggerEngine.get(triggerSub);
+          if (t) {
+            const configSummary = t.type === "cron"
+              ? `schedule: ${(t.config as { expression: string }).expression}`
+              : t.type === "once"
+              ? `at: ${(t.config as { at: string }).at}`
+              : t.type === "webhook"
+              ? `source: ${(t.config as { service?: string }).service ?? "generic"}`
+              : `type: ${t.type}`;
+
+            const lines = [
+              `${t.label ?? t.id}`,
+              `ID: ${t.id}`,
+              `type: ${t.type}`,
+              `enabled: ${t.enabled}`,
+              configSummary,
+              `action: ${t.action.type}${t.action.prompt ? ` — ${t.action.prompt.slice(0, 80)}` : ""}${t.action.command ? ` — ${t.action.command.slice(0, 80)}` : ""}`,
+              `runs: ${t.run_count ?? 0}${t.max_runs ? ` / ${t.max_runs}` : ""}`,
+              t.last_fired ? `last fired: ${formatAge(new Date(t.last_fired).getTime())}` : "last fired: never",
+            ];
+            await safeKeyboard(
+              metadata,
+              lines.join("\n"),
+              [
+                [
+                  t.enabled
+                    ? { label: "Disable", data: `/triggers disable ${t.id}` }
+                    : { label: "Enable", data: `/triggers enable ${t.id}` },
+                  { label: "Test", data: `/triggers test ${t.id}` },
+                  { label: "Delete", data: `/triggers delete ${t.id}` },
+                ],
+                [{ label: "« All Triggers", data: "/triggers" }],
+              ],
+            );
+            return;
+          }
+        }
+
+        // /triggers — list all triggers (flat, simple)
+        const allTriggers = triggerEngine.listAll();
+        if (allTriggers.length === 0) {
+          await safeSend(metadata, "No triggers configured.\n\nUse /task to create triggers, schedules, and cron jobs.");
+          return;
+        }
+
+        const triggerLines: string[] = [];
+        const triggerButtons: KeyboardLayout = [];
+        for (const t of allTriggers) {
+          const icon = t.enabled ? "●" : "○";
+          const runs = t.run_count ?? 0;
+          triggerLines.push(`${icon} ${t.label ?? t.id} — ${t.type} — ${runs} runs`);
+          triggerButtons.push([
+            { label: `${icon} ${t.label ?? t.id}`, data: `/triggers ${t.id}` },
+          ]);
+        }
+
+        await safeKeyboard(
+          metadata,
+          [`Triggers (${allTriggers.length}):`, ...triggerLines].join("\n"),
+          triggerButtons,
+        );
+        return;
+      }
+
       case "task":
-      case "triggers":
-      case "trigger": {
-        // Unified task handler — backed by TriggerEngine (SQLite).
-        // /tasks and /triggers are merged into one command surface.
+      case "tasks": {
+        // Unified task hub — three categories backed by TriggerEngine.
+        //   /task trigger  — event-driven (webhook, file, http, email)
+        //   /task schedule — recurring (daily, weekly, monthly, custom, cron)
+        //   /task cron     — raw cron expressions + one-time
         const engine = opts.getTriggerEngine?.();
         if (!engine) {
           await safeSend(metadata, "Task engine not available.");
           return;
         }
 
-        const subCommand = rest[0]?.toLowerCase();
+        const category = rest[0]?.toLowerCase();
+        const subCommand = rest[1]?.toLowerCase();
 
-        // /tasks create <name> <shell command...>
-        if (subCommand === "create") {
-          const taskName = rest[1];
-          if (!taskName || rest.length < 3) {
-            await safeSend(metadata, "Usage: /tasks create <name> <shell command>\n\nExample: /tasks create my-backup tar -czf backup.tar.gz ~/docs");
+        // ── Category: trigger ──────────────────────────────────────
+        if (category === "trigger" || category === "triggers") {
+          const TRIGGER_TYPES = ["webhook", "file", "http", "email"];
+
+          // /task trigger new <type> ...
+          if (subCommand === "new" || subCommand === "create") {
+            const triggerType = rest[2]?.toLowerCase();
+            if (!triggerType) {
+              await safeKeyboard(
+                metadata,
+                "Create an event trigger — select type:",
+                [
+                  [
+                    { label: "Webhook", data: "/task trigger new webhook" },
+                    { label: "File Watch", data: "/task trigger new file" },
+                  ],
+                  [
+                    { label: "HTTP Monitor", data: "/task trigger new http" },
+                    { label: "Email", data: "/task trigger new email" },
+                  ],
+                  [{ label: "« Tasks", data: "/task" }],
+                ],
+              );
+              return;
+            }
+
+            try {
+              const { buildTriggerConfig } = await import("../triggers/task-adapter.js");
+              let params: Record<string, unknown>;
+
+              if (triggerType === "webhook") {
+                const service = rest[3]?.toLowerCase();
+                if (!service || !["stripe", "paypal", "github", "twilio"].includes(service)) {
+                  await safeKeyboard(
+                    metadata,
+                    "Select a webhook service:",
+                    [
+                      [
+                        { label: "Stripe", data: "/task trigger new webhook stripe" },
+                        { label: "GitHub", data: "/task trigger new webhook github" },
+                      ],
+                      [
+                        { label: "PayPal", data: "/task trigger new webhook paypal" },
+                        { label: "Twilio", data: "/task trigger new webhook twilio" },
+                      ],
+                      [{ label: "« Triggers", data: "/task trigger" }],
+                    ],
+                  );
+                  return;
+                }
+                const action = rest.slice(4).join(" ") || "process webhook event";
+                params = { name: `${service} webhook`, trigger: `${service}:*`, action };
+              } else if (triggerType === "file") {
+                const path = rest[3];
+                if (!path) {
+                  await safeSend(metadata, "Usage: /task trigger new file <path> [action]\n\nExample: /task trigger new file /var/log/app.log alert on changes");
+                  return;
+                }
+                const action = rest.slice(4).join(" ") || "process file change";
+                params = { name: `file watch: ${path}`, trigger: "file:change", path, action };
+              } else if (triggerType === "http") {
+                const url = rest[3] ?? "";
+                if (!url.startsWith("http")) {
+                  await safeSend(metadata, "Usage: /task trigger new http <url> [action]\n\nExample: /task trigger new http https://api.example.com alert if down");
+                  return;
+                }
+                params = { name: `http: ${url}`, trigger: "http:any", url, action: rest.slice(4).join(" ") || "check endpoint status" };
+              } else if (triggerType === "email") {
+                const connector = rest[3]?.toLowerCase() ?? "gmail";
+                params = { name: `${connector} email`, trigger: `${connector}:new_email`, action: rest.slice(4).join(" ") || "process new email" };
+              } else {
+                await safeSend(metadata, `Unknown trigger type: ${triggerType}\nAvailable: webhook, file, http, email`);
+                return;
+              }
+
+              const config = buildTriggerConfig(params);
+              const trigger = engine.add(config);
+              await safeKeyboard(
+                metadata,
+                `Trigger created: ${trigger.label ?? trigger.id}\nType: ${trigger.type}\nStatus: enabled`,
+                [
+                  [
+                    { label: "Pause", data: `/task disable ${trigger.id}` },
+                    { label: "Test", data: `/task test ${trigger.id}` },
+                  ],
+                  [{ label: "« Triggers", data: "/task trigger" }],
+                ],
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              await safeSend(metadata, `Failed to create trigger: ${msg}`);
+            }
             return;
           }
-          const shellCmd = rest.slice(2).join(" ");
-          try {
-            const id = engine.add({
-              type: "cron",
-              enabled: false,
-              config: { expression: "0 0 * * *" } as import("../triggers/engine.js").CronConfig,
-              action: { type: "shell", command: shellCmd, notify: true },
-              label: taskName,
-            });
-            await safeSend(metadata, `Created task: ${taskName} (${id})\nAction: ${shellCmd}\nNote: task is paused — use /tasks resume ${id} to enable.\nSet schedule via CLI: jeriko task create "${taskName}" --schedule "0 9 * * *" --shell "${shellCmd}"`);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            await safeSend(metadata, `Failed to create task: ${msg}`);
+
+          // /task trigger delete <id>
+          if (subCommand === "delete" || subCommand === "remove") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task trigger delete <id>"); return; }
+            const result = engine.remove(id);
+            await safeSend(metadata, result ? `Trigger deleted: ${id}` : `Trigger not found: ${id}`);
+            return;
           }
+
+          // /task trigger enable <id>
+          if (subCommand === "enable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task trigger enable <id>"); return; }
+            const result = engine.enable(id);
+            await safeSend(metadata, result ? `Trigger enabled: ${id}` : `Trigger not found: ${id}`);
+            return;
+          }
+
+          // /task trigger disable <id>
+          if (subCommand === "disable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task trigger disable <id>"); return; }
+            const result = engine.disable(id);
+            await safeSend(metadata, result ? `Trigger disabled: ${id}` : `Trigger not found: ${id}`);
+            return;
+          }
+
+          // /task trigger — list event triggers
+          const triggers = engine.listAll().filter((t) => TRIGGER_TYPES.includes(t.type));
+          if (triggers.length === 0) {
+            await safeKeyboard(
+              metadata,
+              "No event triggers configured.",
+              [
+                [{ label: "New Trigger", data: "/task trigger new" }],
+                [{ label: "« Tasks", data: "/task" }],
+              ],
+            );
+            return;
+          }
+
+          const tButtons: KeyboardLayout = [];
+          const tLines: string[] = [];
+          for (const t of triggers) {
+            const icon = t.enabled ? "●" : "○";
+            const runs = t.run_count ?? 0;
+            tLines.push(`${icon} ${t.label ?? t.id} — ${t.type} — ${runs} runs`);
+            tButtons.push([{ label: t.label ?? t.id, data: `/task ${t.id}` }]);
+          }
+          tButtons.push([
+            { label: "New Trigger", data: "/task trigger new" },
+            { label: "« Tasks", data: "/task" },
+          ]);
+
+          await safeKeyboard(
+            metadata,
+            [`Event Triggers (${triggers.length}):`, ...tLines].join("\n"),
+            tButtons,
+          );
           return;
         }
 
-        // /tasks pause <id> | /tasks disable <id>
-        if (subCommand === "pause" || subCommand === "disable") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks pause <task-id>"); return; }
-          const result = engine.disable(taskId);
-          await safeSend(metadata, result ? `Task paused: ${taskId}` : `Task not found: ${taskId}`);
+        // ── Category: schedule ─────────────────────────────────────
+        if (category === "schedule" || category === "schedules") {
+
+          // /task schedule new [daily|weekly|monthly|custom] [time] [action...]
+          if (subCommand === "new" || subCommand === "create") {
+            const preset = rest[2]?.toLowerCase();
+            if (!preset) {
+              await safeKeyboard(
+                metadata,
+                "Create a schedule — select frequency:",
+                [
+                  [
+                    { label: "Daily", data: "/task schedule new daily" },
+                    { label: "Weekly", data: "/task schedule new weekly" },
+                  ],
+                  [
+                    { label: "Monthly", data: "/task schedule new monthly" },
+                    { label: "Custom", data: "/task schedule new custom" },
+                  ],
+                  [{ label: "« Tasks", data: "/task" }],
+                ],
+              );
+              return;
+            }
+
+            const { parseRecurring } = await import("../triggers/task-adapter.js");
+            const timeArg = rest[3] ?? "";
+            const actionText = rest.slice(4).join(" ").trim();
+
+            if (!timeArg) {
+              const hints: Record<string, string> = {
+                daily: "Usage: /task schedule new daily <HH:MM> <action>\nExample: /task schedule new daily 09:00 morning briefing",
+                weekly: "Usage: /task schedule new weekly <DAY> <HH:MM> <action>\nExample: /task schedule new weekly MON 09:00 weekly report",
+                monthly: "Usage: /task schedule new monthly <DAY> <action>\nExample: /task schedule new monthly 1 run monthly audit",
+                custom: "Usage: /task schedule new custom <interval> <action>\nIntervals: 5m, 1h, 30m\nExample: /task schedule new custom 30m check for updates",
+              };
+              await safeSend(metadata, hints[preset] ?? `Usage: /task schedule new ${preset} <time> <action>`);
+              return;
+            }
+
+            try {
+              let expression: string;
+              let label: string;
+
+              if (preset === "daily") {
+                expression = parseRecurring("daily", { at: timeArg });
+                label = `Daily at ${timeArg}`;
+              } else if (preset === "weekly") {
+                const dayOfWeek = timeArg.toUpperCase();
+                const weekTime = rest[4] ?? "09:00";
+                expression = parseRecurring("weekly", { day: dayOfWeek, at: weekTime });
+                label = `Weekly ${dayOfWeek} at ${weekTime}`;
+              } else if (preset === "monthly") {
+                expression = parseRecurring("monthly", { day_of_month: timeArg });
+                label = `Monthly on day ${timeArg}`;
+              } else {
+                expression = parseRecurring(timeArg, {});
+                label = `Every ${timeArg}`;
+              }
+
+              const prompt = actionText || (preset === "weekly" ? rest.slice(5).join(" ") : "scheduled task");
+              const trigger = engine.add({
+                type: "cron",
+                enabled: true,
+                config: { expression } as import("../triggers/engine.js").CronConfig,
+                action: { type: "agent", prompt, notify: true },
+                label,
+              });
+
+              await safeKeyboard(
+                metadata,
+                `Schedule created: ${label}\nCron: ${expression}\nAction: ${prompt}\nStatus: enabled`,
+                [
+                  [
+                    { label: "Pause", data: `/task disable ${trigger.id}` },
+                    { label: "Test", data: `/task test ${trigger.id}` },
+                  ],
+                  [{ label: "« Schedules", data: "/task schedule" }],
+                ],
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              await safeSend(metadata, `Failed to create schedule: ${msg}`);
+            }
+            return;
+          }
+
+          // /task schedule delete <id>
+          if (subCommand === "delete" || subCommand === "remove") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task schedule delete <id>"); return; }
+            const result = engine.remove(id);
+            await safeSend(metadata, result ? `Schedule deleted: ${id}` : `Schedule not found: ${id}`);
+            return;
+          }
+
+          // /task schedule enable/disable <id>
+          if (subCommand === "enable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task schedule enable <id>"); return; }
+            engine.enable(id);
+            await safeSend(metadata, `Schedule enabled: ${id}`);
+            return;
+          }
+          if (subCommand === "disable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task schedule disable <id>"); return; }
+            engine.disable(id);
+            await safeSend(metadata, `Schedule disabled: ${id}`);
+            return;
+          }
+
+          // /task schedule — list scheduled tasks (type=cron, not once)
+          const schedules = engine.listAll().filter((t) => t.type === "cron");
+          if (schedules.length === 0) {
+            await safeKeyboard(
+              metadata,
+              "No schedules configured.",
+              [
+                [{ label: "New Schedule", data: "/task schedule new" }],
+                [{ label: "« Tasks", data: "/task" }],
+              ],
+            );
+            return;
+          }
+
+          const sButtons: KeyboardLayout = [];
+          const sLines: string[] = [];
+          for (const s of schedules) {
+            const icon = s.enabled ? "●" : "○";
+            const expr = (s.config as { expression: string }).expression;
+            sLines.push(`${icon} ${s.label ?? s.id} — ${expr} — ${s.run_count ?? 0} runs`);
+            sButtons.push([{ label: s.label ?? s.id, data: `/task ${s.id}` }]);
+          }
+          sButtons.push([
+            { label: "New Schedule", data: "/task schedule new" },
+            { label: "« Tasks", data: "/task" },
+          ]);
+
+          await safeKeyboard(
+            metadata,
+            [`Schedules (${schedules.length}):`, ...sLines].join("\n"),
+            sButtons,
+          );
           return;
         }
 
-        // /tasks resume <id> | /tasks enable <id>
-        if (subCommand === "resume" || subCommand === "enable") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks resume <task-id>"); return; }
-          const result = engine.enable(taskId);
-          await safeSend(metadata, result ? `Task resumed: ${taskId}` : `Task not found: ${taskId}`);
+        // ── Category: cron ─────────────────────────────────────────
+        if (category === "cron" || category === "crons") {
+
+          // /task cron new <expression> <action...>
+          if (subCommand === "new" || subCommand === "create") {
+            const expr = rest[2];
+            if (!expr) {
+              await safeSend(metadata, "Usage: /task cron new <cron-expression> <action>\n\nExamples:\n/task cron new \"0 */6 * * *\" check disk space\n/task cron new \"*/15 * * * *\" poll API\n/task cron new once 2026-06-01T09:00 one-time report");
+              return;
+            }
+
+            try {
+              if (expr === "once") {
+                // /task cron new once <datetime> <action>
+                const datetime = rest[3];
+                if (!datetime) {
+                  await safeSend(metadata, "Usage: /task cron new once <ISO-datetime> <action>\nExample: /task cron new once 2026-06-01T09:00 run migration");
+                  return;
+                }
+                const parsed = new Date(datetime);
+                if (isNaN(parsed.getTime())) {
+                  await safeSend(metadata, `Invalid datetime: ${datetime}. Use ISO format (e.g. 2026-06-01T09:00)`);
+                  return;
+                }
+                const prompt = rest.slice(4).join(" ") || "one-time task";
+                const trigger = engine.add({
+                  type: "once",
+                  enabled: true,
+                  config: { at: parsed.toISOString() } as import("../triggers/engine.js").OnceConfig,
+                  action: { type: "agent", prompt, notify: true },
+                  label: `Once: ${datetime}`,
+                  max_runs: 1,
+                });
+                await safeKeyboard(
+                  metadata,
+                  `One-time task created: ${datetime}\nAction: ${prompt}`,
+                  [
+                    [
+                      { label: "Cancel", data: `/task delete ${trigger.id}` },
+                      { label: "« Cron", data: "/task cron" },
+                    ],
+                  ],
+                );
+                return;
+              }
+
+              // Raw cron expression
+              const prompt = rest.slice(3).join(" ") || "cron task";
+              const trigger = engine.add({
+                type: "cron",
+                enabled: true,
+                config: { expression: expr } as import("../triggers/engine.js").CronConfig,
+                action: { type: "agent", prompt, notify: true },
+                label: `Cron: ${expr}`,
+              });
+              await safeKeyboard(
+                metadata,
+                `Cron created: ${expr}\nAction: ${prompt}\nStatus: enabled`,
+                [
+                  [
+                    { label: "Pause", data: `/task disable ${trigger.id}` },
+                    { label: "Test", data: `/task test ${trigger.id}` },
+                  ],
+                  [{ label: "« Cron", data: "/task cron" }],
+                ],
+              );
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              await safeSend(metadata, `Failed to create cron: ${msg}`);
+            }
+            return;
+          }
+
+          // /task cron delete <id>
+          if (subCommand === "delete" || subCommand === "remove") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task cron delete <id>"); return; }
+            const result = engine.remove(id);
+            await safeSend(metadata, result ? `Cron deleted: ${id}` : `Cron not found: ${id}`);
+            return;
+          }
+
+          // /task cron enable/disable <id>
+          if (subCommand === "enable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task cron enable <id>"); return; }
+            engine.enable(id);
+            await safeSend(metadata, `Cron enabled: ${id}`);
+            return;
+          }
+          if (subCommand === "disable") {
+            const id = rest[2];
+            if (!id) { await safeSend(metadata, "Usage: /task cron disable <id>"); return; }
+            engine.disable(id);
+            await safeSend(metadata, `Cron disabled: ${id}`);
+            return;
+          }
+
+          // /task cron — list cron + once tasks
+          const crons = engine.listAll().filter((t) => t.type === "cron" || t.type === "once");
+          if (crons.length === 0) {
+            await safeKeyboard(
+              metadata,
+              "No cron jobs configured.",
+              [
+                [{ label: "New Cron", data: "/task cron new" }],
+                [{ label: "« Tasks", data: "/task" }],
+              ],
+            );
+            return;
+          }
+
+          const cButtons: KeyboardLayout = [];
+          const cLines: string[] = [];
+          for (const c of crons) {
+            const icon = c.enabled ? "●" : "○";
+            const detail = c.type === "once"
+              ? (c.config as { at: string }).at
+              : (c.config as { expression: string }).expression;
+            cLines.push(`${icon} ${c.label ?? c.id} — ${detail} — ${c.run_count ?? 0} runs`);
+            cButtons.push([{ label: c.label ?? c.id, data: `/task ${c.id}` }]);
+          }
+          cButtons.push([
+            { label: "New Cron", data: "/task cron new" },
+            { label: "« Tasks", data: "/task" },
+          ]);
+
+          await safeKeyboard(
+            metadata,
+            [`Cron Jobs (${crons.length}):`, ...cLines].join("\n"),
+            cButtons,
+          );
           return;
         }
 
-        // /tasks delete <id>
-        if (subCommand === "delete" || subCommand === "remove") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks delete <task-id>"); return; }
-          const result = engine.remove(taskId);
-          await safeSend(metadata, result ? `Task deleted: ${taskId}` : `Task not found: ${taskId}`);
+        // ── Shared operations: /task enable|disable|delete|test <id> ──
+        if (category === "enable") {
+          const id = rest[1];
+          if (!id) { await safeSend(metadata, "Usage: /task enable <id>"); return; }
+          const result = engine.enable(id);
+          await safeSend(metadata, result ? `Task enabled: ${id}` : `Task not found: ${id}`);
           return;
         }
-
-        // /tasks test <id> | /tasks run <id>
-        if (subCommand === "test" || subCommand === "run") {
-          const taskId = rest[1];
-          if (!taskId) { await safeSend(metadata, "Usage: /tasks test <task-id>"); return; }
-          const task = engine.get(taskId);
-          if (!task) { await safeSend(metadata, `Task not found: ${taskId}`); return; }
-          await safeSend(metadata, `Firing: ${task.label ?? taskId}...`);
+        if (category === "disable" || category === "pause") {
+          const id = rest[1];
+          if (!id) { await safeSend(metadata, "Usage: /task disable <id>"); return; }
+          const result = engine.disable(id);
+          await safeSend(metadata, result ? `Task disabled: ${id}` : `Task not found: ${id}`);
+          return;
+        }
+        if (category === "delete" || category === "remove") {
+          const id = rest[1];
+          if (!id) { await safeSend(metadata, "Usage: /task delete <id>"); return; }
+          const result = engine.remove(id);
+          await safeSend(metadata, result ? `Task deleted: ${id}` : `Task not found: ${id}`);
+          return;
+        }
+        if (category === "test" || category === "run") {
+          const id = rest[1];
+          if (!id) { await safeSend(metadata, "Usage: /task test <id>"); return; }
+          const task = engine.get(id);
+          if (!task) { await safeSend(metadata, `Task not found: ${id}`); return; }
+          await safeSend(metadata, `Firing: ${task.label ?? id}...`);
           try {
-            await engine.fire(taskId, { test: true, timestamp: new Date().toISOString() });
-            await safeSend(metadata, `Task fired: ${task.label ?? taskId} (run #${(task.run_count ?? 0) + 1})`);
+            await engine.fire(id, { test: true, timestamp: new Date().toISOString() });
+            await safeSend(metadata, `Task fired: ${task.label ?? id} (run #${(task.run_count ?? 0) + 1})`);
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             await safeSend(metadata, `Task failed: ${msg.slice(0, 500)}`);
@@ -2043,12 +2625,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /tasks <id> — show single task detail
-        if (subCommand && subCommand !== "list") {
-          const task = engine.get(subCommand);
+        // ── /task <id> — detail view for any task ───────────────────
+        if (category && !["list", "trigger", "triggers", "schedule", "schedules", "cron", "crons"].includes(category)) {
+          const task = engine.get(category);
           if (task) {
-            // Map internal type to user-facing type
-            const taskType = task.type === "cron" ? "schedule" : task.type;
+            const TRIGGER_TYPES = ["webhook", "file", "http", "email"];
+            const taskCategory = TRIGGER_TYPES.includes(task.type) ? "trigger" : task.type === "once" ? "cron" : "schedule";
             const configSummary = task.type === "cron"
               ? `schedule: ${(task.config as { expression: string }).expression}`
               : task.type === "once"
@@ -2059,13 +2641,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
             const detailLines = [
               `${task.label ?? task.id} (${task.id})`,
-              `type: ${taskType}`,
+              `category: ${taskCategory}`,
+              `type: ${task.type}`,
               `enabled: ${task.enabled}`,
               configSummary,
               `action: ${task.action.type}${task.action.prompt ? ` — ${task.action.prompt.slice(0, 60)}` : ""}${task.action.command ? ` — ${task.action.command.slice(0, 60)}` : ""}`,
               `runs: ${task.run_count ?? 0}${task.max_runs ? ` / ${task.max_runs}` : ""}`,
               task.last_fired ? `last fired: ${formatAge(new Date(task.last_fired).getTime())}` : "last fired: never",
-              `created: ${task.created_at}`,
             ];
             await safeKeyboard(
               metadata,
@@ -2073,40 +2655,43 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               [
                 [
                   task.enabled
-                    ? { label: "Pause", data: `/tasks pause ${task.id}` }
-                    : { label: "Resume", data: `/tasks resume ${task.id}` },
-                  { label: "Test", data: `/tasks test ${task.id}` },
-                  { label: "Delete", data: `/tasks delete ${task.id}` },
+                    ? { label: "Disable", data: `/task disable ${task.id}` }
+                    : { label: "Enable", data: `/task enable ${task.id}` },
+                  { label: "Test", data: `/task test ${task.id}` },
+                  { label: "Delete", data: `/task delete ${task.id}` },
                 ],
+                [{ label: `« ${taskCategory === "trigger" ? "Triggers" : taskCategory === "schedule" ? "Schedules" : "Cron"}`, data: `/task ${taskCategory}` }],
               ],
             );
             return;
           }
-          // Fall through to list if not a valid task ID
         }
 
-        // /tasks or /tasks list — show all tasks
+        // ── /task — hub menu ────────────────────────────────────────
         const allTasks = engine.listAll();
-        if (allTasks.length === 0) {
-          await safeSend(metadata, "No tasks configured.\n\nCreate tasks with:\njeriko task create \"Name\" --trigger stripe:charge.failed --action \"notify team\"\njeriko task create \"Daily Brief\" --schedule \"0 9 * * *\" --action \"morning summary\"");
-          return;
-        }
-
-        const taskButtons: KeyboardLayout = [];
-        const taskLines: string[] = [];
-        for (const t of allTasks) {
-          const enabled = t.enabled ? "●" : "○";
-          const taskType = t.type === "cron" ? "schedule" : t.type;
-          const runs = t.run_count ?? 0;
-          const lastFired = t.last_fired ? formatAge(new Date(t.last_fired).getTime()) : "never";
-          taskLines.push(`${enabled} ${t.label ?? t.id} — ${taskType} — ${runs} runs — ${lastFired}`);
-          taskButtons.push([{ label: t.label ?? t.id, data: `/tasks ${t.id}` }]);
-        }
+        const TRIGGER_TYPES_ALL = ["webhook", "file", "http", "email"];
+        const triggerCount = allTasks.filter((t) => TRIGGER_TYPES_ALL.includes(t.type)).length;
+        const scheduleCount = allTasks.filter((t) => t.type === "cron").length;
+        const cronCount = allTasks.filter((t) => t.type === "cron" || t.type === "once").length;
 
         await safeKeyboard(
           metadata,
-          [`Tasks (${allTasks.length}):`, ...taskLines].join("\n") + "\n\n● = enabled, ○ = paused\nTap for details:",
-          taskButtons,
+          [
+            `Tasks (${allTasks.length} total)`,
+            "",
+            `Triggers: ${triggerCount} (webhook, file, http, email)`,
+            `Schedules: ${scheduleCount} (daily, weekly, monthly, custom)`,
+            `Cron: ${cronCount} (cron expressions, one-time)`,
+          ].join("\n"),
+          [
+            [
+              { label: `Triggers (${triggerCount})`, data: "/task trigger" },
+              { label: `Schedules (${scheduleCount})`, data: "/task schedule" },
+            ],
+            [
+              { label: `Cron (${cronCount})`, data: "/task cron" },
+            ],
+          ],
         );
         return;
       }

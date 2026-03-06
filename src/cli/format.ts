@@ -209,15 +209,15 @@ export function formatToolResult(name: string, result: string, isError: boolean)
 
 /** Format the end of a thinking phase. */
 export function formatThinkingDone(summary?: string): string {
-  if (!summary) return t.dim(`${ICONS.sparkle} Thinking complete`);
+  if (!summary) return t.dim("Thinking complete");
   const maxLen = 60;
   const truncated = summary.length > maxLen ? summary.slice(0, maxLen) + "…" : summary;
-  return t.dim(`${ICONS.sparkle} ${truncated}`);
+  return t.dim(truncated);
 }
 
 /** Format a context compaction event. */
 export function formatCompaction(before: number, after: number): string {
-  return t.cyan(`${ICONS.sparkle} Context compacted (${formatTokens(before)} → ${formatTokens(after)} tokens)`);
+  return t.cyan(`Context compacted (${formatTokens(before)} → ${formatTokens(after)} tokens)`);
 }
 
 /** Format the turn completion status line. */
@@ -245,102 +245,66 @@ export function formatCancelled(): string {
 
 /** Format an error message. */
 export function formatError(message: string): string {
-  return t.error(`${ICONS.error} ${message}`);
+  return t.error(`error: ${message}`);
 }
 
 // ---------------------------------------------------------------------------
-// Welcome banner — bot ASCII art + info panel
+// Welcome banner — Claude Code-style bordered box with mascot
 // ---------------------------------------------------------------------------
 
-/** Gap between the bot art column and the info panel column. */
-const COLUMN_GAP = 3;
-
-/** Maximum width for the welcome box. */
-const MAX_BOX_WIDTH = 72;
-
 /**
- * Render the welcome banner with bot ASCII art and info panel.
- * Professional two-column layout with bordered frame.
+ * Render welcome banner: bordered box with centered mascot and info below.
+ * Uses box-drawing characters (╭╮╰╯│─) for clean presentation.
  */
 export function formatWelcome(version: string, model: string, cwd: string): string {
-  const botArt = buildBotArt();
-  const infoPanel = buildInfoPanel(version, model, cwd);
-  const content = mergeColumns(botArt, infoPanel, COLUMN_GAP);
+  const displayCwd = shortenHome(cwd);
+  const cat = buildMascot();
 
-  const maxContentWidth = Math.max(...content.map((l) => stripAnsi(l).length));
-  const innerWidth = Math.min(Math.max(maxContentWidth, 60), MAX_BOX_WIDTH - 4);
-  const totalWidth = innerWidth + 4;
+  // Box width = mascot width + padding (4 each side)
+  const mascotWidth = Math.max(...cat.map((l) => stripAnsi(l).length));
+  const innerWidth = Math.max(mascotWidth + 8, 78);
 
-  // Title border with brand sparkle
-  const titleColored = ` ${t.brand(ICONS.sparkle)} ${t.brandBold(`Jeriko v${version}`)} `;
-  const titleVisualLen = stripAnsi(titleColored).length;
-  const prefixDashes = 2;
-  const remainingDashes = Math.max(0, totalWidth - 2 - prefixDashes - titleVisualLen);
-  const topBorder = `${BOX.tl}${BOX.h.repeat(prefixDashes)}${titleColored}${BOX.h.repeat(remainingDashes)}${BOX.tr}`;
-  const bottomBorder = `${BOX.bl}${BOX.h.repeat(totalWidth - 2)}${BOX.br}`;
+  // ── Build rows ──
+  const titleText = ` Jeriko v${version} `;
+  const topAfter = BOX.h.repeat(Math.max(0, innerWidth - titleText.length - 3));
+  const topLine = t.dim(`${BOX.tl}${BOX.h}${BOX.h}${BOX.h}`) + t.brandBold(titleText) + t.dim(topAfter + BOX.tr);
+  const bottomLine = t.dim(`${BOX.bl}${BOX.h.repeat(innerWidth)}${BOX.br}`);
 
-  const lines = [topBorder];
-  for (const line of content) {
-    const visualLen = stripAnsi(line).length;
-    const padding = Math.max(0, innerWidth - visualLen);
-    lines.push(`${BOX.v} ${line}${" ".repeat(padding)} ${BOX.v}`);
+  const rows: string[] = [topLine];
+
+  /** Wrap a content line in box borders, centered or left-padded. */
+  const boxLine = (content: string, pad: number = 0): string => {
+    const vis = stripAnsi(content).length;
+    const left = pad > 0 ? pad : Math.max(0, Math.floor((innerWidth - vis) / 2));
+    const right = Math.max(0, innerWidth - vis - left);
+    return `${t.dim(BOX.v)}${" ".repeat(left)}${content}${" ".repeat(right)}${t.dim(BOX.v)}`;
+  };
+
+  // Empty line
+  rows.push(boxLine(""));
+
+  // Mascot — centered
+  for (const line of cat) {
+    rows.push(boxLine(line));
   }
-  lines.push(bottomBorder);
 
-  return lines.join("\n");
-}
+  // Empty line
+  rows.push(boxLine(""));
 
-/**
- * Build the bot ASCII art — delegates to the shared mascot module.
- */
-function buildBotArt(): string[] {
-  return buildMascot();
-}
+  // Info line: model · cwd
+  const infoLine = `${t.muted("model:")} ${t.text(model)}  ${t.muted(BOX.v)}  ${t.muted("cwd:")} ${t.muted(displayCwd)}`;
+  rows.push(boxLine(infoLine, 3));
 
-/**
- * Build the info panel (right column) with structured key-value display.
- */
-function buildInfoPanel(version: string, model: string, cwd: string): string[] {
-  const displayCwd = shortenCwd(cwd);
+  // Hints line
+  const hintsLine = `${t.muted("/help commands")}  ${t.dim("·")}  ${t.muted("/new session")}  ${t.dim("·")}  ${t.muted("/model switch")}`;
+  rows.push(boxLine(hintsLine, 3));
 
-  return [
-    "",
-    "",
-    `${t.dim("Model")}     ${t.text(model)}`,
-    `${t.dim("Session")}   ${t.muted("new")}`,
-    `${t.dim("cwd")}       ${t.muted(displayCwd)}`,
-    "",
-    `${t.brand("/help")} ${t.dim("commands")} ${t.dim(ICONS.dot)} ${t.brand("/new")} ${t.dim("session")}`,
-    `${t.dim(`Ctrl+C interrupt ${ICONS.dot} Ctrl+D exit`)}`,
-  ];
-}
+  // Empty line
+  rows.push(boxLine(""));
 
-/** Merge two columns side by side. */
-function mergeColumns(left: string[], right: string[], gap: number): string[] {
-  const maxLines = Math.max(left.length, right.length);
-  const leftWidth = left.length > 0
-    ? Math.max(...left.map((l) => stripAnsi(l).length))
-    : 0;
-  const gapStr = " ".repeat(gap);
+  rows.push(bottomLine);
 
-  const merged: string[] = [];
-  for (let i = 0; i < maxLines; i++) {
-    const l = left[i] ?? " ".repeat(leftWidth);
-    const lPadded = l + " ".repeat(Math.max(0, leftWidth - stripAnsi(l).length));
-    const r = right[i] ?? "";
-    merged.push(`${lPadded}${gapStr}${r}`);
-  }
-  return merged;
-}
-
-/** Shorten cwd for banner display. */
-function shortenCwd(cwd: string): string {
-  let display = shortenHome(cwd);
-  const maxWidth = 40;
-  if (display.length > maxWidth) {
-    display = "…" + display.slice(-(maxWidth - 1));
-  }
-  return display;
+  return rows.join("\n");
 }
 
 /** Format the session resume banner. */
@@ -358,20 +322,9 @@ export function formatNewSession(slug: string, model: string): string {
 // Help — grouped by category
 // ---------------------------------------------------------------------------
 
-/** Category label → icon mapping for visual hierarchy in help display. */
-const CATEGORY_ICONS: Record<string, string> = {
-  Session:    ICONS.session,
-  Model:      ICONS.model,
-  Channels:   ICONS.channel,
-  Providers:  ICONS.provider,
-  Management: ICONS.manage,
-  Billing:    ICONS.billing,
-  System:     ICONS.system,
-};
-
 /**
  * Format the help text with all available commands, grouped by category.
- * Uses tree connectors and category icons for clear visual grouping.
+ * Clean indented groups without tree connectors.
  */
 export function formatHelp(): string {
   const lines = [
@@ -380,13 +333,10 @@ export function formatHelp(): string {
   ];
 
   for (const category of COMMAND_CATEGORIES) {
-    const icon = CATEGORY_ICONS[category.label] ?? ICONS.diamond;
     lines.push("");
-    lines.push(`  ${t.muted(icon)} ${t.text(category.label)}`);
-    const cmds = category.commands;
-    for (let i = 0; i < cmds.length; i++) {
-      const [cmd, desc] = cmds[i]!;
-      lines.push(treeItem(i === cmds.length - 1, `${t.brand(cmd.padEnd(20))} ${t.muted(desc)}`));
+    lines.push(`    ${t.text(category.label)}`);
+    for (const [cmd, desc] of category.commands) {
+      lines.push(`      ${t.brand(cmd.padEnd(20))} ${t.muted(desc)}`);
     }
   }
 
@@ -622,9 +572,7 @@ export function formatChannelHelp(): string {
     "",
     `  ${t.muted("Available channels:")}`,
     treeItem(false, `${t.text("telegram")}     ${t.muted("Bot token from @BotFather")}`),
-    treeItem(false, `${t.text("whatsapp")}     ${t.muted("QR code scan (multi-device)")}`),
-    treeItem(false, `${t.text("imessage")}     ${t.muted("BlueBubbles server URL + password")}`),
-    treeItem(true,  `${t.text("googlechat")}   ${t.muted("Service Account key from Google Cloud")}`),
+    treeItem(true,  `${t.text("whatsapp")}     ${t.muted("QR code scan (multi-device)")}`),
     "",
   ];
   return lines.join("\n");
@@ -650,22 +598,6 @@ export function formatChannelSetupHint(channel: string): string {
       `  3. Connect: ${t.blue("/channel connect whatsapp")}`,
       `  4. Scan the QR code that appears in the daemon logs`,
       `     ${t.dim("Check logs:")} ${t.blue("jeriko server logs")}`,
-    ].join("\n"),
-    imessage: [
-      `  ${t.dim("To set up iMessage (BlueBubbles):")}`,
-      `  1. Install BlueBubbles Server on a Mac (${t.blue("bluebubbles.app")})`,
-      `  2. Configure iMessage and note the server URL + password`,
-      `  3. Set both: ${t.blue("export BLUEBUBBLES_SERVER_URL=http://...")}`,
-      `              ${t.blue("export BLUEBUBBLES_PASSWORD=your-password")}`,
-      `  4. Restart the daemon: ${t.blue("jeriko server restart")}`,
-    ].join("\n"),
-    googlechat: [
-      `  ${t.dim("To set up Google Chat:")}`,
-      `  1. Create a Google Cloud project, enable Chat API`,
-      `  2. Create a Service Account, download the JSON key`,
-      `  3. Configure the bot HTTPS endpoint to your daemon URL`,
-      `  4. Set it: ${t.blue("export GOOGLE_CHAT_SERVICE_ACCOUNT_KEY=/path/to/key.json")}`,
-      `  5. Restart the daemon: ${t.blue("jeriko server restart")}`,
     ].join("\n"),
   };
 
@@ -697,15 +629,15 @@ const MODEL_CAPS = {
 export function formatModelList(
   models: ReadonlyArray<ModelInfo>,
   currentModel: string,
+  providers?: ReadonlyArray<ProviderInfo>,
 ): string {
-  if (models.length === 0) return t.muted("  No models available.");
-
   const lines: string[] = [
     "",
-    sectionHeader("Models", 60),
+    sectionHeader("Models", 62),
   ];
 
-  // Group by provider for clean display
+  // ── Active providers with their models ───────────────────────────────
+  // Group models by provider
   const byProvider = new Map<string, ModelInfo[]>();
   for (const m of models) {
     const group = byProvider.get(m.provider) ?? [];
@@ -713,44 +645,89 @@ export function formatModelList(
     byProvider.set(m.provider, group);
   }
 
-  for (const [provider, providerModels] of byProvider) {
-    lines.push(subSection(provider));
+  // Limit models per provider to keep it readable
+  const MAX_MODELS_PER_PROVIDER = 5;
 
-    for (const m of providerModels) {
-      const isCurrent = m.id === currentModel || m.name === currentModel;
-      const marker = isCurrent ? t.brand(ICONS.active) : " ";
+  if (byProvider.size > 0) {
+    for (const [provider, providerModels] of byProvider) {
+      // Sort: current model first, then by capabilities (tools + reasoning), then by context
+      const sorted = [...providerModels].sort((a, b) => {
+        const aCurrent = a.id === currentModel || a.name === currentModel ? 1 : 0;
+        const bCurrent = b.id === currentModel || b.name === currentModel ? 1 : 0;
+        if (aCurrent !== bCurrent) return bCurrent - aCurrent;
+        const aScore = (a.supportsTools ? 2 : 0) + (a.supportsReasoning ? 2 : 0) + (a.contextWindow ?? 0) / 100000;
+        const bScore = (b.supportsTools ? 2 : 0) + (b.supportsReasoning ? 2 : 0) + (b.contextWindow ?? 0) / 100000;
+        return bScore - aScore;
+      });
 
-      // Model ID column
-      const displayId = m.id.length > 28 ? m.id.slice(0, 25) + "…" : m.id;
-      const idStr = isCurrent ? t.brandBold(displayId.padEnd(28)) : t.blue(displayId.padEnd(28));
+      const displayed = sorted.slice(0, MAX_MODELS_PER_PROVIDER);
+      const remaining = sorted.length - displayed.length;
 
-      // Context window
-      const ctxStr = m.contextWindow
-        ? t.muted(`${formatTokens(m.contextWindow)} ctx`.padEnd(10))
-        : t.dim("—".padEnd(10));
+      lines.push(subSection(provider));
 
-      // Cost per 1M tokens (input/output)
-      let costStr: string;
-      if (m.costInput && m.costOutput) {
-        costStr = t.muted(`$${m.costInput}/$${m.costOutput}`.padEnd(12));
-      } else if (m.costInput === 0 && m.costOutput === 0) {
-        costStr = t.green("free".padEnd(12));
-      } else {
-        costStr = t.dim("—".padEnd(12));
+      for (const m of displayed) {
+        const isCurrent = m.id === currentModel || m.name === currentModel;
+        const marker = isCurrent ? t.brand(ICONS.active) : " ";
+
+        // Show as provider:model for custom providers, just model for built-in
+        const isBuiltIn = ["anthropic", "openai", "local"].includes(provider);
+        const displayName = isBuiltIn ? m.id : `${provider}:${m.id}`;
+        const truncated = displayName.length > 30 ? displayName.slice(0, 27) + "…" : displayName;
+        const idStr = isCurrent ? t.brandBold(truncated.padEnd(30)) : t.blue(truncated.padEnd(30));
+
+        // Context window
+        const ctxStr = m.contextWindow
+          ? t.muted(`${formatTokens(m.contextWindow)} ctx`.padEnd(10))
+          : t.dim("—".padEnd(10));
+
+        // Cost
+        let costStr: string;
+        if (m.costInput && m.costOutput) {
+          costStr = t.muted(`$${m.costInput}/$${m.costOutput}`.padEnd(12));
+        } else if (m.costInput === 0 && m.costOutput === 0) {
+          costStr = t.green("free".padEnd(12));
+        } else {
+          costStr = t.dim("—".padEnd(12));
+        }
+
+        // Capability icons
+        const caps: string[] = [];
+        if (m.supportsReasoning) caps.push(MODEL_CAPS.reasoning);
+        if (m.supportsTools) caps.push(MODEL_CAPS.tools);
+        const capsStr = caps.length > 0 ? caps.join("") : "";
+
+        lines.push(`  ${marker} ${idStr} ${ctxStr} ${costStr} ${capsStr}`);
       }
 
-      // Capability icons
-      const caps: string[] = [];
-      if (m.supportsReasoning) caps.push(MODEL_CAPS.reasoning);
-      if (m.supportsTools) caps.push(MODEL_CAPS.tools);
-      const capsStr = caps.length > 0 ? caps.join("") : "";
+      if (remaining > 0) {
+        lines.push(t.dim(`      +${remaining} more`));
+      }
+    }
+  } else {
+    lines.push(t.muted("  No models loaded yet."));
+  }
 
-      lines.push(`  ${marker} ${idStr} ${ctxStr} ${costStr} ${capsStr}`);
+  // ── Available providers (not configured) ─────────────────────────────
+  if (providers && providers.length > 0) {
+    const available = providers.filter((p) => p.type === "available");
+    if (available.length > 0) {
+      lines.push("");
+      lines.push(subSection("Add a provider"));
+      // Show top providers in a compact grid
+      const top = available.slice(0, 8);
+      for (const p of top) {
+        const envHint = p.envKey ? t.dim(p.envKey) : "";
+        lines.push(`    ${t.dim(p.id.padEnd(16))} ${t.dim(p.name.padEnd(20))} ${envHint}`);
+      }
+      if (available.length > top.length) {
+        lines.push(t.dim(`      +${available.length - top.length} more (use /models to see all)`));
+      }
     }
   }
 
   lines.push("");
-  lines.push(`  ${t.dim(`${MODEL_CAPS.reasoning} reasoning ${ICONS.dot} ${MODEL_CAPS.tools} tools ${ICONS.dot}`)} ${hint("Use", "/model <name>", "to switch.")}`);
+  lines.push(`  ${t.dim(`${MODEL_CAPS.reasoning} reasoning ${ICONS.dot} ${MODEL_CAPS.tools} tools`)}`);
+  lines.push(`  ${hint("Switch:", "/model <name>", "")} ${t.dim(ICONS.dot)} ${hint("Add provider:", "/model add", "")}`);
   return lines.join("\n");
 }
 
@@ -1072,7 +1049,7 @@ export function formatProviderList(
   }
 
   lines.push("");
-  lines.push(hint("Set the env var to auto-enable, or use", "/provider add <id>", ""));
+  lines.push(hint("Set the env var to auto-enable, or use", "/model add <id>", ""));
   return lines.join("\n");
 }
 
@@ -1199,7 +1176,7 @@ export function formatSessionCost(stats: SessionStats, model: string): string {
  *
  * Output:
  *   Agent:    claude-sonnet-4 · 4096 tokens · temp 0.3
- *   Channels: telegram ✓ · whatsapp ✗ · imessage ✗ · googlechat ✗
+ *   Channels: telegram ✓ · whatsapp ✗
  *   Providers: 2 custom (openrouter, deepinfra)
  *   Security: 1 allowed path · 3 blocked commands · 5 sensitive keys
  *   Logging:  info · 10MB rotation · 5 files
@@ -1224,7 +1201,7 @@ export function formatConfigStructured(config: Record<string, unknown>): string 
   const channels = config.channels as Record<string, unknown> | undefined;
   if (channels) {
     const channelStatuses: string[] = [];
-    const channelNames = ["telegram", "whatsapp", "imessage", "googlechat"] as const;
+    const channelNames = ["telegram", "whatsapp"] as const;
     for (const name of channelNames) {
       const ch = channels[name] as Record<string, unknown> | undefined;
       if (!ch) {
@@ -1234,8 +1211,6 @@ export function formatConfigStructured(config: Record<string, unknown>): string 
       let hasConfig = false;
       if (name === "whatsapp") hasConfig = !!(ch.enabled as boolean);
       else if (name === "telegram") hasConfig = !!(ch.token as string);
-      else if (name === "imessage") hasConfig = !!(ch.serverUrl as string);
-      else if (name === "googlechat") hasConfig = !!(ch.serviceAccountKeyPath as string);
       channelStatuses.push(hasConfig ? `${name} ${t.green(ICONS.success)}` : `${name} ${t.dim(ICONS.error)}`);
     }
     lines.push(kvPair("Channels", t.muted(channelStatuses.join(` ${ICONS.dot} `))));
@@ -1360,17 +1335,17 @@ export function formatShareList(shares: ReadonlyArray<ShareInfo>): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Format a task list for the /tasks command.
+ * Format a task category list (triggers, schedules, or crons).
  */
-export function formatTaskList(tasks: ReadonlyArray<TaskDef>): string {
-  if (tasks.length === 0) {
-    return t.muted("No tasks defined.");
-  }
+export function formatTaskCategory(title: string, tasks: ReadonlyArray<TaskDef>, description: string): string {
+  const lines: string[] = ["", sectionHeader(title)];
+  lines.push(`  ${t.dim(description)}`);
+  lines.push("");
 
-  const lines: string[] = [
-    "",
-    sectionHeader(`Tasks (${tasks.length})`),
-  ];
+  if (tasks.length === 0) {
+    lines.push(t.muted("  None configured."));
+    return lines.join("\n");
+  }
 
   for (let i = 0; i < tasks.length; i++) {
     const task = tasks[i]!;
@@ -1378,14 +1353,53 @@ export function formatTaskList(tasks: ReadonlyArray<TaskDef>): string {
     const label = task.enabled ? t.green("enabled") : t.muted("disabled");
     lines.push(treeItem(
       i === tasks.length - 1,
-      `${status} ${t.bold(task.name)}  ${t.dim(task.id)}  ${label}`,
+      `${status} ${t.bold(task.name)}  ${t.dim(task.id)}  ${label}  ${t.muted(task.type)}`,
     ));
-    lines.push(`      ${t.muted(task.command)}`);
+    if (task.command) lines.push(`      ${t.muted(task.command)}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format the /task hub view with categorized counts and recent tasks.
+ */
+export function formatTaskHub(
+  total: number,
+  triggerCount: number,
+  scheduleCount: number,
+  cronCount: number,
+  tasks: ReadonlyArray<TaskDef>,
+): string {
+  const lines: string[] = ["", sectionHeader(`Tasks (${total})`)];
+
+  lines.push(`  ${t.blue("Triggers")}:  ${triggerCount}  ${t.dim("(webhook, file, http, email)")}`);
+  lines.push(`  ${t.blue("Schedules")}: ${scheduleCount}  ${t.dim("(daily, weekly, monthly, custom)")}`);
+  lines.push(`  ${t.blue("Cron")}:      ${cronCount}  ${t.dim("(cron expressions, one-time)")}`);
+
+  if (tasks.length > 0) {
+    lines.push("");
+    const recent = tasks.slice(0, 8);
+    for (let i = 0; i < recent.length; i++) {
+      const task = recent[i]!;
+      const status = task.enabled ? statusDot("active") : statusDot("inactive");
+      const label = task.enabled ? t.green("on") : t.muted("off");
+      lines.push(treeItem(
+        i === recent.length - 1,
+        `${status} ${t.bold(task.name)}  ${t.dim(task.type)}  ${label}`,
+      ));
+    }
+    if (tasks.length > 8) lines.push(t.dim(`  ... and ${tasks.length - 8} more`));
   }
 
   lines.push("");
-  lines.push(hint("Create:", "/tasks create <name> <command>", ""));
+  lines.push(hint("Drill down:", "/task trigger /task schedule /task cron", ""));
   return lines.join("\n");
+}
+
+/** @deprecated Use formatTaskHub or formatTaskCategory instead. */
+export function formatTaskList(tasks: ReadonlyArray<TaskDef>): string {
+  return formatTaskHub(tasks.length, 0, 0, 0, tasks);
 }
 
 // ---------------------------------------------------------------------------

@@ -127,6 +127,22 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     oauth: { clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID", clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET" },
     limitParam: "top",
   },
+  {
+    name: "hubspot",
+    label: "HubSpot",
+    description: "CRM — contacts, companies, deals, tickets",
+    required: ["HUBSPOT_ACCESS_TOKEN"],
+    optional: ["HUBSPOT_WEBHOOK_SECRET"],
+    oauth: { clientIdVar: "HUBSPOT_OAUTH_CLIENT_ID", clientSecretVar: "HUBSPOT_OAUTH_CLIENT_SECRET" },
+  },
+  {
+    name: "shopify",
+    label: "Shopify",
+    description: "E-commerce — products, orders, customers, inventory",
+    required: ["SHOPIFY_ACCESS_TOKEN", "SHOPIFY_SHOP"],
+    optional: ["SHOPIFY_WEBHOOK_SECRET"],
+    oauth: { clientIdVar: "SHOPIFY_OAUTH_CLIENT_ID", clientSecretVar: "SHOPIFY_OAUTH_CLIENT_SECRET" },
+  },
 ];
 
 /** Look up a connector definition by name. */

@@ -37,10 +37,13 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     ],
   },
   {
-    label: "Model",
+    label: "Models",
     commands: [
-      ["/model [name]",   "Show or switch the active model"],
-      ["/models",         "List available models"],
+      ["/model",            "Pick a model or add a provider"],
+      ["/model <name>",     "Switch model (connects provider if needed)"],
+      ["/model list",       "Browse all providers + models"],
+      ["/model add [id]",   "Add a provider (preset picker + API key)"],
+      ["/model rm [id]",    "Remove a provider"],
     ],
   },
   {
@@ -48,14 +51,6 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     commands: [
       ["/channels",       "List messaging channels"],
       ["/channel …",      "connect | disconnect | add | remove <name>"],
-    ],
-  },
-  {
-    label: "Providers",
-    commands: [
-      ["/providers",        "List AI providers"],
-      ["/provider add",     "Add a provider (interactive picker)"],
-      ["/provider rm <id>", "Remove a provider"],
     ],
   },
   {
@@ -85,6 +80,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
   {
     label: "System",
     commands: [
+      ["/onboard",        "Run setup wizard"],
       ["/status",         "Daemon status and stats"],
       ["/health",         "Check connector health"],
       ["/sys",            "System info"],
@@ -117,17 +113,13 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/kill",           "Destroy session and start fresh"],
   ["/archive",        "Archive session and start fresh"],
 
-  // Model
-  ["/model",          "Show or switch the active model"],
-  ["/models",         "List available models"],
+  // Models
+  ["/model",          "Switch model, add/remove provider"],
+  ["/models",         "Alias for /model list"],
 
   // Channels
   ["/channels",       "List messaging channels"],
   ["/channel",        "Connect or disconnect a channel"],
-
-  // Providers
-  ["/providers",      "List AI providers"],
-  ["/provider",       "Manage AI providers"],
 
   // Management
   ["/connectors",     "List connector status"],
@@ -148,6 +140,7 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/cost",           "Session cost breakdown"],
 
   // System
+  ["/onboard",        "Run setup wizard"],
   ["/status",         "Daemon status and stats"],
   ["/health",         "Check connector health"],
   ["/sys",            "System info"],

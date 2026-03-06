@@ -51,22 +51,16 @@ function clean(s: string): string {
 // ---------------------------------------------------------------------------
 
 describe("Welcome Banner", () => {
-  test("renders with box drawing", () => {
+  test("renders banner with mascot and info", () => {
     const result = formatWelcome("2.0.0", "claude-sonnet", "/home/user/project");
     const c = clean(result);
-    expect(c).toContain("Jeriko v2.0.0");
-    expect(c).toContain("Model");
+    expect(c).toContain("Jeriko");
+    expect(c).toContain("v2.0.0");
     expect(c).toContain("claude-sonnet");
-    expect(c).toContain("Session");
-    expect(c).toContain("new");
-  });
-
-  test("contains keyboard hints", () => {
-    const result = formatWelcome("1.0.0", "gpt-4o", "/tmp");
-    const c = clean(result);
+    expect(c).toContain("█");
     expect(c).toContain("/help");
-    expect(c).toContain("/new");
-    expect(c).toContain("Ctrl+C");
+    expect(c).toContain("model");
+    expect(c).toContain("cwd");
   });
 });
 
@@ -83,10 +77,11 @@ describe("Help Screen", () => {
     }
   });
 
-  test("contains tree connectors", () => {
+  test("contains indented commands under categories", () => {
     const c = clean(formatHelp());
-    expect(c).toContain("├─");
-    expect(c).toContain("└─");
+    // Commands are indented under category labels
+    expect(c).toContain("Session");
+    expect(c).toContain("/help");
   });
 
   test("contains all commands", () => {
@@ -161,8 +156,7 @@ describe("Session List", () => {
 describe("Channel List", () => {
   const channels = [
     { name: "telegram", status: "connected", connected_at: new Date().toISOString() },
-    { name: "whatsapp", status: "disconnected" },
-    { name: "imessage", status: "failed", error: "Server unreachable" },
+    { name: "whatsapp", status: "failed", error: "Server unreachable" },
   ];
 
   test("renders tree connectors", () => {
@@ -174,7 +168,6 @@ describe("Channel List", () => {
   test("shows status labels", () => {
     const c = clean(formatChannelList(channels));
     expect(c).toContain("connected");
-    expect(c).toContain("disconnected");
     expect(c).toContain("failed");
   });
 
@@ -186,7 +179,6 @@ describe("Channel List", () => {
   test("shows status icons", () => {
     const c = clean(formatChannelList(channels));
     expect(c).toContain("●"); // connected
-    expect(c).toContain("○"); // disconnected
     expect(c).toContain("✗"); // failed
   });
 
@@ -307,8 +299,8 @@ describe("Channel Help", () => {
     const c = clean(formatChannelHelp());
     expect(c).toContain("telegram");
     expect(c).toContain("whatsapp");
-    expect(c).toContain("imessage");
-    expect(c).toContain("googlechat");
+    expect(c).not.toContain("imessage");
+    expect(c).not.toContain("googlechat");
   });
 
   test("shows command usage", () => {
@@ -332,16 +324,6 @@ describe("Channel Setup Hints", () => {
   test("whatsapp hint mentions QR", () => {
     const c = clean(formatChannelSetupHint("whatsapp"));
     expect(c).toContain("QR");
-  });
-
-  test("imessage hint mentions BlueBubbles", () => {
-    const c = clean(formatChannelSetupHint("imessage"));
-    expect(c).toContain("BlueBubbles");
-  });
-
-  test("googlechat hint mentions Service Account", () => {
-    const c = clean(formatChannelSetupHint("googlechat"));
-    expect(c).toContain("Service Account");
   });
 
   test("unknown channel returns generic", () => {

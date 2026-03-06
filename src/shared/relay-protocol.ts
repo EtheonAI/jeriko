@@ -45,6 +45,12 @@ export interface RelayOAuthResultMessage {
   html: string;
   /** Redirect URL — when present, relay issues a 302 instead of rendering html. */
   redirectUrl?: string;
+  /**
+   * PKCE code verifier — sent from daemon to relay during /start so the relay
+   * can include it in the code→token exchange during /callback.
+   * Only present for providers that use PKCE (e.g. X, Vercel).
+   */
+  codeVerifier?: string;
 }
 
 /** Return share page result to relay (relay forwards to browser). */
@@ -109,6 +115,25 @@ export interface RelayOAuthStartMessage {
   params: Record<string, string>;
 }
 
+/**
+ * Relay-exchanged OAuth tokens — sent from relay to daemon after the relay
+ * performs the code→token exchange on behalf of the daemon.
+ *
+ * This happens when the daemon has a baked-in client ID but no client secret.
+ * The relay holds the client secret and exchanges the code, then forwards
+ * the resulting tokens to the daemon for local storage.
+ */
+export interface RelayOAuthTokensMessage {
+  type: "oauth_tokens";
+  requestId: string;
+  provider: string;
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  scope?: string;
+  tokenType?: string;
+}
+
 /** Forwarded share page request from a visitor. */
 export interface RelayShareRequestMessage {
   type: "share_request";
@@ -133,6 +158,7 @@ export type RelayInboundMessage =
   | RelayWebhookMessage
   | RelayOAuthCallbackMessage
   | RelayOAuthStartMessage
+  | RelayOAuthTokensMessage
   | RelayShareRequestMessage
   | RelayPongMessage
   | RelayErrorMessage;

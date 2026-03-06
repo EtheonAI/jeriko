@@ -58,6 +58,8 @@ export interface HealthResult {
   healthy: boolean;
   latency_ms: number;
   error?: string;
+  /** HTTP status code (present when health check got a response). */
+  status?: number;
 }
 
 // ---------------------------------------------------------------------------

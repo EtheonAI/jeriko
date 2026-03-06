@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 8 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(8);
+  it("defines exactly 10 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(10);
   });
 
   it("has all required fields on every provider", () => {
@@ -264,8 +264,8 @@ describe("ConnectorDef OAuth metadata", () => {
     }
   });
 
-  it("total connector count is 10", () => {
-    expect(CONNECTOR_DEFS.length).toBe(10);
+  it("total connector count is 12", () => {
+    expect(CONNECTOR_DEFS.length).toBe(12);
   });
 });
 

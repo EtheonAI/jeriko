@@ -44,6 +44,7 @@ import type {
 } from "./interface.js";
 import { withRetry, withTimeout, refreshToken } from "./middleware.js";
 import { saveSecret } from "../../../shared/secrets.js";
+import { getRelayApiUrl, isSelfHosted } from "../../../shared/urls.js";
 
 // ---------------------------------------------------------------------------
 // ConnectorBase — abstract root for all connectors
@@ -123,7 +124,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
       );
       const latency = Date.now() - start;
       if (!res.ok) {
-        return { healthy: false, latency_ms: latency, error: `HTTP ${res.status}` };
+        return { healthy: false, latency_ms: latency, error: `HTTP ${res.status}`, status: res.status };
       }
       return { healthy: true, latency_ms: latency };
     } catch (err) {
@@ -406,14 +407,38 @@ export abstract class BearerConnector extends ConnectorBase {
     return refreshToken(this.name, () => this.doRefresh());
   }
 
-  /** Whether OAuth2 refresh credentials are available. */
+  /**
+   * Whether OAuth2 token refresh is possible.
+   *
+   * Two modes:
+   *   1. Local refresh: has refresh token + client ID + client secret + token URL
+   *   2. Relay refresh: has refresh token + relay auth secret (relay holds the secret)
+   */
   private canRefresh(): boolean {
-    return !!(
-      this.refreshTokenValue &&
-      this.clientId &&
-      this.clientSecret &&
-      this.auth.tokenUrl
-    );
+    if (!this.refreshTokenValue || !this.auth.tokenUrl) return false;
+    // Local refresh — user has full credentials
+    if (this.clientId && this.clientSecret) return true;
+    // Relay refresh — daemon doesn't have client secret, relay does
+    if (!isSelfHosted() && this.getRelayAuthSecret()) return true;
+    return false;
+  }
+
+  /** Get the relay auth secret for relay-based token refresh. */
+  private getRelayAuthSecret(): string | undefined {
+    return process.env.RELAY_AUTH_SECRET ?? process.env.NODE_AUTH_SECRET;
+  }
+
+  // ---------------------------------------------------------------------------
+  // 401-aware health — detect expired tokens and retry with refresh
+  // ---------------------------------------------------------------------------
+
+  override async health(): Promise<import("./interface.js").HealthResult> {
+    const result = await super.health();
+    if (!result.healthy && result.status === 401 && this.canRefresh()) {
+      this.accessToken = "";
+      return super.health();
+    }
+    return result;
   }
 
   // ---------------------------------------------------------------------------
@@ -449,6 +474,17 @@ export abstract class BearerConnector extends ConnectorBase {
       throw new Error(`No token URL configured for ${this.auth.label} refresh`);
     }
 
+    // If we have local client credentials, refresh directly with the provider
+    if (this.clientId && this.clientSecret) {
+      return this.doLocalRefresh();
+    }
+
+    // Otherwise, delegate to the relay server which holds the client secret
+    return this.doRelayRefresh();
+  }
+
+  /** Direct token refresh — daemon has full OAuth credentials. */
+  private async doLocalRefresh(): Promise<string> {
     const params: Record<string, string> = {
       grant_type: "refresh_token",
       refresh_token: this.refreshTokenValue,
@@ -459,7 +495,7 @@ export abstract class BearerConnector extends ConnectorBase {
       params.scope = this.auth.refreshScope;
     }
 
-    const res = await fetch(this.auth.tokenUrl, {
+    const res = await fetch(this.auth.tokenUrl!, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(params).toString(),
@@ -474,15 +510,64 @@ export abstract class BearerConnector extends ConnectorBase {
       refresh_token?: string;
     };
 
-    this.accessToken = data.access_token;
+    return this.persistRefreshedTokens(data.access_token, data.refresh_token);
+  }
 
-    // Persist refreshed token to disk so it survives daemon restarts.
-    saveSecret(this.auth.tokenVar, data.access_token);
+  /**
+   * Relay-based token refresh — daemon doesn't have client secret.
+   * Sends the refresh token to the relay, which uses its client secret
+   * to get a new access token from the provider.
+   */
+  private async doRelayRefresh(): Promise<string> {
+    const authSecret = this.getRelayAuthSecret();
+    if (!authSecret) {
+      throw new Error(`${this.auth.label} relay refresh: no RELAY_AUTH_SECRET`);
+    }
 
-    // Some providers rotate refresh tokens — persist the new one if issued.
-    if (data.refresh_token && this.auth.refreshTokenVar) {
-      this.refreshTokenValue = data.refresh_token;
-      saveSecret(this.auth.refreshTokenVar, data.refresh_token);
+    const relayUrl = `${getRelayApiUrl()}/oauth/${this.name}/refresh`;
+
+    const body: Record<string, string> = {
+      refreshToken: this.refreshTokenValue,
+    };
+    if (this.auth.refreshScope) {
+      body.scope = this.auth.refreshScope;
+    }
+
+    const res = await fetch(relayUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${authSecret}`,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`${this.auth.label} relay refresh failed: HTTP ${res.status} — ${text.slice(0, 200)}`);
+    }
+
+    const result = (await res.json()) as {
+      ok: boolean;
+      data?: { accessToken: string; refreshToken?: string; expiresIn?: number };
+      error?: string;
+    };
+
+    if (!result.ok || !result.data?.accessToken) {
+      throw new Error(`${this.auth.label} relay refresh: ${result.error ?? "no access token"}`);
+    }
+
+    return this.persistRefreshedTokens(result.data.accessToken, result.data.refreshToken);
+  }
+
+  /** Save refreshed tokens to disk and update in-memory state. */
+  private persistRefreshedTokens(accessToken: string, newRefreshToken?: string): string {
+    this.accessToken = accessToken;
+    saveSecret(this.auth.tokenVar, accessToken);
+
+    if (newRefreshToken && this.auth.refreshTokenVar) {
+      this.refreshTokenValue = newRefreshToken;
+      saveSecret(this.auth.refreshTokenVar, newRefreshToken);
     }
 
     return this.accessToken;

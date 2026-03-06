@@ -675,3 +675,11 @@ echo "  Tab completion:"
 echo "    jeriko <TAB>                 # list all commands"
 echo "    jeriko stripe <TAB>          # list subcommands"
 echo ""
+
+# ── Run onboarding wizard (first install only) ──────────────────
+if [ ! -f "$CONF_DIR/config.json" ] || [ "$(cat "$CONF_DIR/config.json" 2>/dev/null)" = "{}" ]; then
+  if [ -t 0 ]; then
+    info "Starting setup wizard..."
+    "$BIN_DIR/jeriko" onboard || true
+  fi
+fi

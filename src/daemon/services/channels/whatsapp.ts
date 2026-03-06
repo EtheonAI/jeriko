@@ -11,6 +11,7 @@ import {
   useMultiFileAuthState,
   DisconnectReason,
   downloadMediaMessage,
+  fetchLatestWaWebVersion,
   type WASocket,
   type WAMessage,
   type ConnectionState,
@@ -31,6 +32,23 @@ import type {
 } from "./index.js";
 
 const log = getLogger();
+
+// ---------------------------------------------------------------------------
+// Baileys logger — suppress verbose pino output from the library.
+// Baileys expects a pino-compatible logger. We route its messages through
+// our own logger at appropriate levels instead of letting pino write to stdout.
+// ---------------------------------------------------------------------------
+
+const baileysLogger = {
+  level: "silent",
+  info: (...args: unknown[]) => log.debug(`[baileys] ${args.map(String).join(" ")}`),
+  warn: (...args: unknown[]) => log.warn(`[baileys] ${args.map(String).join(" ")}`),
+  error: (...args: unknown[]) => log.error(`[baileys] ${args.map(String).join(" ")}`),
+  debug: () => {},
+  trace: () => {},
+  fatal: (...args: unknown[]) => log.error(`[baileys:fatal] ${args.map(String).join(" ")}`),
+  child: () => baileysLogger,
+} as any;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -90,6 +108,12 @@ export class WhatsAppChannel implements ChannelAdapter {
     // promise so the caller blocks until fully connected or timed out.
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
 
+    // Fetch the current WhatsApp Web client revision from web.whatsapp.com.
+    // The version bundled with Baileys becomes outdated as WhatsApp deploys
+    // new releases — an expired version causes the server to reject with 405.
+    // Falls back to the bundled version if the fetch fails (offline use).
+    const { version: waVersion } = await fetchLatestWaWebVersion();
+
     // 120s gives the user time to open WhatsApp → Linked Devices → Scan.
     // Timer resets on each new QR code (Baileys rotates QR every ~20s).
     const CONNECT_TIMEOUT_MS = 120_000;
@@ -103,13 +127,24 @@ export class WhatsAppChannel implements ChannelAdapter {
       const createSocket = () => {
         this.socket = makeWASocket({
           auth: state,
+          version: waVersion,
           printQRInTerminal: !this.onQR,
+          logger: baileysLogger,
+          // Bun's ws polyfill drops the `origin` constructor option that Baileys
+          // passes internally. WhatsApp servers require Origin: https://web.whatsapp.com
+          // in the WebSocket handshake. Passing it via options.headers ensures the
+          // polyfill forwards it correctly as a request header.
+          options: {
+            headers: {
+              Origin: "https://web.whatsapp.com",
+            },
+          },
         });
 
         this.socket.ev.on("creds.update", saveCreds);
         this.socket.ev.on("messages.upsert", (m) => this.handleIncoming(m.messages));
 
-        this.socket.ev.on("connection.update", (update: Partial<ConnectionState>) => {
+        this.socket.ev.on("connection.update", async (update: Partial<ConnectionState>) => {
           const { connection, lastDisconnect, qr } = update;
 
           if (qr) {
@@ -119,9 +154,11 @@ export class WhatsAppChannel implements ChannelAdapter {
               if (!settled) { settled = true; reject(new Error("WhatsApp connection timed out — scan the QR code to authenticate")); }
             }, CONNECT_TIMEOUT_MS);
             if (this.onQR) {
-              Promise.resolve(this.onQR(qr)).catch((err) => {
+              try {
+                await this.onQR(qr);
+              } catch (err) {
                 log.warn(`WhatsApp onQR callback error: ${err}`);
-              });
+              }
             }
           }
 
@@ -149,7 +186,7 @@ export class WhatsAppChannel implements ChannelAdapter {
               // Pre-connect close — Baileys normal handshake cycle.
               // Recreate socket immediately to continue the handshake.
               log.debug("WhatsApp socket recycled during handshake, recreating...");
-              setTimeout(() => createSocket(), 500);
+              setTimeout(() => createSocket(), 2_000);
             }
           }
         });

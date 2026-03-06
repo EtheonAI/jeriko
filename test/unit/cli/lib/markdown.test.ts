@@ -216,6 +216,70 @@ describe("renderMarkdown — code blocks", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Bold + Italic (nested)
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — bold+italic", () => {
+  test("renders ***bold+italic*** text", () => {
+    const result = renderMarkdown("This is ***important***");
+    const plain = stripAnsi(result);
+    expect(plain).toContain("important");
+    // Should have both bold and italic ANSI codes
+    expect(result).toContain("\u001b[1m"); // bold
+    expect(result).toContain("\u001b[3m"); // italic
+  });
+
+  test("renders **_bold+italic_** text", () => {
+    const result = renderMarkdown("This is **_combined_**");
+    const plain = stripAnsi(result);
+    expect(plain).toContain("combined");
+    expect(result).toContain("\u001b[1m");
+    expect(result).toContain("\u001b[3m");
+  });
+
+  test("renders _**bold+italic**_ text", () => {
+    const result = renderMarkdown("This is _**also combined**_");
+    const plain = stripAnsi(result);
+    expect(plain).toContain("also combined");
+    expect(result).toContain("\u001b[1m");
+    expect(result).toContain("\u001b[3m");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Strikethrough
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — strikethrough", () => {
+  test("renders ~~strikethrough~~ text", () => {
+    const result = renderMarkdown("This is ~~deleted~~ text");
+    const plain = stripAnsi(result);
+    expect(plain).toContain("deleted");
+    expect(plain).toContain("text");
+    // Should have strikethrough ANSI code (\e[9m)
+    expect(result).toContain("\u001b[9m");
+  });
+
+  test("multiple strikethroughs", () => {
+    const result = stripAnsi(renderMarkdown("~~a~~ and ~~b~~"));
+    expect(result).toContain("a");
+    expect(result).toContain("b");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Code fence edge cases
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — code fence edge cases", () => {
+  test("code fence with extra text after language", () => {
+    const input = "```js title=\"example\"\nconst x = 1;\n```";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("const x = 1;");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Mixed content
 // ---------------------------------------------------------------------------
 

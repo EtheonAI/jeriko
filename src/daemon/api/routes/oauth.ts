@@ -20,7 +20,7 @@ import { Hono } from "hono";
 import { getLogger } from "../../../shared/logger.js";
 import { saveSecret } from "../../../shared/secrets.js";
 import { redact } from "../../security/redaction.js";
-import { getOAuthProvider } from "../../services/oauth/providers.js";
+import { getOAuthProvider, getClientId, hasLocalSecret } from "../../services/oauth/providers.js";
 import {
   consumeState,
   setCodeVerifier,
@@ -132,10 +132,15 @@ export async function handleOAuthCallback(
     return { statusCode: 404, html: errorHtml(`Unknown provider: ${providerName}`) };
   }
 
-  const clientId = process.env[provider.clientIdVar];
-  const clientSecret = process.env[provider.clientSecretVar];
-  if (!clientId || !clientSecret) {
-    return { statusCode: 503, html: errorHtml(`${provider.label} OAuth credentials are not configured.`) };
+  const clientId = getClientId(provider);
+  const clientSecret = hasLocalSecret(provider) ? process.env[provider.clientSecretVar]! : undefined;
+  if (!clientId) {
+    return { statusCode: 503, html: errorHtml(`${provider.label} OAuth client ID is not configured.`) };
+  }
+  if (!clientSecret) {
+    // No local secret — relay should have handled the token exchange.
+    // If we got here, something went wrong (e.g. self-hosted without credentials).
+    return { statusCode: 503, html: errorHtml(`${provider.label} OAuth client secret is not configured. Use relay mode or set ${provider.clientSecretVar}.`) };
   }
 
   const redirectUri = buildOAuthCallbackUrl(provider.name);
@@ -237,6 +242,11 @@ export interface OAuthStartResult {
   html: string;
   /** The provider's authorization URL — relay issues a 302 redirect to this. */
   redirectUrl?: string;
+  /**
+   * PKCE code verifier — included when the provider uses PKCE so the relay
+   * can store it for use in the code→token exchange during /callback.
+   */
+  codeVerifier?: string;
 }
 
 /**
@@ -264,9 +274,9 @@ export function handleOAuthStart(
     return { statusCode: 404, html: errorHtml(`Unknown provider: ${providerName}`) };
   }
 
-  const clientId = process.env[provider.clientIdVar];
+  const clientId = getClientId(provider);
   if (!clientId) {
-    return { statusCode: 503, html: errorHtml(`${provider.label} OAuth is not configured on the server.`) };
+    return { statusCode: 503, html: errorHtml(`${provider.label} OAuth is not configured. Set ${provider.clientIdVar} or use baked-in credentials.`) };
   }
 
   const redirectUri = buildOAuthCallbackUrl(provider.name);
@@ -284,10 +294,11 @@ export function handleOAuthStart(
   }
 
   // PKCE for providers that require it (e.g. X/Twitter)
+  let codeVerifier: string | undefined;
   if (provider.usePKCE) {
-    const verifier = generateCodeVerifier();
-    const challenge = generateCodeChallenge(verifier);
-    setCodeVerifier(stateToken, verifier);
+    codeVerifier = generateCodeVerifier();
+    const challenge = generateCodeChallenge(codeVerifier);
+    setCodeVerifier(stateToken, codeVerifier);
     authParams.set("code_challenge", challenge);
     authParams.set("code_challenge_method", "S256");
   }
@@ -304,7 +315,8 @@ export function handleOAuthStart(
   const authorizationUrl = `${provider.authUrl}?${authParams.toString()}`;
   log.info(`OAuth start: redirecting to ${provider.label}`);
 
-  return { statusCode: 302, html: "", redirectUrl: authorizationUrl };
+  // Include codeVerifier so the relay can store it for relay-side exchange
+  return { statusCode: 302, html: "", redirectUrl: authorizationUrl, codeVerifier };
 }
 
 // ---------------------------------------------------------------------------

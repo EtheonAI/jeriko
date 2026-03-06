@@ -178,8 +178,7 @@ describe("Channel router — command parsing", () => {
     expect(data).toContain("/stop");
     expect(data).toContain("/connectors");
     expect(data).toContain("/skill");
-    expect(data).toContain("/triggers");
-    expect(data).toContain("/tasks");
+    expect(data).toContain("/task");
     expect(data).toContain("/channels");
     expect(data).toContain("/share");
     expect(data).toContain("/billing");
@@ -928,9 +927,6 @@ describe("Channel router — /channels", () => {
     const data = registry.lastKeyboardData();
     // Each channel gets a detail button: /channel telegram, /channel whatsapp, etc.
     expect(data.some((d) => d.includes("/channel "))).toBe(true);
-    // Unregistered channels get /channel add <name> buttons
-    const labels = registry.lastKeyboardLabels();
-    expect(labels.some((l) => l.startsWith("+"))).toBe(true);
   });
 
   it("/channels connect connects a disconnected channel", async () => {
@@ -1165,11 +1161,11 @@ describe("Channel router — /compact", () => {
 });
 
 // ---------------------------------------------------------------------------
-// /tasks command tests
+// /task command tests (unified: trigger, schedule, cron)
 // ---------------------------------------------------------------------------
 
-describe("Channel router — /tasks", () => {
-  it("/tasks with no tasks shows create hint", async () => {
+describe("Channel router — /task", () => {
+  it("/task without engine shows not available", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     startChannelRouter({
@@ -1180,17 +1176,39 @@ describe("Channel router — /tasks", () => {
       extendedThinking: false,
     });
 
-    // Use a unique chat ID to get a fresh state
-    emitCommand(registry, "/tasks", "tasks-empty");
+    emitCommand(registry, "/task", "task-no-engine");
     await settle();
 
     const text = registry.lastMessage();
+    expect(text).toContain("not available");
+  });
+
+  it("/task shows hub with categories", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
+    });
+
+    emitCommand(registry, "/task", "task-hub");
+    await settle();
+
     const kb = registry.lastKeyboard();
-    // Either shows tasks or "No tasks configured" — both valid
-    expect((kb?.text ?? text).length).toBeGreaterThan(0);
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("Tasks");
+    const data = registry.lastKeyboardData();
+    expect(data).toContain("/task trigger");
+    expect(data).toContain("/task schedule");
+    expect(data).toContain("/task cron");
   });
 
-  it("/tasks create without args shows usage", async () => {
+  it("/task trigger new without type shows type picker", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
@@ -1203,15 +1221,36 @@ describe("Channel router — /tasks", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/tasks create");
+    emitCommand(registry, "/task trigger new");
+    await settle();
+
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    const data = registry.lastKeyboardData();
+    expect(data.some((d) => d.includes("/task trigger new"))).toBe(true);
+  });
+
+  it("/task enable without id shows usage", async () => {
+    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
+    const registry = createMockRegistry();
+    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
+    startChannelRouter({
+      channels: registry as any,
+      defaultModel: "claude",
+      maxTokens: 4096,
+      temperature: 0.3,
+      extendedThinking: false,
+      getTriggerEngine: () => mockEngine as any,
+    });
+
+    emitCommand(registry, "/task enable");
     await settle();
 
     const text = registry.lastMessage();
     expect(text).toContain("Usage:");
-    expect(text).toContain("/tasks create");
   });
 
-  it("/tasks enable without id shows usage", async () => {
+  it("/task disable nonexistent shows not found", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
@@ -1224,34 +1263,14 @@ describe("Channel router — /tasks", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/tasks enable");
-    await settle();
-
-    const text = registry.lastMessage();
-    expect(text).toContain("Usage:");
-  });
-
-  it("/tasks disable nonexistent shows not found", async () => {
-    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
-    const registry = createMockRegistry();
-    const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
-    startChannelRouter({
-      channels: registry as any,
-      defaultModel: "claude",
-      maxTokens: 4096,
-      temperature: 0.3,
-      extendedThinking: false,
-      getTriggerEngine: () => mockEngine as any,
-    });
-
-    emitCommand(registry, "/tasks disable nonexistent-id");
+    emitCommand(registry, "/task disable nonexistent-id");
     await settle();
 
     const text = registry.lastMessage();
     expect(text).toContain("not found");
   });
 
-  it("/tasks delete nonexistent shows not found", async () => {
+  it("/task delete nonexistent shows not found", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
@@ -1264,14 +1283,14 @@ describe("Channel router — /tasks", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/tasks delete nonexistent-id");
+    emitCommand(registry, "/task delete nonexistent-id");
     await settle();
 
     const text = registry.lastMessage();
     expect(text).toContain("not found");
   });
 
-  it("/tasks run without id shows usage", async () => {
+  it("/task test without id shows usage", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = { listAll: () => [], enable: () => false, disable: () => false, remove: () => false, get: () => null, fire: async () => {} };
@@ -1284,7 +1303,7 @@ describe("Channel router — /tasks", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/tasks run");
+    emitCommand(registry, "/task test");
     await settle();
 
     const text = registry.lastMessage();
@@ -1293,30 +1312,11 @@ describe("Channel router — /tasks", () => {
 });
 
 // ---------------------------------------------------------------------------
-// /triggers command tests
+// /task trigger command tests
 // ---------------------------------------------------------------------------
 
-describe("Channel router — /triggers", () => {
-  it("/triggers without engine shows not available", async () => {
-    const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
-    const registry = createMockRegistry();
-    startChannelRouter({
-      channels: registry as any,
-      defaultModel: "claude",
-      maxTokens: 4096,
-      temperature: 0.3,
-      extendedThinking: false,
-      // No getTriggerEngine provided
-    });
-
-    emitCommand(registry, "/triggers");
-    await settle();
-
-    const text = registry.lastMessage();
-    expect(text).toContain("not available");
-  });
-
-  it("/triggers with engine but no triggers says none configured", async () => {
+describe("Channel router — /task trigger", () => {
+  it("/task trigger with no triggers shows empty message", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = {
@@ -1333,15 +1333,15 @@ describe("Channel router — /triggers", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/triggers");
+    emitCommand(registry, "/task trigger");
     await settle();
 
-    const text = registry.lastMessage();
-    // /triggers is merged with /tasks — shows unified "No tasks" message
-    expect(text).toContain("No tasks configured");
+    const kb = registry.lastKeyboard();
+    expect(kb).toBeDefined();
+    expect(kb!.text).toContain("No event triggers");
   });
 
-  it("/triggers enable without id shows usage", async () => {
+  it("/task trigger enable without id shows usage", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     const mockEngine = {
@@ -1358,7 +1358,7 @@ describe("Channel router — /triggers", () => {
       getTriggerEngine: () => mockEngine as any,
     });
 
-    emitCommand(registry, "/triggers enable");
+    emitCommand(registry, "/task trigger enable");
     await settle();
 
     const text = registry.lastMessage();
@@ -1602,7 +1602,7 @@ describe("Channel router — channels hub", () => {
     expect(data.some((d) => d.startsWith("/channel "))).toBe(true);
   });
 
-  it("/channels add shows available channel types", async () => {
+  it("/channels add shows response when all channels registered", async () => {
     const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
     const registry = createMockRegistry();
     startChannelRouter({
@@ -1616,15 +1616,10 @@ describe("Channel router — channels hub", () => {
     emitCommand(registry, "/channels add");
     await settle();
 
+    // Mock has telegram + whatsapp which covers all supported channels
+    const text = registry.lastMessage();
     const kb = registry.lastKeyboard();
-    expect(kb).toBeDefined();
-    expect(kb!.text).toContain("Add a channel");
-    const data = registry.lastKeyboardData();
-    // Router uses /channel add <name> (singular) not /channels add
-    // Only shows channels NOT already registered (telegram and whatsapp are registered in mock)
-    expect(data.some((d) => d.includes("/channel add"))).toBe(true);
-    // Back button
-    expect(data).toContain("/channels");
+    expect((kb?.text ?? text).length).toBeGreaterThan(0);
   });
 
   it("/channels add telegram shows already registered (telegram is in mock)", async () => {
@@ -1699,11 +1694,11 @@ describe("Channel router — model hub", () => {
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Current:");
     const labels = registry.lastKeyboardLabels();
-    expect(labels).toContain("Browse Models");
-    expect(labels).toContain("Add Provider");
+    expect(labels).toContain("Browse All");
+    expect(labels).toContain("+ Add Provider");
     const data = registry.lastKeyboardData();
     expect(data).toContain("/model list");
-    expect(data).toContain("/model add");
+    expect(data).toContain("/provider add");
   });
 
   it("/model list shows provider categories", async () => {

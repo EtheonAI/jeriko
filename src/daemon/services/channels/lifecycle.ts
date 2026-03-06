@@ -61,31 +61,6 @@ export const CHANNEL_DEFS: readonly ChannelDef[] = [
       "2. Scan the QR code in the terminal",
     ],
   },
-  {
-    name: "imessage",
-    label: "iMessage",
-    requiresToken: true,
-    tokenHint: "BlueBubbles server URL and password",
-    tokenCount: 2,
-    setupGuide: [
-      "1. Install BlueBubbles Server on a Mac (bluebubbles.app)",
-      "2. Configure iMessage and note the server URL + password",
-      "3. Send: /channel add imessage <serverUrl> <password>",
-    ],
-  },
-  {
-    name: "googlechat",
-    label: "Google Chat",
-    requiresToken: true,
-    tokenHint: "Path to Service Account JSON key file",
-    tokenCount: 1,
-    setupGuide: [
-      "1. Create a Google Cloud project, enable Chat API",
-      "2. Create a Service Account, download the JSON key",
-      "3. Configure the bot's HTTPS endpoint to point to your daemon",
-      "4. Send: /channel add googlechat <path-to-key.json>",
-    ],
-  },
 ] as const;
 
 /** Look up a channel definition by name. */
@@ -107,7 +82,7 @@ export interface CreateChannelOptions {
  * Create a channel adapter for the given type and config.
  * Does NOT register or connect — caller does that.
  *
- * @param name   Channel type (telegram, whatsapp, imessage, googlechat)
+ * @param name   Channel type (telegram, whatsapp)
  * @param config Channel-specific configuration
  * @param opts   Optional lifecycle callbacks (e.g. onQR for WhatsApp)
  * @throws If the channel type is unknown or credentials are missing
@@ -134,32 +109,6 @@ export async function createChannelAdapter(
         onQR: opts?.onQR,
       });
     }
-    case "imessage": {
-      const serverUrl = config?.serverUrl as string;
-      const password = config?.password as string;
-      if (!serverUrl || !password) {
-        throw new Error("iMessage requires BlueBubbles serverUrl and password");
-      }
-      const { IMessageChannel } = await import("./imessage.js");
-      return new IMessageChannel({
-        serverUrl,
-        password,
-        allowedAddresses: (config?.allowedAddresses as string[]) ?? undefined,
-      });
-    }
-    case "googlechat": {
-      const keyPath = config?.serviceAccountKeyPath as string;
-      const inlineKey = config?.serviceAccountKey as Record<string, string> | undefined;
-      if (!keyPath && !inlineKey) {
-        throw new Error("Google Chat requires a Service Account key file path or inline key");
-      }
-      const { GoogleChatChannel } = await import("./googlechat.js");
-      return new GoogleChatChannel({
-        serviceAccountKeyPath: keyPath || undefined,
-        serviceAccountKey: inlineKey as any,
-        spaceIds: (config?.spaceIds as string[]) ?? undefined,
-      });
-    }
     default:
       throw new Error(`Unknown channel type: ${name}. Available: ${CHANNEL_DEFS.map((d) => d.name).join(", ")}`);
   }
@@ -174,7 +123,7 @@ export async function createChannelAdapter(
  * Used by both kernel IPC (CLI) and channel router (Telegram commands).
  *
  * @param registry  Channel registry to register and connect through
- * @param name      Channel type (telegram, whatsapp, imessage, googlechat)
+ * @param name      Channel type (telegram, whatsapp)
  * @param config    Channel-specific configuration (tokens, etc.)
  * @param opts      Optional lifecycle callbacks (e.g. onQR for WhatsApp)
  * @returns The channel status after connection
@@ -191,7 +140,16 @@ export async function addChannel(
 
   const adapter = await createChannelAdapter(name, config, opts);
   registry.register(adapter);
-  await registry.connect(name);
+
+  try {
+    await registry.connect(name);
+  } catch (err) {
+    // Rollback registration so the channel isn't stuck in limbo.
+    // Without this, a failed connect (e.g. QR timeout) leaves the channel
+    // registered but broken, blocking subsequent add attempts.
+    await registry.unregister(name);
+    throw err;
+  }
 
   persistChannelConfig(name, config ?? { enabled: true });
 
@@ -238,6 +196,21 @@ export async function renderQRText(data: string): Promise<string | null> {
         resolve(text || null);
       });
     });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Render QR code as a PNG image buffer.
+ * Used by channels that render proportional fonts (Telegram, etc.) where
+ * Unicode block-art QR codes are unreadable.
+ */
+export async function renderQRImage(data: string): Promise<Buffer | null> {
+  try {
+    const QRCode = await import("qrcode");
+    const qr = QRCode.default ?? QRCode;
+    return await qr.toBuffer(data, { type: "png", width: 512, margin: 2 });
   } catch {
     return null;
   }

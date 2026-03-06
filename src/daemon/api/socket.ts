@@ -42,6 +42,8 @@ export interface IpcRequest {
     | "channels"
     | "channel_connect"
     | "channel_disconnect"
+    | "channel_add"
+    | "channel_remove"
     | "history"
     | "clear_history"
     | "compact"

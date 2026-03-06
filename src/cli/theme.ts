@@ -180,11 +180,8 @@ export const ICONS = {
   inactive:   "○",
   dot:        "·",
 
-  // Section markers
-  sparkle:    "✻",
-  diamond:    "◆",
+  // Navigation
   arrow:      "▸",
-  arrowDown:  "▾",
   chevron:    "›",
 
   // Tool/action markers
@@ -200,16 +197,6 @@ export const ICONS = {
   // Progress
   filled:     "█",
   empty:      "░",
-  half:       "▌",
-
-  // Category icons (for help display)
-  session:    "◈",
-  model:      "◉",
-  channel:    "◎",
-  provider:   "◇",
-  manage:     "◆",
-  billing:    "◈",
-  system:     "◉",
 } as const;
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,7 @@ import {
   isConnectorConfigured,
 } from "../../src/shared/connector.js";
 import { saveSecret, deleteSecret } from "../../src/shared/secrets.js";
+import { ConnectorManager } from "../../src/daemon/services/connectors/manager.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { existsSync, unlinkSync } from "node:fs";
@@ -162,6 +163,7 @@ class MockChannel implements ChannelAdapter {
 describe("Channel commands E2E", () => {
   let mock: MockChannel;
   let channels: ChannelRegistry;
+  let connectorManager: ConnectorManager;
 
   beforeAll(async () => {
     // 1. Initialize temp database (sessions, messages, migrations)
@@ -175,7 +177,10 @@ describe("Channel commands E2E", () => {
     channels = new ChannelRegistry();
     channels.register(mock);
 
-    // 4. Start the real router — wires bus events to command handlers
+    // 4. Create connector manager for /disconnect eviction
+    connectorManager = new ConnectorManager();
+
+    // 5. Start the real router — wires bus events to command handlers
     // Use a real TriggerEngine backed by the test DB for /tasks commands
     const { TriggerEngine } = await import("../../src/daemon/services/triggers/engine.js");
     const triggerEngine = new TriggerEngine();
@@ -187,6 +192,7 @@ describe("Channel commands E2E", () => {
       extendedThinking: false,
       systemPrompt: "You are Jeriko.",
       getTriggerEngine: () => triggerEngine,
+      getConnectors: () => connectorManager,
     });
 
     // 5. Connect the mock channel
@@ -1006,7 +1012,7 @@ describe("Channel commands E2E", () => {
 
       // Should list available channel types
       const labels = mock.lastKeyboardLabels();
-      const hasTypes = ["telegram", "whatsapp", "imessage", "googlechat"].some((t) =>
+      const hasTypes = ["telegram", "whatsapp"].some((t) =>
         labels.some((l) => l.toLowerCase().includes(t)),
       );
       expect(hasTypes).toBe(true);
@@ -1040,28 +1046,6 @@ describe("Channel commands E2E", () => {
       expect(sent).toBeTruthy();
     });
 
-    test("/channels add imessage — shows setup guide", async () => {
-      mock.clear();
-      mock.simulateIncoming("/channels add imessage");
-      await wait();
-
-      const kb = mock.lastKeyboard();
-      expect(kb).not.toBeNull();
-      expect(kb!.text).toContain("iMessage Setup:");
-      expect(kb!.text).toContain("BlueBubbles");
-    });
-
-    test("/channels add googlechat — shows setup guide", async () => {
-      mock.clear();
-      mock.simulateIncoming("/channels add googlechat");
-      await wait();
-
-      const kb = mock.lastKeyboard();
-      expect(kb).not.toBeNull();
-      expect(kb!.text).toContain("Google Chat Setup:");
-      expect(kb!.text).toContain("Service Account");
-    });
-
     test("/channels connect — no arg shows usage", async () => {
       mock.clear();
       mock.simulateIncoming("/channels connect");
@@ -1079,7 +1063,7 @@ describe("Channel commands E2E", () => {
       expect(mock.lastSent()).toContain("you're using it right now");
     });
 
-    test("full flow: /channels → /channels add → /channels add imessage", async () => {
+    test("full flow: /channels → /channels add → /channels add telegram", async () => {
       // Step 1: Hub
       mock.clear();
       mock.simulateIncoming("/channels");
@@ -1092,13 +1076,13 @@ describe("Channel commands E2E", () => {
       mock.simulateIncoming("/channels add");
       await wait();
       const data = mock.lastKeyboardData();
-      expect(data).toContain("/channel add imessage");
+      expect(data).toContain("/channel add telegram");
 
       // Step 3: Setup guide
       mock.clear();
-      mock.simulateIncoming("/channels add imessage");
+      mock.simulateIncoming("/channels add telegram");
       await wait();
-      expect(mock.lastKeyboard()!.text).toContain("iMessage Setup:");
+      expect(mock.lastKeyboard()!.text).toContain("Telegram Setup:");
       // Can navigate back
       expect(mock.lastKeyboardData()).toContain("/channels");
     });
@@ -1116,14 +1100,14 @@ describe("Channel commands E2E", () => {
       expect(kb).not.toBeNull();
       expect(kb!.text).toContain("Current:");
       expect(kb!.text).toContain("claude");
-      expect(kb!.text).toContain("Tap provider to switch");
+      expect(kb!.text).toContain("Tap a provider to see its models");
 
-      // Should have Browse Models and Add Provider
+      // Should have Browse All and + Add Provider
       const labels = mock.lastKeyboardLabels();
-      expect(labels).toContain("Browse Models");
-      expect(labels).toContain("Add Provider");
+      expect(labels).toContain("Browse All");
+      expect(labels).toContain("+ Add Provider");
       expect(mock.lastKeyboardData()).toContain("/model list");
-      expect(mock.lastKeyboardData()).toContain("/model add");
+      expect(mock.lastKeyboardData()).toContain("/provider add");
     });
 
     test("/model list — shows provider list", async () => {
@@ -1641,6 +1625,51 @@ describe("Channel commands E2E", () => {
 
       const response = mock.lastSent();
       expect(response.length).toBeGreaterThan(0);
+    });
+
+    test("/disconnect not connected — shows not connected message", async () => {
+      // Make sure GitHub is NOT configured
+      const saved = process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      const savedGh = process.env.GH_TOKEN;
+      delete process.env.GH_TOKEN;
+
+      mock.clear();
+      mock.simulateIncoming("/disconnect github");
+      await wait();
+
+      const response = mock.lastSent();
+      expect(response).toContain("not connected");
+
+      // Restore
+      if (saved) process.env.GITHUB_TOKEN = saved;
+      if (savedGh) process.env.GH_TOKEN = savedGh;
+    });
+
+    test("/disconnect evicts connector from manager cache", async () => {
+      // Set up a configured connector and initialize it in the manager
+      const savedToken = process.env.VERCEL_TOKEN;
+      process.env.VERCEL_TOKEN = "fake_vercel_token_for_disconnect_test";
+
+      // Pre-populate the connector manager cache
+      await connectorManager.get("vercel");
+      expect(connectorManager.activeCount).toBeGreaterThanOrEqual(1);
+      const countBefore = connectorManager.activeCount;
+
+      mock.clear();
+      mock.simulateIncoming("/disconnect vercel");
+      await wait(500);
+
+      // Connector should be evicted from cache
+      expect(connectorManager.activeCount).toBe(countBefore - 1);
+
+      // Response confirms disconnection
+      const response = mock.lastSent();
+      expect(response).toContain("disconnected");
+
+      // Restore
+      if (savedToken) process.env.VERCEL_TOKEN = savedToken;
+      else delete process.env.VERCEL_TOKEN;
     });
   });
 

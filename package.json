@@ -1,6 +1,6 @@
 {
   "name": "jeriko",
-  "version": "2.0.0-alpha.0",
+  "version": "2.0.0-alpha.1",
   "description": "Unix-first CLI toolkit for AI agents — commands replace proprietary tool abstractions",
   "type": "module",
   "main": "src/index.ts",
@@ -92,6 +92,7 @@
   "homepage": "https://jeriko.ai",
   "license": "MIT",
   "dependencies": {
+    "@clack/prompts": "^1.1.0",
     "@whiskeysockets/baileys": "^6.7.16",
     "chalk": "^5.4.0",
     "croner": "^10.0.1",
@@ -100,6 +101,7 @@
     "hono": "^4.7.0",
     "ink": "6.8.0",
     "playwright-core": "^1.58.2",
+    "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
     "react": "^19.0.0",
     "stripe": "^20.4.0",

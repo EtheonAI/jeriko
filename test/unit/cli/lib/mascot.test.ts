@@ -40,19 +40,20 @@ describe("buildMascot", () => {
     expect(/\u001b\[[0-9;]*m/.test(joined)).toBe(true);
   });
 
-  test("contains block characters from the owl logo", () => {
+  test("contains block characters from the cat logo", () => {
     const result = buildMascot();
     const plain = result.map(stripAnsi).join("\n");
-    // Owl logo uses full-block and half-block characters
+    // Cat logo uses full-block and half-block characters
     expect(plain).toContain("█");
-    expect(plain).toContain("▄");
+    expect(plain).toContain("▀");
   });
 
-  test("contains foot detail with half-block characters", () => {
+  test("contains half-block detail characters", () => {
     const result = buildMascot();
     const plain = result.map(stripAnsi).join("\n");
-    // The owl's feet use ▀ characters
+    // The cat uses ▀ and ▄ half-block characters for edges/detail
     expect(plain).toContain("▀");
+    expect(plain).toContain("▄");
   });
 
   test("consistent between calls", () => {
@@ -72,10 +73,12 @@ describe("buildMascotCompact", () => {
     expect(result.length).toBeGreaterThan(0);
   });
 
-  test("fewer lines than full mascot", () => {
+  test("narrower than full mascot", () => {
     const full = buildMascot();
     const compact = buildMascotCompact();
-    expect(compact.length).toBeLessThan(full.length);
+    const fullWidth = Math.max(...full.map((l) => stripAnsi(l).length));
+    const compactWidth = Math.max(...compact.map((l) => stripAnsi(l).length));
+    expect(compactWidth).toBeLessThan(fullWidth);
   });
 
   test("all lines have uniform visual width", () => {

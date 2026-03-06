@@ -226,21 +226,6 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const { WhatsAppChannel } = await import("./services/channels/whatsapp.js");
     channels.register(new WhatsAppChannel());
   }
-  if (config.channels.imessage.serverUrl && config.channels.imessage.password) {
-    const { IMessageChannel } = await import("./services/channels/imessage.js");
-    channels.register(new IMessageChannel({
-      serverUrl: config.channels.imessage.serverUrl,
-      password: config.channels.imessage.password,
-      allowedAddresses: config.channels.imessage.allowedAddresses.length > 0 ? config.channels.imessage.allowedAddresses : undefined,
-    }));
-  }
-  if (config.channels.googlechat.serviceAccountKeyPath) {
-    const { GoogleChatChannel } = await import("./services/channels/googlechat.js");
-    channels.register(new GoogleChatChannel({
-      serviceAccountKeyPath: config.channels.googlechat.serviceAccountKeyPath,
-      spaceIds: config.channels.googlechat.spaceIds.length > 0 ? config.channels.googlechat.spaceIds : undefined,
-    }));
-  }
   // Load system prompt from ~/.config/jeriko/agent.md (copied from AGENT.md at install).
   // This gives the AI its "Jeriko" identity and command knowledge.
   let systemPrompt = "";
@@ -306,6 +291,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     extendedThinking: config.agent.extendedThinking,
     systemPrompt,
     getTriggerEngine: () => state.triggers,
+    getConnectors: () => connectors,
   });
   log.info("Kernel boot: step 9 — channel registry created");
 
@@ -423,13 +409,48 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       });
 
       // Wire OAuth start forwarding: relay → daemon authorization URL builder
+      // Returns redirectUrl + codeVerifier (for PKCE relay-side exchange)
       relay.onOAuthStart(async (provider, params, _requestId) => {
         try {
           const { handleOAuthStart } = await import("./api/routes/oauth.js");
-          return handleOAuthStart(provider, params);
+          const result = handleOAuthStart(provider, params);
+          return {
+            statusCode: result.statusCode,
+            html: result.html,
+            redirectUrl: result.redirectUrl,
+            codeVerifier: result.codeVerifier,
+          };
         } catch (err) {
           log.error(`Relay OAuth start error: ${err}`);
           return { statusCode: 500, html: "Internal error processing OAuth start" };
+        }
+      });
+
+      // Wire relay-exchanged OAuth tokens: relay → daemon token storage
+      // When the relay exchanges the code for tokens (user has no local secret),
+      // it sends the tokens here for the daemon to save to ~/.config/jeriko/.env.
+      relay.onOAuthTokens(async (provider, tokens, _requestId) => {
+        try {
+          const { getOAuthProvider } = await import("./services/oauth/providers.js");
+          const { saveSecret } = await import("../shared/secrets.js");
+
+          const providerDef = getOAuthProvider(provider);
+          if (!providerDef) {
+            log.warn(`Relay OAuth tokens: unknown provider "${provider}"`);
+            return;
+          }
+
+          // Save access token
+          saveSecret(providerDef.tokenEnvVar, tokens.accessToken);
+          log.info(`Relay OAuth tokens: saved ${providerDef.tokenEnvVar} for ${providerDef.label}`);
+
+          // Save refresh token if provided
+          if (tokens.refreshToken && providerDef.refreshTokenEnvVar) {
+            saveSecret(providerDef.refreshTokenEnvVar, tokens.refreshToken);
+            log.info(`Relay OAuth tokens: saved ${providerDef.refreshTokenEnvVar} for ${providerDef.label}`);
+          }
+        } catch (err) {
+          log.error(`Relay OAuth tokens error: ${err}`);
         }
       });
 
@@ -504,6 +525,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
   // Step 13: Connect channels
   await channels.connectAll();
+
   log.info("Kernel boot: step 13 — channels connected");
 
   // Step 14: Start socket IPC server
@@ -714,12 +736,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     return channels.statusOf(name);
   });
 
-  registerMethod("channel_add", async (params) => {
+  registerStreamMethod("channel_add", async (params, emit) => {
     const name = (params.name as string)?.toLowerCase();
     if (!name) throw new Error("name is required");
     const channelConfig = params.config as Record<string, unknown> | undefined;
     const { addChannel } = await import("./services/channels/lifecycle.js");
-    return addChannel(channels, name, channelConfig);
+
+    // Wire onQR callback to stream QR events to the CLI
+    const onQR = (qr: string) => { emit({ type: "qr", qr }); };
+    return addChannel(channels, name, channelConfig, { onQR });
   });
 
   registerMethod("channel_remove", async (params) => {
@@ -1052,7 +1077,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!name) throw new Error("name is required");
 
     const { getConnectorDef, isConnectorConfigured } = await import("../shared/connector.js");
-    const { getOAuthProvider, isOAuthCapable } = await import("./services/oauth/providers.js");
+    const { getOAuthProvider, isOAuthCapable, getClientId } = await import("./services/oauth/providers.js");
 
     const def = getConnectorDef(name);
     if (!def) throw new Error(`Unknown connector: ${name}`);
@@ -1064,8 +1089,9 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     // OAuth connector — generate state token and return login URL
     const provider = getOAuthProvider(name);
     if (provider) {
-      if (!process.env[provider.clientIdVar]) {
-        throw new Error(`${provider.label} OAuth not configured — set ${provider.clientIdVar} and ${provider.clientSecretVar}`);
+      const clientId = getClientId(provider);
+      if (!clientId) {
+        throw new Error(`${provider.label} OAuth not configured — set ${provider.clientIdVar} or use baked-in credentials`);
       }
       const { generateState } = await import("./services/oauth/state.js");
       const { buildOAuthStartUrl } = await import("../shared/urls.js");

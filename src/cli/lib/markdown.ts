@@ -3,14 +3,17 @@
  * chalk-styled strings for terminal output.
  *
  * Supported patterns:
- *   **bold**        → chalk.bold
- *   _italic_        → chalk.italic
- *   `inline code`   → chalk.hex(PALETTE.blue)
- *   ```lang\n...\n``` → syntax highlighted with border
- *   [text](url)     → text underlined + url dim
- *   # Header        → chalk.bold
- *   - list item     → bullet with indent
- *   > blockquote    → left border + muted
+ *   **bold**              → chalk.bold
+ *   _italic_              → chalk.italic
+ *   ***bold+italic***     → chalk.bold.italic
+ *   **_bold+italic_**     → chalk.bold.italic
+ *   ~~strikethrough~~     → chalk.strikethrough
+ *   `inline code`         → chalk.hex(PALETTE.blue)
+ *   ```lang\n...\n```     → syntax highlighted with border
+ *   [text](url)           → text underlined + url dim
+ *   # Header              → chalk.bold
+ *   - list item           → bullet with indent
+ *   > blockquote          → left border + muted
  *
  * No external dependencies — uses chalk + PALETTE from theme.
  */
@@ -62,8 +65,8 @@ function parseBlocks(text: string): MarkdownBlock[] {
 
   for (const line of lines) {
     if (!inCodeBlock) {
-      const fenceMatch = line.match(/^```(\w*)$/);
-      if (fenceMatch) {
+      const fenceMatch = line.match(/^```(\w*).*$/);
+      if (fenceMatch && line.startsWith("```")) {
         // Flush accumulated text
         if (currentTextLines.length > 0) {
           blocks.push({ type: "text", lines: currentTextLines });
@@ -186,6 +189,17 @@ function renderInlineSpans(text: string): string {
     return chalk.hex(PALETTE.blue)(code);
   });
 
+  // Bold+italic: ***text*** or **_text_** or _**text**_
+  result = result.replace(/\*\*\*([^*]+)\*\*\*/g, (_, content) => {
+    return chalk.bold.italic(content);
+  });
+  result = result.replace(/\*\*_([^_]+)_\*\*/g, (_, content) => {
+    return chalk.bold.italic(content);
+  });
+  result = result.replace(/_\*\*([^*]+)\*\*_/g, (_, content) => {
+    return chalk.bold.italic(content);
+  });
+
   // Bold: **text**
   result = result.replace(/\*\*([^*]+)\*\*/g, (_, content) => {
     return chalk.bold(content);
@@ -194,6 +208,11 @@ function renderInlineSpans(text: string): string {
   // Italic: _text_ (but not __text__)
   result = result.replace(/(?<![_\\])_([^_]+)_(?!_)/g, (_, content) => {
     return chalk.italic(content);
+  });
+
+  // Strikethrough: ~~text~~
+  result = result.replace(/~~([^~]+)~~/g, (_, content) => {
+    return chalk.strikethrough(content);
   });
 
   // Links: [text](url)

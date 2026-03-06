@@ -17,7 +17,7 @@ export type Phase =
   | "tool-executing"
   | "sub-executing"
   | "setup"
-  | "provider-add";
+  | "wizard";
 
 /** Type guard for valid phase values. */
 export function isPhase(value: unknown): value is Phase {
@@ -28,8 +28,32 @@ export function isPhase(value: unknown): value is Phase {
     value === "tool-executing" ||
     value === "sub-executing" ||
     value === "setup" ||
-    value === "provider-add"
+    value === "wizard"
   );
+}
+
+// ---------------------------------------------------------------------------
+// Wizard — generic multi-step interactive flow
+// ---------------------------------------------------------------------------
+
+/** A single step in an interactive wizard. */
+export type WizardStep =
+  | { type: "select"; message: string; options: WizardOption[] }
+  | { type: "text"; message: string; placeholder?: string; validate?: (v: string) => string | undefined }
+  | { type: "password"; message: string; validate?: (v: string) => string | undefined };
+
+/** An option in a select step. */
+export interface WizardOption {
+  value: string;
+  label: string;
+  hint?: string;
+}
+
+/** Configuration for an interactive wizard flow. */
+export interface WizardConfig {
+  title: string;
+  steps: WizardStep[];
+  onComplete: (results: string[]) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,7 +218,7 @@ export interface ModelInfo {
 // Providers
 // ---------------------------------------------------------------------------
 
-/** Provider info for the /provider command. */
+/** Provider info for model management. */
 export interface ProviderInfo {
   id: string;
   name: string;

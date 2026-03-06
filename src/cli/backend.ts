@@ -47,6 +47,11 @@ export interface DisconnectResult {
   error?: string;
 }
 
+/** Callbacks invoked during channel add (e.g. WhatsApp QR streaming). */
+export interface ChannelAddCallbacks {
+  onQR?: (qr: string) => void;
+}
+
 /** Callbacks invoked during a streaming agent response. */
 export interface BackendCallbacks {
   onThinking: (content: string) => void;
@@ -96,7 +101,7 @@ export interface Backend {
   listChannels(): Promise<ChannelInfo[]>;
   connectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
   disconnectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
-  addChannel(name: string, config?: Record<string, unknown>): Promise<{ ok: boolean; error?: string }>;
+  addChannel(name: string, config?: Record<string, unknown>, callbacks?: ChannelAddCallbacks): Promise<{ ok: boolean; error?: string }>;
   removeChannel(name: string): Promise<{ ok: boolean; error?: string }>;
 
   // Connectors (daemon only — returns [] in-process)
@@ -364,11 +369,21 @@ export async function createDaemonBackend(): Promise<Backend> {
       }
     },
 
-    async addChannel(name, channelConfig) {
+    async addChannel(name, channelConfig, callbacks) {
       try {
-        const response = await sendRequest("channel_add" as any, { name, config: channelConfig });
-        if (response.ok) return { ok: true };
-        return { ok: false, error: response.error ?? `Failed to add "${name}"` };
+        const stream = sendStreamRequest("channel_add", { name, config: channelConfig }, {
+          idleTimeoutMs: 150_000, // WhatsApp QR scan can take up to 2 minutes
+        });
+        let result: IteratorResult<Record<string, unknown>, unknown>;
+        while (!(result = await stream.next()).done) {
+          const event = result.value;
+          if (event.type === "qr" && callbacks?.onQR) {
+            callbacks.onQR(event.qr as string);
+          }
+        }
+        const resp = result.value as { ok?: boolean; error?: string } | void;
+        if (resp?.ok === false) return { ok: false, error: resp.error ?? `Failed to add "${name}"` };
+        return { ok: true };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -376,7 +391,7 @@ export async function createDaemonBackend(): Promise<Backend> {
 
     async removeChannel(name) {
       try {
-        const response = await sendRequest("channel_remove" as any, { name });
+        const response = await sendRequest("channel_remove", { name });
         if (response.ok) return { ok: true };
         return { ok: false, error: response.error ?? `Failed to remove "${name}"` };
       } catch (err) {

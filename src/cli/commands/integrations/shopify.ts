@@ -1,0 +1,25 @@
+import { connectorCommand } from "./_connector.js";
+
+export const command = connectorCommand("shopify", "Shopify (products, orders, customers, inventory)", [
+  "\nCall Shopify Admin REST API methods through the connector.",
+  "\nResources & Actions:",
+  "  shop         get",
+  "  products     list | get <id> | create | update <id> | delete <id> | count",
+  "  variants     list | get <id> | update <id>",
+  "  orders       list | get <id> | create | update <id> | close <id> | cancel <id> | count",
+  "  customers    list | get <id> | create | update <id> | search | count",
+  "  inventory    list | set | adjust",
+  "  collections  list | get <id> | create",
+  "  fulfillments list | create",
+  "  locations    list | get <id>",
+  "  webhooks     list | create | delete <id>",
+  "\nFlags:",
+  "  --id <id>              Resource ID",
+  "  --product-id <id>      Product ID (for variants, fulfillments)",
+  "  --order-id <id>        Order ID (for fulfillments)",
+  "  --query <text>         Search query (customers.search)",
+  "  --limit <n>            Max results",
+  "  --topic <topic>        Webhook topic (e.g. 'orders/create')",
+  "  --address <url>        Webhook callback URL",
+  "\nRequires: SHOPIFY_SHOP (store name or full domain)",
+]);

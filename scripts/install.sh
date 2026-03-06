@@ -24,7 +24,7 @@ fi
 
 # ── Config ───────────────────────────────────────────────────────
 
-GITHUB_REPO="khaleel737/jeriko"
+GITHUB_REPO="etheonai/jeriko"
 RELEASES_URL="https://github.com/$GITHUB_REPO/releases"
 CDN_URL="${JERIKO_CDN_URL:-https://releases.jeriko.ai}"
 DOWNLOAD_DIR="$HOME/.jeriko/downloads"
@@ -196,10 +196,19 @@ BINARY_NAME="jeriko-${platform}"
 # ── Header ───────────────────────────────────────────────────────
 
 echo ""
-echo -e "${BOLD}  ╦╔═╗╦═╗╦╦╔═╔═╗${NC}"
-echo -e "${BOLD}  ║║╣ ╠╦╝║╠╩╗║ ║${NC}"
-echo -e "${BOLD}  ╩╚═╝╩╚═╩╩ ╩╚═╝${NC}"
-echo -e "  ${DIM}Unix-first CLI toolkit for AI agents${NC}"
+echo -e "${DIM}    ███           ▐███${NC}"
+echo -e "${DIM}    █████▌ ▐██▌  ▐████▌${NC}"
+echo -e "${DIM}    ██████████████████▌${NC}"
+echo -e "${DIM}    ██████████████████▌${NC}"
+echo -e "${DIM}   ▐████████████████████${NC}"
+echo -e "${DIM}  ▐██████████████████████▌${NC}"
+echo -e "${DIM}  █████████████████▌█████▌${NC}"
+echo -e "${DIM}  ▐██████████████████████${NC}"
+echo -e "${DIM}   ▐████████████████████${NC}"
+echo -e "${DIM}     ▐████████████████▌${NC}"
+echo -e "${DIM}           ███████▌${NC}"
+echo ""
+echo -e "  ${BOLD}jeriko${NC} ${DIM}— CLI toolkit for AI agents${NC}"
 echo ""
 
 # ── Check for existing installation ─────────────────────────────
@@ -330,3 +339,10 @@ else
 fi
 echo -e "  ${DIM}Documentation:${NC} ${BLUE}https://jeriko.ai/docs${NC}"
 echo ""
+
+# ── Run onboarding wizard (first install only) ──────────────────
+if [ -z "$EXISTING_VERSION" ] && [ -t 0 ]; then
+    # Only run onboarding on fresh installs with an interactive terminal
+    info "Starting setup wizard..."
+    "$BINARY_PATH" onboard || true
+fi

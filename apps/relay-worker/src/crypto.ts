@@ -85,40 +85,60 @@ export async function safeCompare(a: string, b: string): Promise<boolean> {
 // Stripe signature verification
 // ---------------------------------------------------------------------------
 
+/** Maximum allowed clock skew between Stripe's timestamp and our server (5 min). */
+const MAX_TIMESTAMP_DRIFT_SEC = 300;
+
 /**
  * Verify Stripe webhook signature using HMAC-SHA256.
  *
- * Parses the `Stripe-Signature` header format: `t=timestamp,v1=signature`
+ * Parses the `Stripe-Signature` header format: `t=timestamp,v1=sig[,v1=sig2]`
+ * Supports multiple v1 signatures (Stripe sends these during key rotation).
  * Rejects timestamps older than 5 minutes (replay protection).
  *
- * Equivalent to the Bun relay's `verifyStripeSignature()`, adapted for
- * async Web Crypto operations.
+ * Uses `indexOf("=")` + `slice` for parsing — same approach as the daemon's
+ * proven implementation — to correctly extract the full value after the first `=`.
+ *
+ * Equivalent to `src/daemon/services/connectors/stripe/webhook.ts`, adapted
+ * for async Web Crypto operations.
  */
 export async function verifyStripeSignature(
   rawBody: string,
   signatureHeader: string,
   secret: string,
 ): Promise<boolean> {
+  if (!signatureHeader || !secret) return false;
+
   try {
-    const parts: Record<string, string> = {};
+    // Parse the header using indexOf + slice (handles any value content safely).
+    let timestamp: string | undefined;
+    const v1Signatures: string[] = [];
 
     for (const item of signatureHeader.split(",")) {
-      const [key, value] = item.split("=", 2);
-      if (key && value) parts[key.trim()] = value.trim();
+      const idx = item.indexOf("=");
+      if (idx === -1) continue;
+      const key = item.slice(0, idx).trim();
+      const value = item.slice(idx + 1).trim();
+      if (key === "t") timestamp = value;
+      else if (key === "v1") v1Signatures.push(value);
     }
 
-    const timestamp = parts.t;
-    const expectedSig = parts.v1;
-    if (!timestamp || !expectedSig) return false;
+    if (!timestamp || v1Signatures.length === 0) return false;
 
-    // Replay protection: reject timestamps older than 5 minutes
+    // Replay protection: reject timestamps outside tolerance.
     const ts = parseInt(timestamp, 10);
-    if (isNaN(ts) || Math.abs(Date.now() / 1000 - ts) > 300) return false;
+    if (isNaN(ts)) return false;
+    if (Math.abs(Date.now() / 1000 - ts) > MAX_TIMESTAMP_DRIFT_SEC) return false;
 
+    // Compute expected signature.
     const signedPayload = `${timestamp}.${rawBody}`;
     const computedSig = await hmacSHA256Hex(secret, signedPayload);
 
-    return safeCompare(computedSig, expectedSig);
+    // Compare against every v1 signature (Stripe may include multiple).
+    for (const sig of v1Signatures) {
+      if (await safeCompare(computedSig, sig)) return true;
+    }
+
+    return false;
   } catch {
     return false;
   }

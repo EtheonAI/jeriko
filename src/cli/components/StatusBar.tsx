@@ -73,6 +73,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
       return <SubExecutingStatus subAgents={subAgents} />;
 
     case "setup":
+    case "wizard":
       return null;
 
     case "idle":
@@ -174,12 +175,8 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
   const totalUsed = stats.tokensIn + stats.tokensOut;
   const sep = ` ${ICONS.dot} `;
 
-  // Build status segments with visual separators
+  // Build minimal status: model | cost | context% | session-slug
   const parts: string[] = [model];
-
-  // Token counts with directional arrows
-  parts.push(`${formatTokens(stats.tokensIn)}↑`);
-  parts.push(`${formatTokens(stats.tokensOut)}↓`);
 
   // Cost (only if non-zero)
   if (cost > 0) parts.push(formatModelCost(cost));
@@ -190,30 +187,29 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
     if (pct > 0) parts.push(`${pct}% ctx`);
   }
 
-  // Turn count
-  parts.push(`${stats.turns} turn${stats.turns !== 1 ? "s" : ""}`);
-
-  // Total duration
-  if (stats.durationMs > 0) parts.push(formatDuration(stats.durationMs));
-
   // Session slug
   if (sessionSlug && sessionSlug !== "new") {
     parts.push(sessionSlug);
   }
 
-  // Dev mode badge (only shown when not in normal mode)
-  const devBadge = devMode && devMode !== "normal"
-    ? ` [${MODE_LABELS[devMode]}]`
+  // Dev mode indicator — Claude Code style bottom line
+  const modeLabel = devMode && devMode !== "normal"
+    ? MODE_LABELS[devMode]
     : "";
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={0}>
       <Box>
         <Text color={PALETTE.dim}>{parts.join(sep)}</Text>
-        {devBadge && (
-          <Text color={devMode === "auto-accept" ? PALETTE.warning : PALETTE.info}>{devBadge}</Text>
-        )}
       </Box>
+      {modeLabel && (
+        <Box>
+          <Text color={devMode === "auto-accept" ? PALETTE.warning : PALETTE.brand}>
+            {`  ${modeLabel}`}
+          </Text>
+          <Text color={PALETTE.dim}>{" · esc to interrupt"}</Text>
+        </Box>
+      )}
       {context && (
         <ContextBar totalUsed={totalUsed} context={context} />
       )}
