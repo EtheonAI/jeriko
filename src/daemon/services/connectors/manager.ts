@@ -86,17 +86,18 @@ export class ConnectorManager {
       return null;
     }
 
-    // License gate: check if the tier allows this connector activation.
+    // License gate: check if the tier allows a new activation.
     // Only active when billing is configured (STRIPE_BILLING_SECRET_KEY is set).
     // When billing is not configured, the gate is a no-op — all tiers get unlimited connectors.
     //
-    // Uses configured connector count (env vars) as the usage metric — not
-    // instances.size (which resets on restart). This is consistent with the
-    // display count shown in CLI, channels, and API.
+    // Uses instances.size (active count) so the first N configured connectors
+    // can activate after boot. This is distinct from the connect-time gate
+    // (in channel router /connect and /auth) which uses configured count to
+    // prevent adding NEW credentials beyond the limit.
     if (process.env.STRIPE_BILLING_SECRET_KEY) {
       try {
         const { canActivateConnector } = await import("../../billing/license.js");
-        const check = canActivateConnector();
+        const check = canActivateConnector(this.instances.size);
         if (!check.allowed) {
           log.info(`ConnectorManager: connector "${name}" blocked by license — ${check.reason}`);
           throw new Error(check.reason);

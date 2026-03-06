@@ -1533,7 +1533,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   });
 
   registerMethod("auth_save", async (params) => {
-    const { getConnectorDef, primaryVarName } = await import("../shared/connector.js");
+    const { getConnectorDef, primaryVarName, isConnectorConfigured } = await import("../shared/connector.js");
     const { saveSecret } = await import("../shared/secrets.js");
     const connectorName = params.name as string;
     const keys = params.keys as string[];
@@ -1549,10 +1549,17 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       throw new Error(`${def.label} requires ${def.required.length} key(s): ${varNames.join(", ")}`);
     }
 
+    // Billing gate: check if the tier allows a new connector (skip if already configured)
+    if (!isConnectorConfigured(connectorName) && process.env.STRIPE_BILLING_SECRET_KEY) {
+      const { canActivateConnector } = await import("./billing/license.js");
+      const check = canActivateConnector();
+      if (!check.allowed) throw new Error(check.reason!);
+    }
+
     let saved = 0;
     for (let i = 0; i < def.required.length; i++) {
-      const varName = primaryVarName(def.required[i]);
-      saveSecret(varName, keys[i]);
+      const varName = primaryVarName(def.required[i]!);
+      saveSecret(varName, keys[i]!);
       saved++;
     }
 

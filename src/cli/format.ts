@@ -1199,7 +1199,7 @@ export function formatSessionCost(stats: SessionStats, model: string): string {
  *
  * Output:
  *   Agent:    claude-sonnet-4 · 4096 tokens · temp 0.3
- *   Channels: telegram ✓ · whatsapp ✗ · slack ✗ · discord ✗
+ *   Channels: telegram ✓ · whatsapp ✗ · imessage ✗ · googlechat ✗
  *   Providers: 2 custom (openrouter, deepinfra)
  *   Security: 1 allowed path · 3 blocked commands · 5 sensitive keys
  *   Logging:  info · 10MB rotation · 5 files

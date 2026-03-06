@@ -107,7 +107,7 @@ export interface CreateChannelOptions {
  * Create a channel adapter for the given type and config.
  * Does NOT register or connect — caller does that.
  *
- * @param name   Channel type (telegram, whatsapp, slack, discord)
+ * @param name   Channel type (telegram, whatsapp, imessage, googlechat)
  * @param config Channel-specific configuration
  * @param opts   Optional lifecycle callbacks (e.g. onQR for WhatsApp)
  * @throws If the channel type is unknown or credentials are missing
@@ -174,7 +174,7 @@ export async function createChannelAdapter(
  * Used by both kernel IPC (CLI) and channel router (Telegram commands).
  *
  * @param registry  Channel registry to register and connect through
- * @param name      Channel type (telegram, whatsapp, slack, discord)
+ * @param name      Channel type (telegram, whatsapp, imessage, googlechat)
  * @param config    Channel-specific configuration (tokens, etc.)
  * @param opts      Optional lifecycle callbacks (e.g. onQR for WhatsApp)
  * @returns The channel status after connection

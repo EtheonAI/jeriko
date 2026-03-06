@@ -9,7 +9,7 @@ import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { agentRoutes } from "./routes/agent.js";
 import { sessionRoutes } from "./routes/session.js";
 import { webhookRoutes } from "./routes/webhook.js";
-import { channelRoutes } from "./routes/channel.js";
+import { channelRoutes, channelEventRoutes } from "./routes/channel.js";
 import { healthRoutes } from "./routes/health.js";
 import { connectorRoutes } from "./routes/connector.js";
 import { triggerRoutes } from "./routes/trigger.js";
@@ -80,8 +80,8 @@ export function createApp(ctx: AppContext): Hono {
   // Auth — skip for health check and webhook endpoints
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
-    // Health, webhook, OAuth, public share, and billing webhook endpoints are unauthenticated
-    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/") || path === "/billing/webhook") {
+    // Health, webhook, OAuth, public share, billing webhook, and channel event endpoints are unauthenticated
+    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/") || path === "/billing/webhook" || path.startsWith("/channel-events/")) {
       return next();
     }
     return authMiddleware()(c, next);
@@ -106,6 +106,7 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/session", sessionRoutes());
   app.route("/hooks", webhookRoutes());
   app.route("/channel", channelRoutes());
+  app.route("/channel-events", channelEventRoutes());
   app.route("/connector", connectorRoutes());
   app.route("/triggers", triggerRoutes());
   app.route("/tasks", triggerRoutes()); // Unified task surface (alias for /triggers)

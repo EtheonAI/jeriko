@@ -2214,7 +2214,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         try {
-          const { url } = await createCheckoutSession(email, true);
+          const { url } = await createCheckoutSession(email);
           await safeKeyboard(
             metadata,
             `Checkout ready for ${email}.\nComplete your upgrade:`,

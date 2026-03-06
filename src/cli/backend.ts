@@ -1649,7 +1649,7 @@ function saveAuthDirect(
   connectorName: string,
   keys: string[],
 ): { connector: string; label: string; saved: number } {
-  const { getConnectorDef, primaryVarName } = require("../shared/connector.js");
+  const { getConnectorDef, primaryVarName, isConnectorConfigured } = require("../shared/connector.js");
   const { saveSecret } = require("../shared/secrets.js");
 
   const def = getConnectorDef(connectorName);
@@ -1658,6 +1658,18 @@ function saveAuthDirect(
   if (keys.length < def.required.length) {
     const varNames = def.required.map((e: string | string[]) => primaryVarName(e));
     throw new Error(`${def.label} requires ${def.required.length} key(s): ${varNames.join(", ")}`);
+  }
+
+  // Billing gate: check if the tier allows a new connector (skip if already configured)
+  if (!isConnectorConfigured(connectorName) && process.env.STRIPE_BILLING_SECRET_KEY) {
+    try {
+      const { canActivateConnector } = require("../daemon/billing/license.js");
+      const check = canActivateConnector();
+      if (!check.allowed) throw new Error(check.reason);
+    } catch (err: unknown) {
+      // Re-throw gate errors, swallow module load failures (billing DB may not exist)
+      if (err instanceof Error && err.message.includes("Connector limit reached")) throw err;
+    }
   }
 
   let saved = 0;
