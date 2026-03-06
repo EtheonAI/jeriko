@@ -57,16 +57,18 @@ describe("computeContextBar", () => {
   test("yellow color below 80%", () => {
     const result = computeContextBar(120_000, makeContext());
     expect(result.visible).toBe(true);
-    // Should use yellow (not red) at 60%
-    expect(result.color).not.toContain("f7768e"); // not red
+    // Should use warning color (not error) at 60%
+    const { PALETTE } = require("../../../../src/cli/theme.js");
+    expect(result.color).toBe(PALETTE.warning);
   });
 
   test("red color at 80%+", () => {
     const result = computeContextBar(170_000, makeContext());
     expect(result.visible).toBe(true);
     expect(result.percentage).toBeGreaterThanOrEqual(0.8);
-    // Should use red
-    expect(result.color).toContain("f7768e"); // PALETTE.red
+    // Should use error color
+    const { PALETTE } = require("../../../../src/cli/theme.js");
+    expect(result.color).toBe(PALETTE.error);
   });
 
   test("percentage capped at 100%", () => {
