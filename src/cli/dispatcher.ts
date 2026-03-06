@@ -17,8 +17,12 @@ import { parseArgs, flagStr, flagBool } from "../shared/args.js";
 import { fail, setOutputFormat } from "../shared/output.js";
 
 /** Flags consumed by the dispatcher — stripped before passing to commands.
- *  Note: --help is NOT stripped — commands handle their own --help for per-command docs. */
-const GLOBAL_FLAGS = new Set(["format", "quiet", "version"]);
+ *  Note: --help is NOT stripped — commands handle their own --help for per-command docs.
+ *  Value flags expect a following argument (e.g., --format json).
+ *  Boolean flags are standalone (e.g., --quiet, --version). */
+const GLOBAL_VALUE_FLAGS = new Set(["format"]);
+const GLOBAL_BOOL_FLAGS = new Set(["quiet", "version"]);
+const GLOBAL_FLAGS = new Set([...GLOBAL_VALUE_FLAGS, ...GLOBAL_BOOL_FLAGS]);
 
 // ---------------------------------------------------------------------------
 // Command handler interface
@@ -231,8 +235,12 @@ function stripGlobalFlags(args: string[]): string[] {
     // --flag value form
     if (arg.startsWith("--")) {
       const key = arg.slice(2);
-      if (GLOBAL_FLAGS.has(key)) {
-        // If next arg looks like a value (not a flag), skip it too
+      if (GLOBAL_BOOL_FLAGS.has(key)) {
+        i++;
+        continue;
+      }
+      if (GLOBAL_VALUE_FLAGS.has(key)) {
+        // Skip the following value argument too
         const next = args[i + 1];
         if (next !== undefined && !next.startsWith("-")) {
           i += 2;

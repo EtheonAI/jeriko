@@ -27,11 +27,11 @@ async function execute(args: Record<string, unknown>): Promise<string> {
     }
 
     const content = await readFile(absPath, "utf-8");
+    if (content.length === 0) return "(empty file)";
+
     const lines = content.split("\n");
     const sliced = lines.slice(offset, offset + limit);
-    const numbered = sliced.map((line, i) => `${offset + i + 1}\t${line}`).join("\n");
-
-    return numbered || "(empty file)";
+    return sliced.map((line, i) => `${offset + i + 1}\t${line}`).join("\n");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return JSON.stringify({ ok: false, error: msg });

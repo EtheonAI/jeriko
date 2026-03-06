@@ -8,7 +8,7 @@
 // Start flow is always proxied to daemon (daemon builds auth URL with PKCE).
 
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { getConnection, sendTo } from "../connections.js";
 import {
   TOKEN_EXCHANGE_PROVIDERS,
@@ -389,7 +389,9 @@ export function oauthRoutes(): Hono {
     }
 
     const token = authHeader.replace(/^Bearer\s+/i, "");
-    if (token !== relaySecret) {
+    const tokenBuf = Buffer.from(token);
+    const secretBuf = Buffer.from(relaySecret);
+    if (tokenBuf.length !== secretBuf.length || !timingSafeEqual(tokenBuf, secretBuf)) {
       return c.json({ ok: false, error: "Invalid authorization" }, 403);
     }
 

@@ -83,12 +83,18 @@ export class WhatsAppChannel implements ChannelAdapter {
   private socket: WASocket | null = null;
   private handlers: MessageHandler[] = [];
   private connected = false;
+  private intentionalDisconnect = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectAttempts = 0;
   private authDir: string;
   private allowedNumbers: Set<string>;
   private onQR: ((qr: string) => void | Promise<void>) | undefined;
 
   /** Tracks last incoming message per JID for downloadFile context. */
   private lastMessageByJid = new Map<string, WAMessage>();
+
+  /** Max entries in lastMessageByJid to prevent memory leak. */
+  private static readonly MAX_LAST_MESSAGES = 1000;
 
   constructor(private config: WhatsAppConfig = {}) {
     this.authDir = config.authDir ?? join(getDataDir(), "whatsapp-auth");
@@ -106,13 +112,22 @@ export class WhatsAppChannel implements ChannelAdapter {
     // (emitting QR, waiting for scan, etc.). All sockets share the same
     // auth state and creds listener, and feed into a single connectionReady
     // promise so the caller blocks until fully connected or timed out.
+    this.intentionalDisconnect = false;
+    this.reconnectAttempts = 0;
+
     const { state, saveCreds } = await useMultiFileAuthState(this.authDir);
 
     // Fetch the current WhatsApp Web client revision from web.whatsapp.com.
     // The version bundled with Baileys becomes outdated as WhatsApp deploys
     // new releases — an expired version causes the server to reject with 405.
     // Falls back to the bundled version if the fetch fails (offline use).
-    const { version: waVersion } = await fetchLatestWaWebVersion();
+    let waVersion: [number, number, number] | undefined;
+    try {
+      const result = await fetchLatestWaWebVersion();
+      waVersion = result.version;
+    } catch (err) {
+      log.warn(`Failed to fetch WhatsApp Web version, using bundled: ${err}`);
+    }
 
     // 120s gives the user time to open WhatsApp → Linked Devices → Scan.
     // Timer resets on each new QR code (Baileys rotates QR every ~20s).
@@ -127,7 +142,7 @@ export class WhatsAppChannel implements ChannelAdapter {
       const createSocket = () => {
         this.socket = makeWASocket({
           auth: state,
-          version: waVersion,
+          ...(waVersion ? { version: waVersion } : {}),
           printQRInTerminal: !this.onQR,
           logger: baileysLogger,
           // Bun's ws polyfill drops the `origin` constructor option that Baileys
@@ -165,6 +180,7 @@ export class WhatsAppChannel implements ChannelAdapter {
           if (connection === "open") {
             log.info("WhatsApp connected");
             this.connected = true;
+            this.reconnectAttempts = 0;
             clearTimeout(timer);
             if (!settled) { settled = true; resolve(); }
           }
@@ -178,15 +194,20 @@ export class WhatsAppChannel implements ChannelAdapter {
               log.info("WhatsApp logged out");
               clearTimeout(timer);
               if (!settled) { settled = true; reject(new Error("WhatsApp logged out — re-scan QR code to authenticate")); }
+            } else if (this.intentionalDisconnect) {
+              // User called disconnect() — do not reconnect
+              log.debug("WhatsApp intentional disconnect, skipping reconnect");
             } else if (settled) {
-              // Post-connect disconnect — background reconnect
-              log.warn("WhatsApp connection closed, reconnecting in 3s...");
-              setTimeout(() => createSocket(), 3_000);
+              // Post-connect disconnect — exponential backoff reconnect
+              this.reconnectAttempts++;
+              const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), 60_000);
+              log.warn(`WhatsApp connection closed, reconnecting in ${delay / 1000}s (attempt ${this.reconnectAttempts})...`);
+              this.reconnectTimer = setTimeout(() => createSocket(), delay);
             } else {
               // Pre-connect close — Baileys normal handshake cycle.
               // Recreate socket immediately to continue the handshake.
               log.debug("WhatsApp socket recycled during handshake, recreating...");
-              setTimeout(() => createSocket(), 2_000);
+              this.reconnectTimer = setTimeout(() => createSocket(), 2_000);
             }
           }
         });
@@ -199,6 +220,11 @@ export class WhatsAppChannel implements ChannelAdapter {
   }
 
   async disconnect(): Promise<void> {
+    this.intentionalDisconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (!this.connected || !this.socket) return;
     this.socket.end(undefined);
     this.socket = null;
@@ -394,8 +420,12 @@ export class WhatsAppChannel implements ChannelAdapter {
       const text = this.extractText(msg);
       const attachments = this.extractAttachments(msg);
 
-      // Store message for later downloadFile calls
+      // Store message for later downloadFile calls (capped to prevent memory leak)
       if (attachments.length > 0) {
+        if (this.lastMessageByJid.size >= WhatsAppChannel.MAX_LAST_MESSAGES) {
+          const oldest = this.lastMessageByJid.keys().next().value;
+          if (oldest) this.lastMessageByJid.delete(oldest);
+        }
         this.lastMessageByJid.set(jid, msg);
       }
 

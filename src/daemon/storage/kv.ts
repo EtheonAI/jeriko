@@ -1,6 +1,19 @@
 // Storage — Key-value store backed by SQLite.
 
 import { getDatabase } from "./db.js";
+import { getLogger } from "../../shared/logger.js";
+
+const log = getLogger();
+
+/** Parse JSON safely — returns null and logs on corrupt data. */
+function safeParseKV(key: string, json: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch {
+    log.warn(`Corrupt JSON in KV store for key "${key}": ${json.slice(0, 80)}`);
+    return null;
+  }
+}
 
 /**
  * Set a key-value pair. The value is JSON-serialized before storage.
@@ -27,7 +40,7 @@ export function kvGet<T = unknown>(key: string): T | null {
     .query<{ value: string }, [string]>("SELECT value FROM key_value WHERE key = ?")
     .get(key);
   if (row === null) return null;
-  return JSON.parse(row.value) as T;
+  return safeParseKV(key, row.value) as T;
 }
 
 /**
@@ -71,6 +84,6 @@ export function kvList(prefix?: string): Array<{ key: string; value: unknown }> 
 
   return rows.map((row) => ({
     key: row.key,
-    value: JSON.parse(row.value) as unknown,
+    value: safeParseKV(row.key, row.value),
   }));
 }

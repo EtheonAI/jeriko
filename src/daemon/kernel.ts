@@ -111,10 +111,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
   // Step 0: Load secrets from ~/.config/jeriko/.env into process.env.
   // Must run before config load — some config values read process.env.
-  const { loadSecrets } = await import("../shared/secrets.js");
-  loadSecrets();
+  try {
+    const { loadSecrets } = await import("../shared/secrets.js");
+    loadSecrets();
+  } catch (err) {
+    console.error(`Failed to load secrets: ${err}`);
+    // Continue — secrets may not exist yet (first boot before init)
+  }
 
-  // Step 1: Load configuration
+  // Step 1: Load configuration (loadConfig always returns valid defaults even if files are missing)
   const config = loadConfig();
   state.config = config;
 
@@ -487,9 +492,13 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     log.warn(`Kernel boot: step 10.6 — relay client failed (non-fatal): ${err}`);
   }
 
-  // Step 11: Load plugins
+  // Step 11: Load plugins (non-fatal — broken plugins shouldn't prevent boot)
   const plugins = new PluginLoader();
-  await plugins.loadAll();
+  try {
+    await plugins.loadAll();
+  } catch (err) {
+    log.warn(`Kernel boot: step 11 — plugin loading failed (non-fatal): ${err}`);
+  }
   state.plugins = plugins;
   log.info("Kernel boot: step 11 — plugins loaded");
 
@@ -523,8 +532,12 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     log.warn(`Share pruning failed (non-fatal): ${err}`);
   }
 
-  // Step 13: Connect channels
-  await channels.connectAll();
+  // Step 13: Connect channels (non-fatal — network issues shouldn't prevent boot)
+  try {
+    await channels.connectAll();
+  } catch (err) {
+    log.warn(`Kernel boot: step 13 — channel connection failed (non-fatal): ${err}`);
+  }
 
   log.info("Kernel boot: step 13 — channels connected");
 
@@ -1642,61 +1655,55 @@ export async function shutdown(): Promise<void> {
   state.phase = "shutting_down";
   log.info("Kernel shutdown initiated");
 
+  // Each shutdown step is wrapped in try/catch so one failure
+  // doesn't prevent subsequent resources from being cleaned up.
+
   // 1. Stop HTTP server
-  stopServer();
+  try { stopServer(); } catch (e) { log.error(`Shutdown: HTTP server error: ${e}`); }
   state.server = null;
-  log.info("Shutdown: HTTP server stopped");
 
   // 1.5. Stop socket IPC server
-  stopSocketServer();
-  log.info("Shutdown: socket IPC server stopped");
+  try { stopSocketServer(); } catch (e) { log.error(`Shutdown: socket IPC error: ${e}`); }
 
   // 2. Disconnect channels
   if (state.channels) {
-    await state.channels.disconnectAll();
+    try { await state.channels.disconnectAll(); } catch (e) { log.error(`Shutdown: channels error: ${e}`); }
     state.channels = null;
-    log.info("Shutdown: channels disconnected");
   }
 
   // 2.5. Disconnect relay client
   if (state.relay) {
-    state.relay.disconnect();
+    try { state.relay.disconnect(); } catch (e) { log.error(`Shutdown: relay error: ${e}`); }
     state.relay = null;
-    log.info("Shutdown: relay client disconnected");
   }
 
   // 2.6. Shut down connectors
   if (state.connectors) {
-    await state.connectors.shutdownAll();
+    try { await state.connectors.shutdownAll(); } catch (e) { log.error(`Shutdown: connectors error: ${e}`); }
     state.connectors = null;
-    log.info("Shutdown: connectors shut down");
   }
 
   // 3. Stop trigger engine
   if (state.triggers) {
-    await state.triggers.stop();
+    try { await state.triggers.stop(); } catch (e) { log.error(`Shutdown: trigger engine error: ${e}`); }
     state.triggers = null;
-    log.info("Shutdown: trigger engine stopped");
   }
 
   // 4. Unload plugins
   if (state.plugins) {
-    await state.plugins.unloadAll();
+    try { await state.plugins.unloadAll(); } catch (e) { log.error(`Shutdown: plugins error: ${e}`); }
     state.plugins = null;
-    log.info("Shutdown: plugins unloaded");
   }
 
   // 5. Drain worker pool
   if (state.workers) {
-    await state.workers.drain();
+    try { await state.workers.drain(); } catch (e) { log.error(`Shutdown: worker pool error: ${e}`); }
     state.workers = null;
-    log.info("Shutdown: worker pool drained");
   }
 
   // 6. Close database
-  closeDatabase();
+  try { closeDatabase(); } catch (e) { log.error(`Shutdown: database error: ${e}`); }
   state.db = null;
-  log.info("Shutdown: database closed");
 
   // 7. Close logger
   log.info("Shutdown: complete");
@@ -1752,10 +1759,14 @@ function installSignalHandlers(): void {
   process.on("SIGINT", () => handler("SIGINT"));
   process.on("SIGTERM", () => handler("SIGTERM"));
 
-  // Catch unhandled errors to prevent silent crashes
-  process.on("uncaughtException", (err) => {
+  // Catch unhandled errors — log, cleanup, exit non-zero
+  process.on("uncaughtException", async (err) => {
     log.error(`Uncaught exception: ${err.message}`, { stack: err.stack });
-    handler("uncaughtException");
+    await shutdown();
+    for (const hook of shutdownHooks) {
+      try { await hook(); } catch { /* best-effort */ }
+    }
+    process.exit(1);
   });
 
   process.on("unhandledRejection", (reason) => {

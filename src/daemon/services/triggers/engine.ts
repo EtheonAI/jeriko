@@ -802,7 +802,9 @@ export class TriggerEngine {
         // Run the agent asynchronously — don't block the trigger engine.
         // Fire-and-forget with error logging. The agent creates its own
         // session, runs the prompt, and the response is logged.
-        this.executeAgentAction(trigger.id, action.prompt, payload).catch((err) => {
+        this.executeAgentAction(trigger.id, action.prompt, payload).then(() => {
+          this.resetErrorCount(trigger);
+        }).catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`Trigger ${trigger.id}: agent action failed — ${msg}`);
           this.recordError(trigger);

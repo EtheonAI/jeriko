@@ -259,7 +259,11 @@ async function runInteractiveInit(prompter: WizardPrompter): Promise<void> {
   }
   if (envLines.length > 0) {
     const existing = existsSync(envPath) ? readFileSync(envPath, "utf-8") : "";
-    const newLines = envLines.filter((l) => !existing.includes(l.split("=")[0]!));
+    const existingLines = existing.split("\n");
+    const newLines = envLines.filter((l) => {
+      const key = l.split("=")[0]!;
+      return !existingLines.some((el) => el.startsWith(`${key}=`));
+    });
     if (newLines.length > 0) {
       writeFileSync(envPath, existing + newLines.join("\n") + "\n");
     }

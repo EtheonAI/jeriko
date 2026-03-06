@@ -303,12 +303,10 @@ export function handleOAuthStart(
     authParams.set("code_challenge_method", "S256");
   }
 
-  // Extra auth params (e.g. Google's access_type=offline)
+  // Extra auth params (e.g. Google's access_type=offline, Dropbox's token_access_type=offline)
   if (provider.extraTokenParams) {
     for (const [key, value] of Object.entries(provider.extraTokenParams)) {
-      if (key === "access_type" || key === "prompt") {
-        authParams.set(key, value);
-      }
+      authParams.set(key, value);
     }
   }
 
