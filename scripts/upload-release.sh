@@ -95,9 +95,15 @@ binary_filename() {
 if [ "$DO_CDN" = true ]; then
     info "Uploading to Cloudflare R2 (bucket: $R2_BUCKET)..."
 
-    # Resolve wrangler: global install or npx
+    # Resolve wrangler: global install, local install, or npx
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+    LOCAL_WRANGLER="$ROOT_DIR/apps/relay-worker/node_modules/.bin/wrangler"
+
     if command -v wrangler >/dev/null 2>&1; then
         WRANGLER="wrangler"
+    elif [ -x "$LOCAL_WRANGLER" ]; then
+        WRANGLER="$LOCAL_WRANGLER"
     elif command -v npx >/dev/null 2>&1; then
         WRANGLER="npx wrangler"
     else
@@ -116,48 +122,48 @@ if [ "$DO_CDN" = true ]; then
 
         r2_key="releases/${VERSION}/${filename}"
         info "  Uploading $filename → $r2_key"
-        $WRANGLER r2 object put --remote "${R2_BUCKET}/${r2_key}" --file "$local_path" --content-type "application/octet-stream"
+        $WRANGLER r2 object put "${R2_BUCKET}/${r2_key}" --file "$local_path" --ct "application/octet-stream"
         ok "  $platform uploaded"
     done
 
     # Upload manifest
     info "  Uploading manifest.json"
-    $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/${VERSION}/manifest.json" \
+    $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/manifest.json" \
         --file "$DIST_DIR/manifest.json" \
-        --content-type "application/json"
+        --ct "application/json"
     ok "  manifest.json uploaded"
 
     # Upload templates archive if present
     if [ -f "$DIST_DIR/templates.tar.gz" ]; then
         info "  Uploading templates.tar.gz"
-        $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/${VERSION}/templates.tar.gz" \
+        $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/templates.tar.gz" \
             --file "$DIST_DIR/templates.tar.gz" \
-            --content-type "application/gzip"
+            --ct "application/gzip"
         ok "  templates.tar.gz uploaded"
     fi
 
     # Upload agent system prompt
     if [ -f "$DIST_DIR/agent.md" ]; then
         info "  Uploading agent.md"
-        $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/${VERSION}/agent.md" \
+        $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/agent.md" \
             --file "$DIST_DIR/agent.md" \
-            --content-type "text/markdown"
+            --ct "text/markdown"
         ok "  agent.md uploaded"
     fi
 
     # Update "latest" pointer
     echo -n "$VERSION" > "$DIST_DIR/latest"
-    $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/latest" \
+    $WRANGLER r2 object put "${R2_BUCKET}/releases/latest" \
         --file "$DIST_DIR/latest" \
-        --content-type "text/plain"
+        --ct "text/plain"
     ok "  'latest' pointer → $VERSION"
 
     # Optionally update "stable" pointer
     if [ "$DO_STABLE" = true ]; then
         echo -n "$VERSION" > "$DIST_DIR/stable"
-        $WRANGLER r2 object put --remote "${R2_BUCKET}/releases/stable" \
+        $WRANGLER r2 object put "${R2_BUCKET}/releases/stable" \
             --file "$DIST_DIR/stable" \
-            --content-type "text/plain"
+            --ct "text/plain"
         ok "  'stable' pointer → $VERSION"
     fi
 
