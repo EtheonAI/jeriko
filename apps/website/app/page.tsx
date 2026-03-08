@@ -98,7 +98,7 @@ export default function Home() {
         </p>
         <div className="actions">
           <a href="/docs/installation">Install</a>
-          <a href="https://github.com/EtheonAI/jeriko" target="_blank" rel="noreferrer">
+          <a href="https://github.com/EtheonAI/jerikoai" target="_blank" rel="noreferrer">
             GitHub
           </a>
           <a href="/docs">API Docs</a>
