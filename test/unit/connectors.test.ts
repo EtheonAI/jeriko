@@ -567,10 +567,10 @@ describe("getConfiguredConnectorCount", () => {
     expect(getConfiguredConnectorCount()).toBe(3);
   });
 
-  it("does not count partially configured connectors", () => {
-    // PayPal needs BOTH client_id and client_secret
-    process.env.PAYPAL_CLIENT_ID = "fake_id";
-    // Missing PAYPAL_CLIENT_SECRET
+  it("does not count partially configured connectors (Twilio)", () => {
+    // Twilio needs BOTH account_sid and auth_token
+    process.env.TWILIO_ACCOUNT_SID = "AC_fake";
+    // Missing TWILIO_AUTH_TOKEN
     expect(getConfiguredConnectorCount()).toBe(0);
   });
 

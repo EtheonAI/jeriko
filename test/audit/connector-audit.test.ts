@@ -589,17 +589,17 @@ describe("isConnectorConfigured", () => {
     expect(isConnectorConfigured("github")).toBe(true);
   });
 
-  test("requires ALL non-alternative env vars (PayPal)", () => {
-    // PayPal requires PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET
-    expect(isConnectorConfigured("paypal")).toBe(false);
+  test("requires ALL non-alternative env vars (Twilio)", () => {
+    // Twilio requires TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN
+    expect(isConnectorConfigured("twilio")).toBe(false);
 
     // Set only one — still not configured
-    process.env.PAYPAL_CLIENT_ID = "fake_id";
-    expect(isConnectorConfigured("paypal")).toBe(false);
+    process.env.TWILIO_ACCOUNT_SID = "AC_fake";
+    expect(isConnectorConfigured("twilio")).toBe(false);
 
     // Set both — now configured
-    process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
-    expect(isConnectorConfigured("paypal")).toBe(true);
+    process.env.TWILIO_AUTH_TOKEN = "fake_token";
+    expect(isConnectorConfigured("twilio")).toBe(true);
   });
 });
 

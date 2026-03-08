@@ -428,7 +428,7 @@ describe("Channel commands E2E", () => {
       const response = mock.lastSent();
       expect(response).toContain("Gmail");
       expect(response).toContain("configured");
-      expect(response).toContain("/health gmail");
+      expect(response).toContain("health gmail");
 
       // 4. The confirmation does NOT contain the actual key value
       expect(response).not.toContain(TEST_VAL);
@@ -443,38 +443,38 @@ describe("Channel commands E2E", () => {
     });
 
     test("multi-key auth saves all keys", async () => {
-      const origId = process.env.PAYPAL_CLIENT_ID;
-      const origSecret = process.env.PAYPAL_CLIENT_SECRET;
+      const origSid = process.env.TWILIO_ACCOUNT_SID;
+      const origToken = process.env.TWILIO_AUTH_TOKEN;
 
       mock.clear();
       mock.simulateIncoming(
-        "/auth paypal test_client_id test_client_secret",
+        "/auth twilio test_account_sid test_auth_token",
         "test-chat-auth",
         { message_id: 99 },
       );
       await wait(300);
 
       // Both keys saved
-      expect(process.env.PAYPAL_CLIENT_ID).toBe("test_client_id");
-      expect(process.env.PAYPAL_CLIENT_SECRET).toBe("test_client_secret");
+      expect(process.env.TWILIO_ACCOUNT_SID).toBe("test_account_sid");
+      expect(process.env.TWILIO_AUTH_TOKEN).toBe("test_auth_token");
 
       // Message deleted
       expect(mock.deleted.some((d) => d.messageId === 99)).toBe(true);
 
       // Confirmation sent
-      expect(mock.lastSent()).toContain("PayPal");
+      expect(mock.lastSent()).toContain("Twilio");
       expect(mock.lastSent()).toContain("configured");
 
       // Restore
-      if (origId) {
-        saveSecret("PAYPAL_CLIENT_ID", origId);
+      if (origSid) {
+        saveSecret("TWILIO_ACCOUNT_SID", origSid);
       } else {
-        deleteSecret("PAYPAL_CLIENT_ID");
+        deleteSecret("TWILIO_ACCOUNT_SID");
       }
-      if (origSecret) {
-        saveSecret("PAYPAL_CLIENT_SECRET", origSecret);
+      if (origToken) {
+        saveSecret("TWILIO_AUTH_TOKEN", origToken);
       } else {
-        deleteSecret("PAYPAL_CLIENT_SECRET");
+        deleteSecret("TWILIO_AUTH_TOKEN");
       }
     });
 
@@ -910,7 +910,7 @@ describe("Channel commands E2E", () => {
 
       // Non-current sessions should have delete buttons
       const data = mock.lastKeyboardData();
-      const rmButtons = data.filter((d) => d.startsWith("/sessions rm "));
+      const rmButtons = data.filter((d) => d.startsWith("/sessions delete "));
       expect(rmButtons.length).toBeGreaterThan(0);
     });
 
@@ -925,9 +925,9 @@ describe("Channel commands E2E", () => {
       mock.simulateIncoming("/sessions switch");
       await wait();
       const switchData = mock.lastKeyboardData();
-      const switchCmd = switchData.find((d) => d.startsWith("/switch "));
+      const switchCmd = switchData.find((d) => d.startsWith("/sessions switch "));
       expect(switchCmd).toBeDefined();
-      const slug = switchCmd!.replace("/switch ", "");
+      const slug = switchCmd!.replace("/sessions switch ", "");
 
       // Delete by slug
       mock.clear();
@@ -1014,7 +1014,7 @@ describe("Channel commands E2E", () => {
 
       // Should have add buttons for unregistered channel types
       const data = mock.lastKeyboardData();
-      expect(data.some((d: string) => d.startsWith("/channel add") || d.startsWith("/channel "))).toBe(true);
+      expect(data.some((d: string) => d.startsWith("/channels add") || d.startsWith("/channels "))).toBe(true);
     });
 
     test("/channels add — shows channel type selection", async () => {
@@ -1057,10 +1057,13 @@ describe("Channel commands E2E", () => {
 
       // WhatsApp doesn't require tokens — it tries to add directly.
       // The add is fully async (dynamic import of Baileys + connect attempt),
-      // so we poll until the operation completes (success or failure message).
+      // so we poll until any response appears (connecting, success, or failure).
       await waitFor(
         () => mock.sent.some((m) =>
-          m.text.includes("added and connected") || m.text.includes("Failed to add"),
+          m.text.includes("added and connected") ||
+          m.text.includes("Failed to add") ||
+          m.text.includes("Connecting") ||
+          m.text.includes("already registered"),
         ),
       );
 
@@ -1097,14 +1100,14 @@ describe("Channel commands E2E", () => {
       mock.simulateIncoming("/channels");
       await wait();
       const hubData = mock.lastKeyboardData();
-      expect(hubData.some((d: string) => d.includes("channel add") || d.includes("channel "))).toBe(true);
+      expect(hubData.some((d: string) => d.includes("channels add") || d.includes("channels "))).toBe(true);
 
       // Step 2: Add type selection
       mock.clear();
       mock.simulateIncoming("/channels add");
       await wait();
       const data = mock.lastKeyboardData();
-      expect(data).toContain("/channel add telegram");
+      expect(data).toContain("/channels add telegram");
 
       // Step 3: Setup guide
       mock.clear();

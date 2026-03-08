@@ -52,8 +52,8 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     name: "paypal",
     label: "PayPal",
     description: "Orders, subscriptions, payouts, invoices",
-    required: ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"],
-    optional: ["PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX", "PAYPAL_MODE"],
+    required: ["PAYPAL_ACCESS_TOKEN"],
+    optional: ["PAYPAL_REFRESH_TOKEN", "PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX", "PAYPAL_MODE"],
     limitParam: "page_size",
   },
   {
