@@ -118,6 +118,11 @@ export async function* runAgent(
   if (!caps.toolCall) {
     enabledTools = [];
     log.debug(`Agent: tools disabled — model "${resolvedModelId}" does not support tool calling`);
+    yield {
+      type: "text_delta",
+      content: `⚠ Model "${config.model}" does not support tool calling — running in chat-only mode.\n` +
+        `  Tools (bash, browse, edit, etc.) are disabled. Switch to a tool-capable model for full agent features.\n\n`,
+    };
   }
 
   // ─── Step 3: Build driver config with dynamic values ─────────────────
