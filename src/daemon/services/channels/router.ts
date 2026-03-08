@@ -1199,11 +1199,29 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           }
 
           if (isConnectorConfigured(connName)) {
-            await safeSend(
-              metadata,
-              `${provider.label} is already connected.\nUse /connectors disconnect ${connName} to remove it first.`,
-            );
-            return;
+            // Check health — if the token is stale/broken, auto-disconnect and reconnect
+            const connectorMgr = opts.getConnectors?.();
+            if (connectorMgr) {
+              const health = await connectorMgr.health(connName);
+              if (health.healthy) {
+                await safeSend(
+                  metadata,
+                  `${provider.label} is already connected.\nUse /connectors disconnect ${connName} to remove it first.`,
+                );
+                return;
+              }
+              // Unhealthy — clear stale credentials and fall through to OAuth
+              const { deleteSecret } = await import("../../../shared/secrets.js");
+              deleteSecret(provider.tokenEnvVar);
+              if (provider.refreshTokenEnvVar) deleteSecret(provider.refreshTokenEnvVar);
+              await connectorMgr.evict(connName);
+            } else {
+              await safeSend(
+                metadata,
+                `${provider.label} is already connected.\nUse /connectors disconnect ${connName} to remove it first.`,
+              );
+              return;
+            }
           }
 
           if (process.env.STRIPE_BILLING_SECRET_KEY) {
