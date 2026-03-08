@@ -15,6 +15,7 @@
 import type { OutputFormat } from "../shared/types.js";
 import { parseArgs, flagStr, flagBool } from "../shared/args.js";
 import { fail, setOutputFormat } from "../shared/output.js";
+import { capture } from "../shared/telemetry.js";
 
 /** Flags consumed by the dispatcher — stripped before passing to commands.
  *  Note: --help is NOT stripped — commands handle their own --help for per-command docs.
@@ -117,7 +118,6 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: square } = await import("./commands/integrations/square.js");
   const { command: gitlab } = await import("./commands/integrations/gitlab.js");
   const { command: cloudflare } = await import("./commands/integrations/cloudflare.js");
-  const { command: digitalocean } = await import("./commands/integrations/digitalocean.js");
   const { command: notion } = await import("./commands/integrations/notion.js");
   const { command: linear } = await import("./commands/integrations/linear.js");
   const { command: jira } = await import("./commands/integrations/jira.js");
@@ -125,7 +125,6 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: asana } = await import("./commands/integrations/asana.js");
   const { command: mailchimp } = await import("./commands/integrations/mailchimp.js");
   const { command: dropbox } = await import("./commands/integrations/dropbox.js");
-  const { command: salesforce } = await import("./commands/integrations/salesforce.js");
   const { command: connectors } = await import("./commands/integrations/connectors.js");
 
   // Dev
@@ -166,8 +165,8 @@ async function loadBuiltinCommands(): Promise<void> {
   registerAll([notes, remind, calendar, contacts, music, clipboard, window, camera, open, location], "os");
   registerAll([
     stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, hubspot, shopify,
-    slack, discord, sendgrid, square, gitlab, cloudflare, digitalocean,
-    notion, linear, jira, airtable, asana, mailchimp, dropbox, salesforce,
+    slack, discord, sendgrid, square, gitlab, cloudflare,
+    notion, linear, jira, airtable, asana, mailchimp, dropbox,
     connectors,
   ], "integrations");
   registerAll([code, create, dev, parallel], "dev");
@@ -349,6 +348,8 @@ export async function dispatcher(argv: string[]): Promise<void> {
     }
     fail(message);
   }
+
+  capture("command_run", { command: cmdName });
 
   try {
     await handler.run(cmdArgs);

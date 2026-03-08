@@ -52,6 +52,7 @@ echo "Prefix:  $PREFIX"
 echo "OS:      $OS"
 echo ""
 
+
 # Check Bun runtime
 command -v bun >/dev/null 2>&1 || err "Bun >= 1.1 required. Install: https://bun.sh"
 BUN_VER=$(bun --version 2>/dev/null || echo "0.0.0")
@@ -122,36 +123,14 @@ fi
 ok "Support files installed"
 
 # ── Config ──────────────────────────────────────────────────────
-info "Setting up config..."
+info "Checking config..."
 
-if [ ! -f "$CONF_DIR/config.json" ]; then
-  cat > "$CONF_DIR/config.json" << 'CONF'
-{
-  "agent": {
-    "model": "claude"
-  },
-  "channels": {
-    "telegram": {
-      "token": "",
-      "adminIds": []
-    }
-  },
-  "logging": {
-    "level": "info"
-  }
-}
-CONF
-  ok "Config created → $CONF_DIR/config.json"
+if [ -f "$CONF_DIR/config.json" ]; then
+  ok "Config exists → $(tildify "$CONF_DIR/config.json")"
 else
-  ok "Config exists → $CONF_DIR/config.json"
-fi
-
-# Migrate existing .env if present
-if [ -f "$JERIKO_ROOT/.env" ] && [ ! -f "$CONF_DIR/.env.migrated" ]; then
-  info "Migrating existing .env..."
-  # Read key env vars and write to config
-  touch "$CONF_DIR/.env.migrated"
-  ok "Migration marker set (env vars loaded at runtime from environment)"
+  # No config yet — the onboarding wizard creates it on first launch.
+  # This ensures the user picks their provider before config is written.
+  ok "Config will be created on first launch (onboarding wizard)"
 fi
 
 # ── Shell completions ──────────────────────────────────────────
@@ -676,10 +655,17 @@ echo "    jeriko <TAB>                 # list all commands"
 echo "    jeriko stripe <TAB>          # list subcommands"
 echo ""
 
-# ── Run onboarding wizard (first install only) ──────────────────
-if [ ! -f "$CONF_DIR/config.json" ] || [ "$(cat "$CONF_DIR/config.json" 2>/dev/null)" = "{}" ]; then
-  if [ -t 0 ]; then
-    info "Starting setup wizard..."
-    "$BIN_DIR/jeriko" onboard || true
-  fi
+# ── First launch hint ─────────────────────────────────────────────
+if [ ! -f "$CONF_DIR/config.json" ]; then
+  echo -e "  ${BOLD}Run 'jeriko' to start the setup wizard.${NC}"
+  echo ""
+fi
+
+# ── Telemetry (opt-out: DO_NOT_TRACK=1) ────────────────────────
+if [ "${DO_NOT_TRACK:-0}" != "1" ]; then
+  _ph_uid="${JERIKO_USER_ID:-anonymous}"
+  curl -s -o /dev/null --max-time 3 \
+    -H "Content-Type: application/json" \
+    -d "{\"api_key\":\"phc_tZSl9DLWFuWV7ozBohDcJM74U3OFoN9P3QLp5IsV4f1\",\"event\":\"install\",\"distinct_id\":\"$_ph_uid\",\"properties\":{\"\$os\":\"$(uname -s)\",\"method\":\"source\"}}" \
+    "https://us.i.posthog.com/capture/" &
 fi

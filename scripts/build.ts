@@ -55,26 +55,36 @@ const DIST = path.join(ROOT, "dist");
  * If not set, the define injects `undefined` and users must provide client IDs
  * via their own env vars (self-hosted mode).
  */
+/**
+ * Hardcoded relay auth secret — shared key between all installations and the relay.
+ * This is NOT a secret per se — it's a shared API key (like Firebase API keys).
+ * Real security is per-user (JERIKO_USER_ID) + server-side rate limiting.
+ * Can be overridden via BAKED_RELAY_AUTH_SECRET env var in CI if rotated.
+ */
+const RELAY_AUTH_SECRET = process.env.BAKED_RELAY_AUTH_SECRET
+  ?? "32a52cbdd799c10fb4d055b1ab3106a43e6712c0b4b4022bf460f9d3260e8827";
+
 const BAKED_OAUTH_DEFINES: Record<string, string> = {
-  __BAKED_GITHUB_CLIENT_ID__:    JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),
-  __BAKED_GOOGLE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_GOOGLE_CLIENT_ID    ?? ""),
-  __BAKED_MICROSOFT_CLIENT_ID__: JSON.stringify(process.env.BAKED_MICROSOFT_CLIENT_ID ?? ""),
-  __BAKED_X_CLIENT_ID__:         JSON.stringify(process.env.BAKED_X_CLIENT_ID         ?? ""),
-  __BAKED_VERCEL_CLIENT_ID__:    JSON.stringify(process.env.BAKED_VERCEL_CLIENT_ID    ?? ""),
-  __BAKED_STRIPE_CLIENT_ID__:    JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
-  __BAKED_HUBSPOT_CLIENT_ID__:      JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID      ?? ""),
-  __BAKED_SHOPIFY_CLIENT_ID__:      JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID      ?? ""),
-  __BAKED_SQUARE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_SQUARE_CLIENT_ID       ?? ""),
-  __BAKED_GITLAB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITLAB_CLIENT_ID       ?? ""),
-  __BAKED_DIGITALOCEAN_CLIENT_ID__: JSON.stringify(process.env.BAKED_DIGITALOCEAN_CLIENT_ID ?? ""),
-  __BAKED_NOTION_CLIENT_ID__:       JSON.stringify(process.env.BAKED_NOTION_CLIENT_ID       ?? ""),
-  __BAKED_LINEAR_CLIENT_ID__:       JSON.stringify(process.env.BAKED_LINEAR_CLIENT_ID       ?? ""),
-  __BAKED_ATLASSIAN_CLIENT_ID__:    JSON.stringify(process.env.BAKED_ATLASSIAN_CLIENT_ID    ?? ""),
-  __BAKED_AIRTABLE_CLIENT_ID__:     JSON.stringify(process.env.BAKED_AIRTABLE_CLIENT_ID     ?? ""),
-  __BAKED_ASANA_CLIENT_ID__:        JSON.stringify(process.env.BAKED_ASANA_CLIENT_ID        ?? ""),
-  __BAKED_MAILCHIMP_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MAILCHIMP_CLIENT_ID    ?? ""),
-  __BAKED_DROPBOX_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DROPBOX_CLIENT_ID      ?? ""),
-  __BAKED_SALESFORCE_CLIENT_ID__:   JSON.stringify(process.env.BAKED_SALESFORCE_CLIENT_ID   ?? ""),
+  __BAKED_POSTHOG_KEY__:            JSON.stringify(process.env.BAKED_POSTHOG_KEY ?? "phc_tZSl9DLWFuWV7ozBohDcJM74U3OFoN9P3QLp5IsV4f1"),
+  __BAKED_RELAY_AUTH_SECRET__:       JSON.stringify(RELAY_AUTH_SECRET),
+  __BAKED_GITHUB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),
+  __BAKED_GOOGLE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GOOGLE_CLIENT_ID    ?? ""),
+  __BAKED_MICROSOFT_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MICROSOFT_CLIENT_ID ?? ""),
+  __BAKED_X_CLIENT_ID__:            JSON.stringify(process.env.BAKED_X_CLIENT_ID         ?? ""),
+  __BAKED_VERCEL_CLIENT_ID__:       JSON.stringify(process.env.BAKED_VERCEL_CLIENT_ID    ?? ""),
+  __BAKED_STRIPE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
+  __BAKED_HUBSPOT_CLIENT_ID__:      JSON.stringify(process.env.BAKED_HUBSPOT_CLIENT_ID   ?? ""),
+  __BAKED_SHOPIFY_CLIENT_ID__:      JSON.stringify(process.env.BAKED_SHOPIFY_CLIENT_ID   ?? ""),
+  __BAKED_SQUARE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_SQUARE_CLIENT_ID    ?? ""),
+  __BAKED_GITLAB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITLAB_CLIENT_ID    ?? ""),
+  __BAKED_NOTION_CLIENT_ID__:       JSON.stringify(process.env.BAKED_NOTION_CLIENT_ID    ?? ""),
+  __BAKED_LINEAR_CLIENT_ID__:       JSON.stringify(process.env.BAKED_LINEAR_CLIENT_ID    ?? ""),
+  __BAKED_ATLASSIAN_CLIENT_ID__:    JSON.stringify(process.env.BAKED_ATLASSIAN_CLIENT_ID ?? ""),
+  __BAKED_AIRTABLE_CLIENT_ID__:     JSON.stringify(process.env.BAKED_AIRTABLE_CLIENT_ID  ?? ""),
+  __BAKED_ASANA_CLIENT_ID__:        JSON.stringify(process.env.BAKED_ASANA_CLIENT_ID     ?? ""),
+  __BAKED_MAILCHIMP_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MAILCHIMP_CLIENT_ID ?? ""),
+  __BAKED_DROPBOX_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DROPBOX_CLIENT_ID   ?? ""),
+  __BAKED_DISCORD_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DISCORD_CLIENT_ID   ?? ""),
 };
 
 /** Packages that are always external (optional deps, never bundled). */

@@ -262,6 +262,79 @@ h1 {
 }
 
 /* ===================================================================
+   Capabilities marquee (homepage)
+   =================================================================== */
+
+.section-capabilities {
+  margin-top: 48px;
+}
+
+.section-capabilities > h2 {
+  font-size: 24px;
+  margin: 0 0 20px;
+}
+
+.marquee-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: hidden;
+  mask-image: linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 8%, black 92%, transparent 100%);
+}
+
+.marquee-track {
+  overflow: hidden;
+}
+
+.marquee-content {
+  display: flex;
+  gap: 10px;
+  width: max-content;
+  animation: marquee-scroll 40s linear infinite;
+}
+
+.marquee-reverse .marquee-content {
+  animation-direction: reverse;
+}
+
+@keyframes marquee-scroll {
+  0% { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.cap-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(24, 24, 27, 0.6);
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.cap-pill:hover {
+  border-color: var(--brand);
+  color: var(--text);
+}
+
+.cap-icon {
+  flex-shrink: 0;
+  color: var(--brand);
+}
+
+@media (max-width: 840px) {
+  .marquee-content {
+    animation-duration: 30s;
+  }
+}
+
+/* ===================================================================
    Install box (homepage)
    =================================================================== */
 

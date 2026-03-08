@@ -9,8 +9,10 @@
  */
 
 import { dispatcher } from "./cli/dispatcher.js";
+import { capture } from "./shared/telemetry.js";
 
 const args = process.argv.slice(2);
+capture("cli_start", { command: args[0] ?? "chat", os: process.platform, arch: process.arch });
 dispatcher(args).catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
