@@ -3,6 +3,10 @@
 
 import { getLogger, Logger } from "../shared/logger.js";
 import { loadConfig, type JerikoConfig, type ProviderConfig } from "../shared/config.js";
+
+// Bundled AGENT.md — inlined at compile time, always available even if
+// ~/.config/jeriko/agent.md is missing (e.g. partial install).
+import BUNDLED_AGENT_MD from "../../AGENT.md" with { type: "text" };
 import { initDatabase, closeDatabase } from "./storage/db.js";
 import { ChannelRegistry } from "./services/channels/index.js";
 import { startChannelRouter } from "./services/channels/router.js";
@@ -259,6 +263,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
         const parent = dirname(dir);
         if (parent === dir) break;
         dir = parent;
+      }
+      if (!systemPrompt && BUNDLED_AGENT_MD) {
+        systemPrompt = BUNDLED_AGENT_MD;
+        log.info(`Kernel boot: using bundled AGENT.md fallback (${systemPrompt.length} chars)`);
       }
       if (!systemPrompt) {
         log.warn(`Kernel boot: no agent.md found at ${promptPath} — agent will have no system prompt`);

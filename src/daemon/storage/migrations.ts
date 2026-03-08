@@ -10,17 +10,17 @@
  *   - Adding a new migration: import the .sql file and append to MIGRATIONS array.
  */
 
-// @ts-expect-error — Bun text import
+
 import init from "./migrations/0001_init.sql" with { type: "text" };
-// @ts-expect-error — Bun text import
+
 import orchestrator from "./migrations/0002_orchestrator.sql" with { type: "text" };
-// @ts-expect-error — Bun text import
+
 import triggerConsolidate from "./migrations/0003_trigger_consolidate.sql" with { type: "text" };
-// @ts-expect-error — Bun text import
+
 import share from "./migrations/0004_share.sql" with { type: "text" };
-// @ts-expect-error — Bun text import
+
 import billing from "./migrations/0005_billing.sql" with { type: "text" };
-// @ts-expect-error — Bun text import
+
 import billingConsent from "./migrations/0006_billing_consent.sql" with { type: "text" };
 
 export interface Migration {

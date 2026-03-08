@@ -9,6 +9,10 @@
 
 import { readFileSync } from "node:fs";
 
+// Bundled AGENT.md — Bun inlines at compile time so it's always available,
+// even if ~/.config/jeriko/agent.md is missing (e.g. partial install).
+import BUNDLED_AGENT_MD from "../../AGENT.md" with { type: "text" };
+
 import type {
   SessionInfo,
   ChannelInfo,
@@ -1410,9 +1414,13 @@ async function loadSystemPrompt(): Promise<string> {
 
   let systemPrompt = "";
 
+  // Try user's config copy first, then fall back to the bundled AGENT.md
   const promptPath = pathJoin(getConfigDir(), "agent.md");
   if (exists(promptPath)) {
     systemPrompt = readFileSync(promptPath, "utf-8");
+  } else if (BUNDLED_AGENT_MD) {
+    // Compiled into the binary at build time — always available
+    systemPrompt = BUNDLED_AGENT_MD;
   }
 
   // Inject runtime system context so the AI knows what machine it's on
