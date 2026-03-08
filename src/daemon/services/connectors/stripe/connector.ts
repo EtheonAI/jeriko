@@ -96,7 +96,7 @@ export class StripeConnector extends ConnectorBase {
   // ---------------------------------------------------------------------------
 
   private async doRefresh(): Promise<string> {
-    const res = await fetch("https://api.stripe.com/v1/oauth/token", {
+    const res = await fetch("https://connect.stripe.com/oauth/token", {
       method: "POST",
       headers: {
         Authorization: `Basic ${Buffer.from(this.secretKey + ":").toString("base64")}`,

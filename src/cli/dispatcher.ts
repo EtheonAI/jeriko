@@ -107,9 +107,7 @@ async function loadBuiltinCommands(): Promise<void> {
   const { command: twilio } = await import("./commands/integrations/twilio.js");
   const { command: x } = await import("./commands/integrations/x.js");
   const { command: gdrive } = await import("./commands/integrations/gdrive.js");
-  const { command: onedrive } = await import("./commands/integrations/onedrive.js");
   const { command: gmail } = await import("./commands/integrations/gmail.js");
-  const { command: outlook } = await import("./commands/integrations/outlook.js");
   const { command: hubspot } = await import("./commands/integrations/hubspot.js");
   const { command: shopify } = await import("./commands/integrations/shopify.js");
   const { command: slack } = await import("./commands/integrations/slack.js");
@@ -164,7 +162,7 @@ async function loadBuiltinCommands(): Promise<void> {
   registerAll([email, msg, notify, audio], "comms");
   registerAll([notes, remind, calendar, contacts, music, clipboard, window, camera, open, location], "os");
   registerAll([
-    stripe, github, paypal, vercel, twilio, x, gdrive, onedrive, gmail, outlook, hubspot, shopify,
+    stripe, github, paypal, vercel, twilio, x, gdrive, gmail, hubspot, shopify,
     slack, discord, sendgrid, square, gitlab, cloudflare,
     notion, linear, jira, airtable, asana, mailchimp, dropbox,
     connectors,

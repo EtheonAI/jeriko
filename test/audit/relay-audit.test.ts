@@ -476,7 +476,8 @@ describe("URL builders — relay mode (default)", () => {
 
   test("buildOAuthStartUrl URL-encodes state", () => {
     const url = buildOAuthStartUrl("github", "user.token with spaces");
-    expect(url).toContain("state=user.token%20with%20spaces");
+    // URLSearchParams encodes spaces as "+" (application/x-www-form-urlencoded standard)
+    expect(url).toContain("state=user.token+with+spaces");
   });
 
   test("getRelayApiUrl derives HTTP from default WS URL", () => {

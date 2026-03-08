@@ -1181,7 +1181,24 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!def) throw new Error(`Unknown connector: ${name}`);
 
     if (isConnectorConfigured(name)) {
-      return { ok: true, name, status: "already_connected" };
+      // If configured but force-reconnect requested, disconnect first
+      const forceReconnect = params.force as boolean | undefined;
+      if (!forceReconnect) {
+        // Check if the connector is actually healthy before blocking
+        const health = await connectors.health(name);
+        if (health.healthy) {
+          return { ok: true, name, status: "already_connected", label: def.label };
+        }
+        // Configured but unhealthy — auto-disconnect stale credentials and reconnect
+        const { deleteSecret } = await import("../shared/secrets.js");
+        const provider = getOAuthProvider(name);
+        if (provider) {
+          deleteSecret(provider.tokenEnvVar);
+          if (provider.refreshTokenEnvVar) deleteSecret(provider.refreshTokenEnvVar);
+        }
+        connectors.evict(name);
+        // Fall through to OAuth/connect flow below
+      }
     }
 
     // OAuth connector — generate state token and return relay login URL.

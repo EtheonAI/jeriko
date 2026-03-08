@@ -267,7 +267,7 @@ describe("Audit: exchangeCodeForTokens", () => {
 
     const provider: TokenExchangeProvider = {
       name: "stripe",
-      tokenUrl: "https://api.stripe.com/v1/oauth/token",
+      tokenUrl: "https://connect.stripe.com/oauth/token",
       tokenExchangeAuth: "basic",
     };
 
@@ -420,7 +420,7 @@ describe("Audit: refreshAccessToken", () => {
     }) as typeof fetch;
 
     await refreshAccessToken({
-      provider: { name: "stripe", tokenUrl: "https://api.stripe.com/v1/oauth/token", tokenExchangeAuth: "basic" },
+      provider: { name: "stripe", tokenUrl: "https://connect.stripe.com/oauth/token", tokenExchangeAuth: "basic" },
       refreshToken: "stripe_rt",
       clientId: "ca_xxx",
       clientSecret: "sk_test",

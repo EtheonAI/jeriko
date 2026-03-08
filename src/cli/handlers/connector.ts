@@ -462,8 +462,8 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
     // No arg → interactive picker
     try {
       const connectors = await backend.listConnectors();
-      const connected = connectors.filter((c) => c.status === "connected");
-      if (connected.length === 0) {
+      const configured = connectors.filter((c) => c.status !== "disconnected");
+      if (configured.length === 0) {
         addSystemMessage(connectors.length === 0
           ? t.muted("No connectors configured yet. Connect a service first with /connectors connect.")
           : t.muted("No connected services to disconnect."));
@@ -475,10 +475,10 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
           {
             type: "select",
             message: "Choose a service to disconnect:",
-            options: connected.map((c) => ({
+            options: configured.map((c) => ({
               value: c.name,
               label: c.name,
-              hint: c.type,
+              hint: c.status === "error" ? "credentials invalid" : c.type,
             })),
           },
         ],
