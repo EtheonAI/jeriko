@@ -11,6 +11,9 @@ import { homedir, platform, userInfo } from "node:os";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+// Bundled AGENT.md — inlined at compile time, always available
+import BUNDLED_AGENT_MD from "../../../../AGENT.md" with { type: "text" };
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -413,6 +416,14 @@ export function setupAgentPrompt(): void {
       success(`Agent prompt installed → ${target}`);
       return;
     }
+  }
+
+  // Write the bundled copy (compiled into the binary at build time)
+  if (BUNDLED_AGENT_MD) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
+    writeFileSync(target, BUNDLED_AGENT_MD, "utf-8");
+    success(`Agent prompt installed → ${target} (bundled)`);
+    return;
   }
 
   warn("AGENT.md not found — agent will have no system prompt until configured");
