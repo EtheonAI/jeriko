@@ -1406,6 +1406,7 @@ async function loadSystemPrompt(): Promise<string> {
   const { readFileSync, existsSync: exists } = await import("node:fs");
   const { join: pathJoin } = await import("node:path");
   const { getConfigDir } = await import("../shared/config.js");
+  const os = await import("node:os");
 
   let systemPrompt = "";
 
@@ -1413,6 +1414,19 @@ async function loadSystemPrompt(): Promise<string> {
   if (exists(promptPath)) {
     systemPrompt = readFileSync(promptPath, "utf-8");
   }
+
+  // Inject runtime system context so the AI knows what machine it's on
+  const sysContext = [
+    `\n## System Context`,
+    `- Platform: ${process.platform} ${process.arch}`,
+    `- Hostname: ${os.hostname()}`,
+    `- User: ${os.userInfo().username}`,
+    `- Home: ${os.homedir()}`,
+    `- Shell: ${process.env.SHELL || "unknown"}`,
+    `- CWD: ${process.cwd()}`,
+    `- Node: ${process.version}`,
+  ].join("\n");
+  systemPrompt = systemPrompt + sysContext;
 
   try {
     const { listSkills, formatSkillSummaries } = await import("../shared/skill-loader.js");

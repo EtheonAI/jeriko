@@ -268,6 +268,24 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     log.warn(`Kernel boot: failed to load system prompt: ${err}`);
   }
 
+  // Inject runtime system context so the AI knows what machine it's on
+  try {
+    const os = await import("node:os");
+    const sysContext = [
+      `\n## System Context`,
+      `- Platform: ${process.platform} ${process.arch}`,
+      `- Hostname: ${os.hostname()}`,
+      `- User: ${os.userInfo().username}`,
+      `- Home: ${os.homedir()}`,
+      `- Shell: ${process.env.SHELL || "unknown"}`,
+      `- CWD: ${process.cwd()}`,
+      `- Node: ${process.version}`,
+    ].join("\n");
+    systemPrompt = systemPrompt + sysContext;
+  } catch {
+    // Non-fatal
+  }
+
   // Inject available skill summaries into the system prompt.
   // Only names + descriptions — full instructions loaded on demand via use_skill tool.
   try {
