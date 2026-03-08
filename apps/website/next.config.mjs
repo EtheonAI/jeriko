@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 
 const GITHUB_RAW =
-  "https://raw.githubusercontent.com/EtheonAI/jeriko/main/scripts";
+  "https://raw.githubusercontent.com/EtheonAI/jerikoai/main/scripts";
 
 const nextConfig = {
   reactStrictMode: true,
