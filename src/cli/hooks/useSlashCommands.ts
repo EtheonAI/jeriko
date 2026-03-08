@@ -6,6 +6,10 @@
  *
  * Each handler module (session.ts, model.ts, connector.ts, system.ts)
  * is a pure function factory that returns async command handlers.
+ *
+ * Naming: plural nouns for collection managers (/sessions, /connectors,
+ * /skills, /tasks, /channels, /notifications). Each manages its domain
+ * with subcommands.
  */
 
 import { useCallback, useRef } from "react";
@@ -76,65 +80,49 @@ export function useSlashCommands({
       const systemCtx = { backend, dispatch, addSystemMessage, wizardConfigRef };
       const system = createSystemHandlers(systemCtx);
 
-      // Dispatch table
+      // Dispatch table — plural nouns for collection managers
       const handlers: Record<string, CommandHandler> = {
-        // Session
-        "/help":          () => system.help(),
-        "/new":           () => session.new(),
-        "/session":       () => session.session(),
-        "/sessions":      () => session.sessions(),
-        "/resume":        () => session.resume(args),
-        "/switch":        () => session.resume(args),    // alias
-        "/history":       () => session.history(),
-        "/clear":         () => session.clear(),
-        "/compact":       () => session.compact(),
-        "/share":         () => session.share(args),
-        "/cost":          () => session.cost(),
-        "/kill":          () => session.kill(),
-        "/archive":       () => session.archive(),
-        "/delete":        () => session.delete(args),
+        // Sessions
+        "/help":            () => system.help(),
+        "/new":             () => session.new(),
+        "/sessions":        () => session.sessions(args),
+        "/resume":          () => session.resume(args),
+        "/history":         () => session.history(),
+        "/clear":           () => session.clear(),
+        "/compact":         () => session.compact(),
+        "/share":           () => session.share(args),
+        "/cost":            () => session.cost(),
+        "/kill":            () => session.kill(),
+        "/archive":         () => session.archive(),
+        "/stop":            () => session.stop(),
 
-        // Model (includes provider management)
-        "/model":         () => model.model(args),
-        "/models":        () => model.model("list"),     // alias → /model list
+        // Model (singular — one active model, subcommands manage providers)
+        "/model":           () => model.model(args),
 
-        // Connectors & Channels
-        "/connectors":    () => connector.connectors(),
-        "/connect":       () => connector.connect(args),
-        "/disconnect":    () => connector.disconnect(args),
-        "/channels":      () => connector.channels(),
-        "/channel":       () => connector.channel(args),
-        "/auth":          () => connector.auth(args),
+        // Connectors & Channels (plural — manage collections)
+        "/connectors":      () => connector.connectors(args),
+        "/channels":        () => connector.channels(args),
 
-        // Tasks (unified: trigger, schedule, cron)
-        "/task":          () => system.task(args),
-        "/tasks":         () => system.task(""),       // alias → /task hub
-        "/triggers":      () => system.triggers(),
-
-        // Skills
-        "/skills":        () => system.skills(),
-        "/skill":         () => system.skill(args),
+        // Tasks, Skills, Notifications (plural — manage collections)
+        "/tasks":           () => system.tasks(args),
+        "/skills":          () => system.skills(args),
+        "/notifications":   () => system.notifications(args),
 
         // Onboarding
-        "/onboard":       () => system.onboard(),
+        "/onboard":         () => system.onboard(),
 
         // System
-        "/status":        () => system.status(),
-        "/health":        () => system.health(),
-        "/sys":           () => system.sys(),
-        "/config":        () => system.config(),
+        "/status":          () => system.status(),
+        "/sys":             () => system.sys(),
+        "/config":          () => system.config(),
 
         // Billing
-        "/plan":          () => system.plan(),
-        "/upgrade":       () => system.upgrade(args),
-        "/billing":       () => system.billing(),
-        "/cancel":        () => system.cancel(),
-
-        // Notifications
-        "/notifications": () => system.notifications(),
+        "/plan":            () => system.plan(),
+        "/upgrade":         () => system.upgrade(args),
+        "/billing":         () => system.billing(),
 
         // Theme
-        "/theme":         () => system.theme(args),
+        "/theme":           () => system.theme(args),
       };
 
       const handler = handlers[name];

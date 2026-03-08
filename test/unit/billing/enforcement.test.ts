@@ -204,7 +204,7 @@ describe("billing/enforcement", () => {
       connectors.addInstance("twilio");
       connectors.addInstance("gmail");
       connectors.addInstance("gdrive");
-      connectors.addInstance("outlook");
+      connectors.addInstance("shopify");
 
       const triggers = new MockTriggerEngine();
       const result = await enforceLicenseLimits(connectors, triggers);
@@ -218,7 +218,7 @@ describe("billing/enforcement", () => {
       setTier("free", "canceled");
 
       const connectors = new MockConnectorManager();
-      // Add in order — github is oldest, outlook is newest
+      // Add in order — github is oldest, shopify is newest
       connectors.addInstance("github");
       connectors.addInstance("stripe");
       connectors.addInstance("vercel");
@@ -226,13 +226,13 @@ describe("billing/enforcement", () => {
       connectors.addInstance("twilio");
       connectors.addInstance("gmail");
       connectors.addInstance("gdrive");
-      connectors.addInstance("outlook");
+      connectors.addInstance("shopify");
 
       const triggers = new MockTriggerEngine();
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      // 8 connectors, limit 5 → evict 3 newest: outlook, gdrive, gmail
-      expect(result.connectors.evicted).toContain("outlook");
+      // 8 connectors, limit 5 → evict 3 newest: shopify, gdrive, gmail
+      expect(result.connectors.evicted).toContain("shopify");
       expect(result.connectors.evicted).toContain("gdrive");
       expect(result.connectors.evicted).toContain("gmail");
       expect(result.connectors.evicted).toHaveLength(3);
@@ -399,7 +399,7 @@ describe("billing/enforcement", () => {
       connectors.addInstance("twilio");
       connectors.addInstance("gmail");
       connectors.addInstance("gdrive");
-      connectors.addInstance("outlook");
+      connectors.addInstance("shopify");
 
       const triggers = new MockTriggerEngine();
       // 14 triggers, free limit = 10 → disable 4
@@ -587,7 +587,7 @@ describe("billing/enforcement", () => {
       setTier("pro");
 
       const connectors = new MockConnectorManager();
-      const connectorNames = ["github", "stripe", "vercel", "paypal", "twilio", "gmail", "gdrive", "outlook"];
+      const connectorNames = ["github", "stripe", "vercel", "paypal", "twilio", "gmail", "gdrive", "shopify"];
       for (const name of connectorNames) {
         connectors.addInstance(name);
       }
@@ -661,7 +661,7 @@ describe("billing/enforcement", () => {
       connectors.addInstance("twilio");
       connectors.addInstance("gmail");
       connectors.addInstance("gdrive");
-      connectors.addInstance("outlook");
+      connectors.addInstance("shopify");
 
       const triggers = new MockTriggerEngine();
       // 14 triggers > free limit of 10

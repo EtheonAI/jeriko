@@ -26,8 +26,8 @@ const SECRETS_PATH = join(homedir(), ".config", "jeriko", ".env");
 // ---------------------------------------------------------------------------
 
 describe("CONNECTOR_DEFS", () => {
-  test("has exactly 27 connectors", () => {
-    expect(CONNECTOR_DEFS).toHaveLength(27);
+  test("has exactly 25 connectors", () => {
+    expect(CONNECTOR_DEFS).toHaveLength(25);
   });
 
   test("all connectors have required fields", () => {
@@ -47,7 +47,7 @@ describe("CONNECTOR_DEFS", () => {
 
   test("connector names match CLI command names", () => {
     const expected = [
-      "stripe", "paypal", "github", "twilio", "vercel", "x", "gdrive", "onedrive", "gmail", "outlook",
+      "stripe", "paypal", "github", "twilio", "vercel", "x", "gdrive", "gmail",
       "hubspot", "shopify", "instagram", "threads", "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
       "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
     ];
@@ -286,7 +286,6 @@ describe("connector health checks", () => {
         vercel: "../../src/daemon/services/connectors/vercel/connector.js",
         x: "../../src/daemon/services/connectors/x/connector.js",
         gdrive: "../../src/daemon/services/connectors/gdrive/connector.js",
-        onedrive: "../../src/daemon/services/connectors/onedrive/connector.js",
       };
 
       const classMap: Record<string, string> = {
@@ -297,7 +296,6 @@ describe("connector health checks", () => {
         vercel: "VercelConnector",
         x: "XConnector",
         gdrive: "GDriveConnector",
-        onedrive: "OneDriveConnector",
       };
 
       const mod = await import(importMap[def.name]!);
@@ -329,7 +327,6 @@ describe("connector health checks", () => {
         vercel: "../../src/daemon/services/connectors/vercel/connector.js",
         x: "../../src/daemon/services/connectors/x/connector.js",
         gdrive: "../../src/daemon/services/connectors/gdrive/connector.js",
-        onedrive: "../../src/daemon/services/connectors/onedrive/connector.js",
       };
 
       const classMap: Record<string, string> = {
@@ -339,7 +336,6 @@ describe("connector health checks", () => {
         vercel: "VercelConnector",
         x: "XConnector",
         gdrive: "GDriveConnector",
-        onedrive: "OneDriveConnector",
       };
 
       const mod = await import(importMap[def.name]!);

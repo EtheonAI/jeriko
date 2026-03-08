@@ -4,13 +4,13 @@
  * Extends ConnectorBase for unified lifecycle, dispatch, and HTTP helpers.
  *
  * Supports two auth modes:
- *   1. API key (STRIPE_SECRET_KEY) — permanent, for your own Stripe account.
- *   2. OAuth (STRIPE_ACCESS_TOKEN) — short-lived (1h), for accessing other
- *      Stripe accounts via a Stripe App. Refreshed automatically using
- *      STRIPE_REFRESH_TOKEN + STRIPE_SECRET_KEY (Basic auth).
+ *   1. OAuth (STRIPE_ACCESS_TOKEN) — obtained via relay OAuth flow.
+ *      Refreshed automatically using STRIPE_REFRESH_TOKEN + STRIPE_SECRET_KEY.
+ *   2. API key (STRIPE_SECRET_KEY) — permanent, for your own Stripe account.
  *
- * If both are set, OAuth token takes priority. If the OAuth token expires
- * (401), the connector refreshes it transparently and retries.
+ * Either one is sufficient. OAuth token takes priority when both are present.
+ * If the OAuth token expires (401) and refresh credentials are available,
+ * the connector refreshes it transparently and retries.
  */
 
 import type { ConnectorResult, WebhookEvent } from "../interface.js";
@@ -27,9 +27,9 @@ export class StripeConnector extends ConnectorBase {
   protected readonly healthPath = "/balance";
   protected readonly label = "Stripe";
 
-  /** API secret key (sk_test_... / sk_live_...) — always required. */
+  /** API secret key (sk_test_... / sk_live_...) — for direct API access or OAuth refresh. */
   private secretKey = "";
-  /** OAuth access token — optional, takes priority over secretKey for API calls. */
+  /** OAuth access token — takes priority over secretKey for API calls. */
   private accessToken = "";
   /** OAuth refresh token — used to refresh accessToken when it expires. */
   private refreshTokenValue = "";
@@ -40,14 +40,14 @@ export class StripeConnector extends ConnectorBase {
   // ---------------------------------------------------------------------------
 
   override async init(): Promise<void> {
-    const key = process.env.STRIPE_SECRET_KEY;
-    if (!key) {
-      throw new Error("STRIPE_SECRET_KEY env var is required");
-    }
-    this.secretKey = key;
+    this.secretKey = process.env.STRIPE_SECRET_KEY ?? "";
     this.accessToken = process.env.STRIPE_ACCESS_TOKEN ?? "";
     this.refreshTokenValue = process.env.STRIPE_REFRESH_TOKEN ?? "";
     this.webhookSecret = process.env.STRIPE_WEBHOOK_SECRET ?? "";
+
+    if (!this.secretKey && !this.accessToken) {
+      throw new Error("Stripe requires STRIPE_ACCESS_TOKEN (via OAuth) or STRIPE_SECRET_KEY (direct API key)");
+    }
   }
 
   // ---------------------------------------------------------------------------

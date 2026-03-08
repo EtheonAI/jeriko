@@ -55,6 +55,11 @@ export interface OAuthProvider {
    *   Stripe uses this — the secret API key is the username, password is empty.
    */
   tokenExchangeAuth?: "body" | "basic";
+  /**
+   * If true, omit `response_type=code` from the authorization URL.
+   * Stripe Apps doesn't use response_type — only client_id, redirect_uri, state.
+   */
+  skipResponseType?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +79,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     tokenEnvVar: "STRIPE_ACCESS_TOKEN",
     refreshTokenEnvVar: "STRIPE_REFRESH_TOKEN",
     tokenExchangeAuth: "basic",
+    skipResponseType: true,
   },
   {
     name: "github",
@@ -113,18 +119,6 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     extraTokenParams: { access_type: "offline", prompt: "consent" },
   },
   {
-    name: "onedrive",
-    label: "OneDrive",
-    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scopes: ["Files.ReadWrite.All", "offline_access"],
-    bakedIdKey: "microsoft",
-    clientIdVar: "ONEDRIVE_OAUTH_CLIENT_ID",
-    clientSecretVar: "ONEDRIVE_OAUTH_CLIENT_SECRET",
-    tokenEnvVar: "ONEDRIVE_ACCESS_TOKEN",
-    refreshTokenEnvVar: "ONEDRIVE_REFRESH_TOKEN",
-  },
-  {
     name: "vercel",
     label: "Vercel",
     authUrl: "https://vercel.com/oauth/authorize",
@@ -149,18 +143,6 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     tokenEnvVar: "GMAIL_ACCESS_TOKEN",
     refreshTokenEnvVar: "GMAIL_REFRESH_TOKEN",
     extraTokenParams: { access_type: "offline", prompt: "consent" },
-  },
-  {
-    name: "outlook",
-    label: "Outlook",
-    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scopes: ["Mail.ReadWrite", "Mail.Send", "offline_access"],
-    bakedIdKey: "microsoft",
-    clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID",
-    clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET",
-    tokenEnvVar: "OUTLOOK_ACCESS_TOKEN",
-    refreshTokenEnvVar: "OUTLOOK_REFRESH_TOKEN",
   },
   {
     name: "hubspot",
@@ -202,7 +184,9 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     clientIdVar: "SHOPIFY_OAUTH_CLIENT_ID",
     clientSecretVar: "SHOPIFY_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "SHOPIFY_ACCESS_TOKEN",
-    // Shopify tokens are permanent — no refresh token
+    // Shopify tokens are permanent — no refresh token.
+    // Shopify's authorize endpoint doesn't use response_type=code.
+    skipResponseType: true,
   },
   {
     name: "instagram",
@@ -382,4 +366,44 @@ export function getClientId(provider: OAuthProvider): string | undefined {
  */
 export function hasLocalSecret(provider: OAuthProvider): boolean {
   return !!process.env[provider.clientSecretVar];
+}
+
+/**
+ * Resolve provider-specific context from CLI args or env vars.
+ *
+ * Some providers have placeholder tokens in their authUrl (e.g. Shopify's
+ * `{shop}` in `https://{shop}.myshopify.com/admin/oauth/authorize`).
+ * This function extracts placeholder names from the URL, then resolves
+ * each from the provided args or from environment variables.
+ *
+ * Returns a context record on success, or an Error if a required
+ * placeholder couldn't be resolved.
+ */
+export function resolveOAuthContext(
+  provider: OAuthProvider,
+  args: string[],
+): Record<string, string> | Error {
+  const placeholders = provider.authUrl.match(/\{(\w+)\}/g);
+  if (!placeholders || placeholders.length === 0) return {};
+
+  const context: Record<string, string> = {};
+
+  for (let i = 0; i < placeholders.length; i++) {
+    const key = placeholders[i]!.slice(1, -1); // strip { }
+    const envKey = `${provider.name.toUpperCase()}_${key.toUpperCase()}`;
+
+    // Try: 1) positional arg, 2) env var
+    const value = args[i] || process.env[envKey];
+    if (!value) {
+      return new Error(
+        `${provider.label} requires a ${key} name.\n` +
+        `Usage: /connectors connect ${provider.name} <${key}>\n` +
+        `Example: /connectors connect ${provider.name} my-${key}\n` +
+        `Or set ${envKey} in your .env.`,
+      );
+    }
+    context[key] = value;
+  }
+
+  return context;
 }

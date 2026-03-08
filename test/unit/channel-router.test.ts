@@ -177,8 +177,8 @@ describe("Channel router — command parsing", () => {
     expect(data).toContain("/model");
     expect(data).toContain("/stop");
     expect(data).toContain("/connectors");
-    expect(data).toContain("/skill");
-    expect(data).toContain("/task");
+    expect(data).toContain("/skills");
+    expect(data).toContain("/tasks");
     expect(data).toContain("/channels");
     expect(data).toContain("/share");
     expect(data).toContain("/billing");
@@ -550,7 +550,7 @@ describe("Channel router — integration commands", () => {
 
     const text = registry.lastMessage();
     expect(text).toContain("doesn't support OAuth");
-    expect(text).toContain("/auth");
+    expect(text).toContain("/connectors auth");
   });
 
   it("/connect github with configured client ID generates login URL", async () => {
@@ -685,7 +685,7 @@ describe("Channel router — integration commands", () => {
     // Each button should trigger /auth <name>
     const data = registry.lastKeyboardData();
     expect(data.length).toBeGreaterThan(0);
-    expect(data.every((d) => d.startsWith("/auth "))).toBe(true);
+    expect(data.every((d) => d.startsWith("/connectors auth "))).toBe(true);
   });
 
   it("/auth with unknown connector shows error", async () => {
@@ -729,8 +729,8 @@ describe("Channel router — integration commands", () => {
   });
 
   it("/health with unconfigured connector says not configured", async () => {
-    const origToken = process.env.ONEDRIVE_ACCESS_TOKEN;
-    delete process.env.ONEDRIVE_ACCESS_TOKEN;
+    const origToken = process.env.NOTION_API_KEY;
+    delete process.env.NOTION_API_KEY;
 
     try {
       const { startChannelRouter } = await import("../../src/daemon/services/channels/router.js");
@@ -744,13 +744,13 @@ describe("Channel router — integration commands", () => {
         extendedThinking: false,
       });
 
-      emitCommand(registry, "/health onedrive");
+      emitCommand(registry, "/health notion");
       await settle(200);
 
       const text = registry.lastMessage();
       expect(text).toContain("not configured");
     } finally {
-      if (origToken) process.env.ONEDRIVE_ACCESS_TOKEN = origToken;
+      if (origToken) process.env.NOTION_API_KEY = origToken;
     }
   });
 
@@ -925,10 +925,10 @@ describe("Channel router — /channels", () => {
 
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
-    // Hub shows per-channel buttons with /channel <name> data
+    // Hub shows per-channel buttons with /channels <name> data
     const data = registry.lastKeyboardData();
-    // Each channel gets a detail button: /channel telegram, /channel whatsapp, etc.
-    expect(data.some((d) => d.includes("/channel "))).toBe(true);
+    // Each channel gets a detail button: /channels telegram, /channels whatsapp, etc.
+    expect(data.some((d) => d.includes("/channels "))).toBe(true);
   });
 
   it("/channels connect connects a disconnected channel", async () => {
@@ -1205,9 +1205,9 @@ describe("Channel router — /task", () => {
     expect(kb).toBeDefined();
     expect(kb!.text).toContain("Tasks");
     const data = registry.lastKeyboardData();
-    expect(data).toContain("/task trigger");
-    expect(data).toContain("/task schedule");
-    expect(data).toContain("/task cron");
+    expect(data).toContain("/tasks trigger");
+    expect(data).toContain("/tasks schedule");
+    expect(data).toContain("/tasks cron");
   });
 
   it("/task trigger new without type shows type picker", async () => {
@@ -1229,7 +1229,7 @@ describe("Channel router — /task", () => {
     const kb = registry.lastKeyboard();
     expect(kb).toBeDefined();
     const data = registry.lastKeyboardData();
-    expect(data.some((d) => d.includes("/task trigger new"))).toBe(true);
+    expect(data.some((d) => d.includes("/tasks trigger new"))).toBe(true);
   });
 
   it("/task enable without id shows usage", async () => {
@@ -1434,7 +1434,7 @@ describe("Channel router — sessions hub", () => {
     expect(labels).toContain("« Back");
     // Should have switch buttons (at least one non-current session)
     const data = registry.lastKeyboardData();
-    expect(data.some((d) => d.startsWith("/switch "))).toBe(true);
+    expect(data.some((d) => d.startsWith("/sessions switch "))).toBe(true);
   });
 
   it("/sessions delete shows session list with delete buttons", async () => {
@@ -1461,7 +1461,7 @@ describe("Channel router — sessions hub", () => {
     expect(kb).toBeDefined();
     // Should have delete buttons for non-current sessions
     const data = registry.lastKeyboardData();
-    expect(data.some((d) => d.startsWith("/sessions rm "))).toBe(true);
+    expect(data.some((d) => d.startsWith("/sessions delete "))).toBe(true);
     // Should have back button
     expect(data).toContain("/sessions");
   });
@@ -1601,7 +1601,7 @@ describe("Channel router — channels hub", () => {
     const labels = registry.lastKeyboardLabels();
     expect(labels.some((l) => l.startsWith("+") || l.includes("(you)"))).toBe(true);
     const data = registry.lastKeyboardData();
-    expect(data.some((d) => d.startsWith("/channel "))).toBe(true);
+    expect(data.some((d) => d.startsWith("/channels "))).toBe(true);
   });
 
   it("/channels add shows response when all channels registered", async () => {

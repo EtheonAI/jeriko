@@ -24,7 +24,7 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/resume")).toBe(true);
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
     expect(SLASH_COMMANDS.has("/channels")).toBe(true);
-    expect(SLASH_COMMANDS.has("/channel")).toBe(true);
+    expect(SLASH_COMMANDS.has("/connectors")).toBe(true);
   });
 
   test("all keys start with /", () => {
@@ -171,9 +171,9 @@ describe("parseSlashCommand", () => {
     expect(cmd).toEqual({ name: "/resume", args: "bold nexus 001" });
   });
 
-  test("/channel connect telegram → name + full args", () => {
-    const cmd = parseSlashCommand("/channel connect telegram");
-    expect(cmd).toEqual({ name: "/channel", args: "connect telegram" });
+  test("/channels connect telegram → name + full args", () => {
+    const cmd = parseSlashCommand("/channels connect telegram");
+    expect(cmd).toEqual({ name: "/channels", args: "connect telegram" });
   });
 });
 
@@ -217,11 +217,10 @@ describe("slashCompleter", () => {
     expect(completions).toEqual(["/help"]);
   });
 
-  test("/ch matches /channels and /channel (and possibly others)", () => {
+  test("/ch matches /channels (and possibly others)", () => {
     const [completions] = slashCompleter("/ch");
     expect(completions).toContain("/channels");
-    expect(completions).toContain("/channel");
-    expect(completions.length).toBeGreaterThanOrEqual(2);
+    expect(completions.length).toBeGreaterThanOrEqual(1);
   });
 
   test("no matches returns all commands as fallback", () => {

@@ -7,9 +7,7 @@
  * which mode is active.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { readFileSync } from "node:fs";
 
 import type {
   SessionInfo,
@@ -99,14 +97,14 @@ export interface Backend {
 
   // Channel management (daemon only — no-ops in-process)
   listChannels(): Promise<ChannelInfo[]>;
-  connectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
+  connectChannel(name: string, callbacks?: ChannelAddCallbacks): Promise<{ ok: boolean; error?: string }>;
   disconnectChannel(name: string): Promise<{ ok: boolean; error?: string }>;
   addChannel(name: string, config?: Record<string, unknown>, callbacks?: ChannelAddCallbacks): Promise<{ ok: boolean; error?: string }>;
   removeChannel(name: string): Promise<{ ok: boolean; error?: string }>;
 
   // Connectors (daemon only — returns [] in-process)
   listConnectors(): Promise<ConnectorInfo[]>;
-  connectService(name: string): Promise<ConnectResult>;
+  connectService(name: string, args?: string[]): Promise<ConnectResult>;
   disconnectService(name: string): Promise<DisconnectResult>;
   checkHealth(name?: string): Promise<Array<{ name: string; healthy: boolean; latencyMs: number; error?: string }>>;
 
@@ -151,6 +149,7 @@ export interface Backend {
 
   // Notifications
   listNotifications(): Promise<NotificationPref[]>;
+  setNotifications(enabled: boolean): Promise<void>;
 
   // Auth
   getAuthStatus(): Promise<AuthStatus[]>;
@@ -166,12 +165,6 @@ export interface Backend {
   setModel(name: string): void;
   readonly sessionId: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const SOCKET_PATH = join(homedir(), ".jeriko", "daemon.sock");
 
 // ---------------------------------------------------------------------------
 // Daemon backend — streams via Unix socket IPC
@@ -203,6 +196,7 @@ export async function createDaemonBackend(): Promise<Backend> {
       try {
         const stream = sendStreamRequest("ask", params, {
           signal: abortController.signal,
+          idleTimeoutMs: 20 * 60_000, // 20 min — extended thinking + sub-agents can take time
         });
         let result: IteratorResult<Record<string, unknown>, unknown>;
         while (!(result = await stream.next()).done) {
@@ -342,11 +336,21 @@ export async function createDaemonBackend(): Promise<Backend> {
       return [];
     },
 
-    async connectChannel(name) {
+    async connectChannel(name, callbacks) {
       try {
-        const response = await sendRequest("channel_connect", { name });
-        if (response.ok) return { ok: true };
-        return { ok: false, error: response.error ?? `Failed to connect "${name}"` };
+        const stream = sendStreamRequest("channel_connect", { name }, {
+          idleTimeoutMs: 150_000, // WhatsApp QR scan can take up to 2 minutes
+        });
+        let result: IteratorResult<Record<string, unknown>, unknown>;
+        while (!(result = await stream.next()).done) {
+          const event = result.value;
+          if (event.type === "qr" && callbacks?.onQR) {
+            callbacks.onQR(event.qr as string);
+          }
+        }
+        const resp = result.value as { ok?: boolean; error?: string } | void;
+        if (resp?.ok === false) return { ok: false, error: resp.error ?? `Failed to connect "${name}"` };
+        return { ok: true };
       } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) };
       }
@@ -402,9 +406,9 @@ export async function createDaemonBackend(): Promise<Backend> {
       return [];
     },
 
-    async connectService(name) {
+    async connectService(name, args) {
       try {
-        const response = await sendRequest("connector_connect" as any, { name });
+        const response = await sendRequest("connector_connect" as any, { name, args });
         if (!response.ok) return { ok: false, error: response.error ?? "Unknown error" };
         const data = response.data as Record<string, unknown>;
         return {
@@ -653,6 +657,12 @@ export async function createDaemonBackend(): Promise<Backend> {
         }
       } catch { /* daemon may not support */ }
       return [];
+    },
+
+    async setNotifications(enabled: boolean) {
+      try {
+        await sendRequest("set_notifications" as any, { enabled });
+      } catch { /* daemon may not support */ }
     },
 
     // Auth
@@ -1094,6 +1104,10 @@ export async function createInProcessBackend(): Promise<Backend> {
       }) satisfies NotificationPref[];
     },
 
+    async setNotifications(enabled: boolean) {
+      kvSet("notify:cli:default", enabled);
+    },
+
     // Auth — direct connector access
     async getAuthStatus() {
       return loadAuthStatusDirect();
@@ -1121,22 +1135,20 @@ export async function createInProcessBackend(): Promise<Backend> {
 
 /** Create the appropriate backend based on daemon availability. */
 export async function createBackend(): Promise<Backend> {
-  const { isDaemonRunning, waitForSocket } = await import("./lib/daemon.js");
+  const { ensureDaemon } = await import("./lib/daemon.js");
 
-  // Check if the daemon process is actually alive (not just stale files).
-  // isDaemonRunning() verifies the PID and cleans up stale socket/pid files.
-  if (!isDaemonRunning()) {
-    return createInProcessBackend();
+  const ready = await ensureDaemon(10_000);
+  if (ready) {
+    return createDaemonBackend();
   }
 
-  // Daemon is running — wait for the socket if it's not ready yet
-  // (PID file is written before the socket during boot).
-  if (!existsSync(SOCKET_PATH)) {
-    const ready = await waitForSocket(10_000);
-    if (!ready) return createInProcessBackend();
-  }
-
-  return createDaemonBackend();
+  // Daemon couldn't start — visible warning, then graceful degradation
+  console.error(
+    "\u26A0 Daemon not available \u2014 running in local mode.\n" +
+    "  Channels, connectors, and triggers are offline.\n" +
+    "  Start daemon: jeriko server start\n",
+  );
+  return createInProcessBackend();
 }
 
 // ---------------------------------------------------------------------------

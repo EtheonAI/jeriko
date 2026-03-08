@@ -265,7 +265,7 @@ Step 5.5:  License refresh      Billing license check (Stripe or relay API)
 Step 6:    Register tools       Import all 15 tool files (self-register on import)
 Step 7:    Initialize drivers   Load model registry (models.dev) + register custom providers
 Step 8:    Create worker pool   Max 4 concurrent workers
-Step 9:    Create channels      Telegram, WhatsApp, Slack, Discord (config-conditional)
+Step 9:    Create channels      Telegram, WhatsApp (config-conditional)
            Load system prompt   ~/.config/jeriko/agent.md + skill summary injection
            Wire channel router  Slash commands + agent message routing
 Step 10:   Create trigger engine
@@ -643,14 +643,12 @@ interface ChannelAdapter {
 }
 ```
 
-**4 channel implementations:**
+**2 channel implementations:**
 
 | Channel | Library | Config Key | Features |
 |---------|---------|------------|----------|
 | **Telegram** | grammy | `channels.telegram.token` + `adminIds` | Full media (photo, doc, video, audio, voice), keyboard, edit, typing |
 | **WhatsApp** | @whiskeysockets/baileys | `channels.whatsapp.enabled` | Text, media, QR code pairing |
-| **Slack** | Bolt (Socket Mode) | `channels.slack.botToken` + `appToken` | Text, threads, channel filtering |
-| **Discord** | discord.js | `channels.discord.token` | Text, guild/channel filtering |
 
 **Channel Router** (`router.ts`):
 - Binds inbound messages → agent loop with streaming responses
@@ -857,7 +855,7 @@ The `ask` method is a streaming method — it subscribes to `orchestratorBus` ev
 ```typescript
 interface JerikoConfig {
   agent: AgentConfig;              // model, maxTokens, temperature, extendedThinking
-  channels: ChannelsConfig;        // telegram, whatsapp, slack, discord
+  channels: ChannelsConfig;        // telegram, whatsapp
   connectors: ConnectorsConfig;    // stripe, paypal, github, twilio, etc.
   security: SecurityConfig;        // allowedPaths, blockedCommands, sensitiveKeys
   storage: StorageConfig;          // dbPath, memoryPath
@@ -1037,7 +1035,7 @@ All scaffolded projects live at `~/.jeriko/projects/<name>/`.
 ### Authentication
 - HTTP API: rate limited (100 req/60s), auth on all non-public routes
 - Socket IPC: local only (Unix domain socket)
-- Channels: admin ID filtering (Telegram, Slack, Discord)
+- Channels: admin ID filtering (Telegram, WhatsApp)
 
 ---
 
@@ -1498,7 +1496,7 @@ Provider redirects browser → https://bot.jeriko.ai/oauth/:userId/:provider/cal
 ### Channel Message → Agent
 
 ```
-Telegram/WhatsApp/Slack/Discord message received
+Telegram/WhatsApp message received
   → ChannelAdapter.onMessage(handler)
   → Channel Router:
       ├─ Slash command? → handle locally (/stop, /model, /new, etc.)

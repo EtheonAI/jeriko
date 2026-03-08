@@ -1,11 +1,17 @@
 /**
  * Connector & Channel command handlers.
  *
- * All commands that previously required typed arguments now launch
- * interactive wizard flows with selector menus and text input prompts.
+ * Unified commands:
+ *   /connectors              → list all connectors with status
+ *   /connectors connect <n>  → connect a service (OAuth or API key)
+ *   /connectors disconnect <n> → disconnect a service
+ *   /connectors auth [name]  → configure credentials
+ *   /connectors health [n]   → check connector health
+ *
+ *   /channels                → channel hub (add, connect, disconnect, remove)
  */
 
-import type { Backend, ChannelAddCallbacks } from "../backend.js";
+import type { Backend, ChannelAddCallbacks, ConnectResult } from "../backend.js";
 import type { AppAction, WizardConfig } from "../types.js";
 import {
   formatConnectorList,
@@ -14,6 +20,7 @@ import {
   formatChannelSetupHint,
   formatAuthStatus,
   formatAuthDetail,
+  formatHealth,
   formatError,
 } from "../format.js";
 import { t } from "../theme.js";
@@ -29,7 +36,11 @@ export interface ConnectorCommandContext {
 
 function requireDaemon(ctx: ConnectorCommandContext, label: string): boolean {
   if (ctx.backend.mode !== "daemon") {
-    ctx.addSystemMessage(t.muted(`${label} require the daemon. Start with: jeriko server start`));
+    ctx.addSystemMessage(
+      t.muted(`${label} requires the daemon.\n`) +
+      t.muted(`  Start it:    jeriko server start\n`) +
+      t.muted(`  Then re-run: jeriko`),
+    );
     return false;
   }
   return true;
@@ -59,10 +70,6 @@ function launchWizard(ctx: ConnectorCommandContext, config: WizardConfig): void 
 /** Telegram bot token: numeric bot ID + colon + 30+ alphanumeric chars. */
 const TELEGRAM_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{30,}$/;
 
-/**
- * Validate a Telegram bot token format.
- * @returns Error message if invalid, `undefined` if valid.
- */
 function validateTelegramToken(value: string): string | undefined {
   const trimmed = value.trim();
   if (trimmed.length < 10) return "Token too short";
@@ -80,9 +87,6 @@ const CHANNEL_OPTIONS = [
 
 /**
  * Build ChannelAddCallbacks that render a single WhatsApp QR code in the CLI.
- * Only the first QR is displayed — subsequent Baileys QR rotations are ignored
- * since the user is already scanning. The connection has a 120s timeout; if it
- * expires the user can retry with /channel add whatsapp.
  */
 function buildQRCallbacks(addSystemMessage: (content: string) => void): ChannelAddCallbacks {
   let qrSent = false;
@@ -111,430 +115,494 @@ function buildQRCallbacks(addSystemMessage: (content: string) => void): ChannelA
 export function createConnectorHandlers(ctx: ConnectorCommandContext) {
   const { backend, dispatch, addSystemMessage } = ctx;
 
-  return {
-    async connectors(): Promise<void> {
-      if (!requireDaemon(ctx, "Connectors")) return;
-      const connectors = await backend.listConnectors();
-
-      // If no connectors, offer to connect one
-      if (connectors.length === 0 || connectors.every((c) => c.status === "disconnected")) {
-        addSystemMessage(formatConnectorList(connectors));
-        // Offer interactive connect
-        const available = connectors.filter((c) => c.status === "disconnected");
-        if (available.length > 0) {
-          launchWizard(ctx, {
-            title: "Connect a Service",
-            steps: [
-              {
-                type: "select",
-                message: "Choose a service to connect:",
-                options: available.map((c) => ({
-                  value: c.name,
-                  label: c.name,
-                  hint: c.type,
-                })),
-              },
-            ],
-            onComplete: async ([svcName]) => {
-              dispatch({ type: "SET_PHASE", phase: "idle" });
-              const result = await backend.connectService(svcName!);
-              if (!result.ok) {
-                addSystemMessage(formatError(result.error ?? `Failed to connect "${svcName}"`));
-              } else if (result.status === "oauth_required" && result.loginUrl) {
-                addSystemMessage(
-                  t.blue(`Connect ${result.label ?? svcName}:\n`) +
-                  t.underline(result.loginUrl) + "\n" +
-                  t.dim("Link expires in 10 minutes."),
-                );
-              } else {
-                addSystemMessage(t.green(`\u2713 ${result.label ?? svcName} connected`));
-              }
-            },
-          });
-        }
-        return;
-      }
-
-      addSystemMessage(formatConnectorList(connectors));
-    },
-
-    async connect(args: string): Promise<void> {
-      if (!requireDaemon(ctx, "Connectors")) return;
-      const svcName = args.trim();
-
-      // No arg → interactive picker
-      if (!svcName) {
-        try {
-          const connectors = await backend.listConnectors();
-          const disconnected = connectors.filter((c) => c.status === "disconnected" || c.status === "error");
-          if (disconnected.length === 0) {
-            addSystemMessage(t.muted("All services are already connected."));
-            return;
-          }
-          launchWizard(ctx, {
-            title: "Connect a Service",
-            steps: [
-              {
-                type: "select",
-                message: "Choose a service to connect:",
-                options: disconnected.map((c) => ({
-                  value: c.name,
-                  label: c.name,
-                  hint: c.type,
-                })),
-              },
-            ],
-            onComplete: async ([selected]) => {
-              dispatch({ type: "SET_PHASE", phase: "idle" });
-              const result = await backend.connectService(selected!);
-              if (!result.ok) {
-                addSystemMessage(formatError(result.error ?? `Failed to connect "${selected}"`));
-              } else if (result.status === "oauth_required" && result.loginUrl) {
-                openInBrowser(result.loginUrl);
-                addSystemMessage(
-                  t.blue(`Connect ${result.label ?? selected}:\n`) +
-                  t.underline(result.loginUrl) + "\n" +
-                  t.dim("Link expires in 10 minutes."),
-                );
-              } else {
-                addSystemMessage(t.green(`\u2713 ${result.label ?? selected} connected`));
-              }
-            },
-          });
-        } catch (err) {
-          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-        }
-        return;
-      }
-
-      // Direct connect with name
-      const result = await backend.connectService(svcName);
-      if (!result.ok) {
-        addSystemMessage(formatError(result.error ?? `Failed to connect "${svcName}"`));
-      } else if (result.status === "already_connected") {
-        addSystemMessage(t.muted(`${svcName} is already connected. Use /disconnect ${svcName} to remove it first.`));
-      } else if (result.status === "oauth_required" && result.loginUrl) {
-        openInBrowser(result.loginUrl);
-        addSystemMessage(
-          t.blue(`Connect ${result.label ?? svcName}:\n`) +
-          t.underline(result.loginUrl) + "\n" +
-          t.dim("Link expires in 10 minutes."),
-        );
-      } else {
-        addSystemMessage(t.green(`\u2713 ${result.label ?? svcName} connected`));
-      }
-    },
-
-    async disconnect(args: string): Promise<void> {
-      if (!requireDaemon(ctx, "Connectors")) return;
-      const svcName = args.trim();
-
-      // With a direct name → validate it exists before calling backend
-      if (svcName) {
-        try {
-          const connectors = await backend.listConnectors();
-          const channels = await backend.listChannels();
-          const knownNames = new Set([
-            ...connectors.map((c) => c.name),
-            ...channels.map((ch) => ch.name),
-          ]);
-          if (!knownNames.has(svcName)) {
-            addSystemMessage(formatError(`Unknown service "${svcName}". Use /connectors to see available services.`));
-            return;
-          }
-        } catch {
-          // Can't validate — proceed anyway, backend will report error
-        }
-
-        const result = await backend.disconnectService(svcName);
-        if (!result.ok) {
-          addSystemMessage(formatError(result.error ?? `Failed to disconnect "${svcName}"`));
-        } else {
-          addSystemMessage(t.green(`\u2713 ${result.label ?? svcName} disconnected`));
-        }
-        return;
-      }
-
-      // No arg → interactive picker of connected services
-      if (!svcName) {
-        try {
-          const connectors = await backend.listConnectors();
-          const connected = connectors.filter((c) => c.status === "connected");
-          if (connected.length === 0) {
-            addSystemMessage(t.muted("No connected services to disconnect."));
-            return;
-          }
-          launchWizard(ctx, {
-            title: "Disconnect a Service",
-            steps: [
-              {
-                type: "select",
-                message: "Choose a service to disconnect:",
-                options: connected.map((c) => ({
-                  value: c.name,
-                  label: c.name,
-                  hint: c.type,
-                })),
-              },
-            ],
-            onComplete: async ([selected]) => {
-              dispatch({ type: "SET_PHASE", phase: "idle" });
-              const result = await backend.disconnectService(selected!);
-              if (!result.ok) {
-                addSystemMessage(formatError(result.error ?? `Failed to disconnect "${selected}"`));
-              } else {
-                addSystemMessage(t.green(`\u2713 ${result.label ?? selected} disconnected`));
-              }
-            },
-          });
-        } catch (err) {
-          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-        }
-        return;
-      }
-    },
-
-    async channels(): Promise<void> {
-      if (!requireDaemon(ctx, "Channels")) return;
-      const channels = await backend.listChannels();
-      const rows = channels.map((ch) => ({
-        name: ch.name,
-        status: ch.status,
-        error: ch.error,
-        connected_at: ch.connectedAt,
-      }));
-      addSystemMessage(formatChannelList(rows));
-    },
-
-    async channel(args: string): Promise<void> {
-      if (!requireDaemon(ctx, "Channels")) return;
-
-      const trimmed = args.trim();
-
-      // No args → interactive action menu
-      if (!trimmed) {
-        launchWizard(ctx, {
-          title: "Channels",
-          steps: [
-            {
-              type: "select",
-              message: "What would you like to do?",
-              options: [
-                { value: "add", label: "Add a channel", hint: "configure and connect" },
-                { value: "connect", label: "Connect a channel", hint: "start an existing channel" },
-                { value: "disconnect", label: "Disconnect a channel", hint: "stop a running channel" },
-                { value: "remove", label: "Remove a channel", hint: "delete configuration" },
-              ],
-            },
-          ],
-          onComplete: async ([action]) => {
-            dispatch({ type: "SET_PHASE", phase: "idle" });
-            // Chain to the specific sub-flow
-            if (action === "add") {
-              await channelAddWizard();
-            } else if (action === "connect") {
-              await channelConnectWizard();
-            } else if (action === "disconnect") {
-              await channelDisconnectWizard();
-            } else if (action === "remove") {
-              await channelRemoveWizard();
-            }
-          },
-        });
-        return;
-      }
-
-      // Parse: "connect telegram" or "add telegram <token>"
-      const spaceIdx = trimmed.indexOf(" ");
-      if (spaceIdx === -1) {
-        // Just an action name with no channel → launch appropriate wizard
-        const action = trimmed;
-        if (action === "connect") {
-          await channelConnectWizard();
-        } else if (action === "disconnect") {
-          await channelDisconnectWizard();
-        } else if (action === "add") {
-          await channelAddWizard();
-        } else if (action === "remove" || action === "rm") {
-          await channelRemoveWizard();
-        } else {
-          addSystemMessage(formatChannelHelp());
-        }
-        return;
-      }
-
-      const action = trimmed.slice(0, spaceIdx).trim();
-      const rest = trimmed.slice(spaceIdx + 1).trim();
-      const parts = rest.split(/\s+/);
-      const channelName = parts[0] ?? "";
-      const tokens = parts.slice(1);
-
-      if (action === "connect") {
-        const result = await backend.connectChannel(channelName);
-        if (result.ok) {
-          addSystemMessage(t.green(`\u2713 Channel "${channelName}" connected`));
-        } else {
-          addSystemMessage(formatError(result.error ?? `Failed to connect "${channelName}"`));
-          addSystemMessage(formatChannelSetupHint(channelName));
-        }
-      } else if (action === "disconnect") {
-        const result = await backend.disconnectChannel(channelName);
-        if (result.ok) {
-          addSystemMessage(t.green(`\u2713 Channel "${channelName}" disconnected`));
-        } else {
-          addSystemMessage(formatError(result.error ?? `Failed to disconnect "${channelName}"`));
-        }
-      } else if (action === "add") {
-        // If token provided inline, use it
-        if (channelName === "telegram" && tokens[0]) {
-          const result = await backend.addChannel(channelName, { token: tokens[0] });
-          if (result.ok) {
-            addSystemMessage(t.green(`\u2713 Channel "${channelName}" added and connected`));
-          } else {
-            addSystemMessage(formatError(result.error ?? `Failed to add "${channelName}"`));
-          }
-          return;
-        }
-        if (channelName === "whatsapp") {
-          addSystemMessage(t.muted("Connecting WhatsApp — a QR code will appear shortly..."));
-          const result = await backend.addChannel(channelName, { enabled: true }, buildQRCallbacks(addSystemMessage));
-          if (result.ok) {
-            addSystemMessage(t.green(`\u2713 Channel "whatsapp" added and connected`));
-          } else {
-            addSystemMessage(formatError(result.error ?? `Failed to add "whatsapp"`));
-          }
-          return;
-        }
-        // No token → launch token wizard for this channel
-        if (channelName === "telegram") {
-          launchWizard(ctx, {
-            title: "Add Telegram Channel",
-            steps: [
-              {
-                type: "text",
-                message: "Enter your Telegram bot token (from @BotFather):",
-                placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-                validate: validateTelegramToken,
-              },
-            ],
-            onComplete: async ([token]) => {
-              dispatch({ type: "SET_PHASE", phase: "idle" });
-              const result = await backend.addChannel("telegram", { token: token! });
-              if (result.ok) {
-                addSystemMessage(t.green(`\u2713 Channel "telegram" added and connected`));
-              } else {
-                addSystemMessage(formatError(result.error ?? `Failed to add "telegram"`));
-              }
-            },
-          });
-          return;
-        }
-        addSystemMessage(formatChannelSetupHint(channelName));
-      } else if (action === "remove" || action === "rm") {
-        const result = await backend.removeChannel(channelName);
-        if (result.ok) {
-          addSystemMessage(t.green(`\u2713 Channel "${channelName}" removed`));
-        } else {
-          addSystemMessage(formatError(result.error ?? `Failed to remove "${channelName}"`));
-        }
-      } else {
-        addSystemMessage(formatChannelHelp());
-      }
-    },
-
-    async auth(args: string): Promise<void> {
-      const authArg = args.trim();
-
-      // No arg → interactive connector picker for auth
-      if (!authArg) {
-        try {
-          const connectors = await backend.getAuthStatus();
-          if (connectors.length === 0) {
-            addSystemMessage(t.muted("No connectors available."));
-            return;
-          }
-          launchWizard(ctx, {
-            title: "Authentication",
-            steps: [
-              {
-                type: "select",
-                message: "Choose a connector to configure:",
-                options: connectors.map((c) => ({
-                  value: c.name,
-                  label: c.label || c.name,
-                  hint: c.configured ? "configured" : "not configured",
-                })),
-              },
-            ],
-            onComplete: async ([selected]) => {
-              dispatch({ type: "SET_PHASE", phase: "idle" });
-              const detail = connectors.find((c) => c.name === selected);
-              if (detail) {
-                addSystemMessage(formatAuthDetail(detail));
-                // If there are required keys not set, prompt for them
-                const missing = detail.required.filter((k) => !k.set);
-                if (missing.length > 0) {
-                  const steps = missing.map((k) => ({
-                    type: "password" as const,
-                    message: `Enter ${k.label} (${k.variable}):`,
-                    validate: (v: string) => v.length < 1 ? "Value required" : undefined,
-                  }));
-                  launchWizard(ctx, {
-                    title: `Configure ${detail.label || detail.name}`,
-                    steps,
-                    onComplete: async (values) => {
-                      dispatch({ type: "SET_PHASE", phase: "idle" });
-                      try {
-                        const keys = missing.map((k, i) => `${k.variable}=${values[i]}`);
-                        const result = await backend.saveAuth(detail.name, keys);
-                        addSystemMessage(t.green(`${result.label}: ${result.saved} key(s) saved.`));
-                      } catch (err) {
-                        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-                      }
-                    },
-                  });
-                }
-              } else {
-                addSystemMessage(formatError(`Unknown connector: ${selected}`));
-              }
-            },
-          });
-        } catch (err) {
-          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-        }
-        return;
-      }
-
-      // Direct auth with connector name
-      const parts = authArg.split(/\s+/);
-      const connectorName = parts[0]!;
-      const keys = parts.slice(1);
-
-      if (keys.length === 0) {
-        try {
-          const connectors = await backend.getAuthStatus();
-          const detail = connectors.find((c) => c.name === connectorName);
-          if (!detail) {
-            addSystemMessage(formatError(`Unknown connector: ${connectorName}`));
-          } else {
-            addSystemMessage(formatAuthDetail(detail));
-          }
-        } catch (err) {
-          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-        }
-        return;
-      }
-
-      try {
-        const result = await backend.saveAuth(connectorName, keys);
-        addSystemMessage(t.green(`${result.label}: ${result.saved} key(s) saved.`));
-      } catch (err) {
-        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
-      }
+  /** Providers that require extra context (e.g. Shopify needs a shop name). */
+  const PROVIDER_PROMPTS: Record<string, { param: string; message: string; placeholder: string; hint: string }> = {
+    shopify: {
+      param: "shop",
+      message: "Enter your Shopify store name:",
+      placeholder: "my-store",
+      hint: "Just the name — not the full URL. Example: my-store → my-store.myshopify.com",
     },
   };
 
-  // ── Channel sub-wizards (chained from action picker) ──────────────────
+  return {
+    /**
+     * /connectors — unified connector management.
+     *
+     *   /connectors                    → list all connectors with status
+     *   /connectors connect [name]     → connect a service
+     *   /connectors disconnect [name]  → disconnect a service
+     *   /connectors auth [name] [keys] → configure credentials
+     *   /connectors health [name]      → check health
+     */
+    async connectors(args: string): Promise<void> {
+      if (!requireDaemon(ctx, "Connectors")) return;
+
+      const trimmed = args.trim();
+      const parts = trimmed.split(/\s+/);
+      const subCmd = parts[0]?.toLowerCase() ?? "";
+      const rest = parts.slice(1).join(" ").trim();
+
+      // /connectors connect [name]
+      if (subCmd === "connect") {
+        await connectorConnect(rest);
+        return;
+      }
+
+      // /connectors disconnect [name]
+      if (subCmd === "disconnect") {
+        await connectorDisconnect(rest);
+        return;
+      }
+
+      // /connectors auth [name] [keys...]
+      if (subCmd === "auth") {
+        await connectorAuth(rest);
+        return;
+      }
+
+      // /connectors health [name]
+      if (subCmd === "health") {
+        await connectorHealth(rest);
+        return;
+      }
+
+      // /connectors (no args) → interactive action picker
+      if (!subCmd) {
+        try {
+          const connectors = await backend.listConnectors();
+          const connectedCount = connectors.filter((c) => c.status === "connected").length;
+          const totalCount = connectors.length;
+
+          launchWizard(ctx, {
+            title: "Connectors",
+            steps: [
+              {
+                type: "select",
+                message: `${connectedCount}/${totalCount} connected — what would you like to do?`,
+                options: [
+                  { value: "connect", label: "Connect a service", hint: "OAuth login" },
+                  { value: "disconnect", label: "Disconnect a service", hint: "remove credentials" },
+                  { value: "auth", label: "Configure API keys", hint: "set or update keys" },
+                  { value: "health", label: "Check health", hint: "test connectivity" },
+                  { value: "list", label: "View all connectors", hint: `${totalCount} available` },
+                ],
+              },
+            ],
+            onComplete: async ([action]) => {
+              dispatch({ type: "SET_PHASE", phase: "idle" });
+              switch (action) {
+                case "connect": await connectorConnect(""); break;
+                case "disconnect": await connectorDisconnect(""); break;
+                case "auth": await connectorAuth(""); break;
+                case "health": await connectorHealth(""); break;
+                default: addSystemMessage(formatConnectorList(connectors)); break;
+              }
+            },
+          });
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
+        return;
+      }
+
+      // Unrecognized subcommand → list all
+      const connectors = await backend.listConnectors();
+      addSystemMessage(formatConnectorList(connectors));
+    },
+
+    async channels(args: string): Promise<void> {
+      if (!requireDaemon(ctx, "Channels")) return;
+
+      const trimmed = args.trim();
+      const spaceIdx = trimmed.indexOf(" ");
+      const action = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx).trim();
+      const restArgs = spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+
+      // /channels list → flat list
+      if (action === "list" || action === "ls") {
+        const channels = await backend.listChannels();
+        const rows = channels.map((ch) => ({
+          name: ch.name,
+          status: ch.status,
+          error: ch.error,
+          connected_at: ch.connectedAt,
+        }));
+        addSystemMessage(formatChannelList(rows));
+        return;
+      }
+
+      // /channels (no args) → interactive action picker
+      if (!trimmed) {
+        try {
+          const channels = await backend.listChannels();
+          const connectedCount = channels.filter((ch) => ch.status === "connected").length;
+
+          launchWizard(ctx, {
+            title: "Channels",
+            steps: [
+              {
+                type: "select",
+                message: `${connectedCount} channel(s) active — what would you like to do?`,
+                options: [
+                  { value: "add", label: "Add a channel", hint: "Telegram or WhatsApp" },
+                  { value: "connect", label: "Connect a channel", hint: "reconnect existing" },
+                  { value: "disconnect", label: "Disconnect a channel", hint: "pause without removing" },
+                  { value: "remove", label: "Remove a channel", hint: "delete completely" },
+                  { value: "list", label: "View all channels", hint: `${channels.length} configured` },
+                ],
+              },
+            ],
+            onComplete: async ([action]) => {
+              dispatch({ type: "SET_PHASE", phase: "idle" });
+              switch (action) {
+                case "add": await channelAddWizard(); break;
+                case "connect": await channelConnectWizard(); break;
+                case "disconnect": await channelDisconnectWizard(); break;
+                case "remove": await channelRemoveWizard(); break;
+                default: {
+                  const rows = channels.map((ch) => ({
+                    name: ch.name,
+                    status: ch.status,
+                    error: ch.error,
+                    connected_at: ch.connectedAt,
+                  }));
+                  addSystemMessage(formatChannelList(rows));
+                  break;
+                }
+              }
+            },
+          });
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
+        return;
+      }
+
+      if (action === "connect") {
+        if (!restArgs) {
+          await channelConnectWizard();
+        } else {
+          const result = await backend.connectChannel(restArgs);
+          if (result.ok) {
+            addSystemMessage(t.green(`✓ Channel "${restArgs}" connected`));
+          } else {
+            addSystemMessage(formatError(result.error ?? `Failed to connect "${restArgs}"`));
+            addSystemMessage(formatChannelSetupHint(restArgs));
+          }
+        }
+        return;
+      }
+
+      if (action === "disconnect") {
+        if (!restArgs) {
+          await channelDisconnectWizard();
+        } else {
+          const result = await backend.disconnectChannel(restArgs);
+          if (result.ok) {
+            addSystemMessage(t.green(`✓ Channel "${restArgs}" disconnected`));
+          } else {
+            addSystemMessage(formatError(result.error ?? `Failed to disconnect "${restArgs}"`));
+          }
+        }
+        return;
+      }
+
+      if (action === "add") {
+        if (!restArgs) {
+          await channelAddWizard();
+          return;
+        }
+        const addParts = restArgs.split(/\s+/);
+        const channelName = addParts[0] ?? "";
+        const tokens = addParts.slice(1);
+        await channelAddDirect(channelName, tokens);
+        return;
+      }
+
+      if (action === "remove" || action === "rm") {
+        if (!restArgs) {
+          await channelRemoveWizard();
+        } else {
+          const result = await backend.removeChannel(restArgs);
+          if (result.ok) {
+            addSystemMessage(t.green(`✓ Channel "${restArgs}" removed`));
+          } else {
+            addSystemMessage(formatError(result.error ?? `Failed to remove "${restArgs}"`));
+          }
+        }
+        return;
+      }
+
+      addSystemMessage(formatChannelHelp());
+    },
+  };
+
+  // ── Connector sub-operations ──────────────────────────────────────────
+
+  /** Show the OAuth result (login URL or success) to the user. */
+  function showConnectResult(result: ConnectResult, name: string): void {
+    if (!result.ok) {
+      addSystemMessage(formatError(result.error ?? `Failed to connect "${name}"`));
+    } else if (result.status === "already_connected") {
+      addSystemMessage(t.muted(`${name} is already connected. Use /connectors disconnect ${name} to remove it first.`));
+    } else if (result.status === "oauth_required" && result.loginUrl) {
+      openInBrowser(result.loginUrl);
+      addSystemMessage(
+        t.blue(`Connect ${result.label ?? name}:\n`) +
+        t.underline(result.loginUrl) + "\n" +
+        t.dim("Link expires in 10 minutes."),
+      );
+    } else {
+      addSystemMessage(t.green(`✓ ${result.label ?? name} connected`));
+    }
+  }
+
+  /**
+   * Connect a service, prompting for required context if needed.
+   * e.g. Shopify needs a shop name before OAuth can start.
+   */
+  async function connectWithContext(name: string, extraArgs: string[]): Promise<void> {
+    const prompt = PROVIDER_PROMPTS[name];
+    if (prompt && extraArgs.length === 0) {
+      // Provider needs context the user hasn't provided — ask via wizard
+      launchWizard(ctx, {
+        title: `Connect ${name}`,
+        steps: [
+          {
+            type: "text",
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+            validate: (v: string) => v.trim().length < 1 ? "Value required" : undefined,
+          },
+        ],
+        onComplete: async ([value]) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          const result = await backend.connectService(name, [value!.trim()]);
+          showConnectResult(result, name);
+        },
+      });
+      addSystemMessage(t.dim(prompt.hint));
+      return;
+    }
+
+    const result = await backend.connectService(name, extraArgs);
+    showConnectResult(result, name);
+  }
+
+  async function connectorConnect(svcInput: string): Promise<void> {
+    // Parse "shopify my-store" → name="shopify", extraArgs=["my-store"]
+    const inputParts = svcInput.trim().split(/\s+/);
+    const svcName = inputParts[0] ?? "";
+    const extraArgs = inputParts.slice(1);
+
+    if (!svcName) {
+      try {
+        const connectors = await backend.listConnectors();
+        const disconnected = connectors.filter((c) => c.status === "disconnected" || c.status === "error");
+        if (disconnected.length === 0) {
+          addSystemMessage(connectors.length === 0
+            ? t.muted("No connectors available. Use /connectors auth <name> to configure API keys first.")
+            : t.muted("All services are already connected."));
+          return;
+        }
+        launchWizard(ctx, {
+          title: "Connect a Service",
+          steps: [
+            {
+              type: "select",
+              message: "Choose a service to connect:",
+              options: disconnected.map((c) => ({
+                value: c.name,
+                label: c.name,
+                hint: c.type,
+              })),
+            },
+          ],
+          onComplete: async ([selected]) => {
+            dispatch({ type: "SET_PHASE", phase: "idle" });
+            await connectWithContext(selected!, []);
+          },
+        });
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+      return;
+    }
+
+    await connectWithContext(svcName, extraArgs);
+  }
+
+  async function connectorDisconnect(svcName: string): Promise<void> {
+    if (svcName) {
+      try {
+        const connectors = await backend.listConnectors();
+        const channels = await backend.listChannels();
+        const knownNames = new Set([
+          ...connectors.map((c) => c.name),
+          ...channels.map((ch) => ch.name),
+        ]);
+        if (!knownNames.has(svcName)) {
+          addSystemMessage(formatError(`Unknown service "${svcName}". Use /connectors to see available services.`));
+          return;
+        }
+      } catch {
+        // Can't validate — proceed anyway
+      }
+
+      const result = await backend.disconnectService(svcName);
+      if (!result.ok) {
+        addSystemMessage(formatError(result.error ?? `Failed to disconnect "${svcName}"`));
+      } else {
+        addSystemMessage(t.green(`✓ ${result.label ?? svcName} disconnected`));
+      }
+      return;
+    }
+
+    // No arg → interactive picker
+    try {
+      const connectors = await backend.listConnectors();
+      const connected = connectors.filter((c) => c.status === "connected");
+      if (connected.length === 0) {
+        addSystemMessage(connectors.length === 0
+          ? t.muted("No connectors configured yet. Connect a service first with /connectors connect.")
+          : t.muted("No connected services to disconnect."));
+        return;
+      }
+      launchWizard(ctx, {
+        title: "Disconnect a Service",
+        steps: [
+          {
+            type: "select",
+            message: "Choose a service to disconnect:",
+            options: connected.map((c) => ({
+              value: c.name,
+              label: c.name,
+              hint: c.type,
+            })),
+          },
+        ],
+        onComplete: async ([selected]) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          const result = await backend.disconnectService(selected!);
+          if (!result.ok) {
+            addSystemMessage(formatError(result.error ?? `Failed to disconnect "${selected}"`));
+          } else {
+            addSystemMessage(t.green(`✓ ${result.label ?? selected} disconnected`));
+          }
+        },
+      });
+    } catch (err) {
+      addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function connectorAuth(authArg: string): Promise<void> {
+    if (!authArg) {
+      try {
+        const connectors = await backend.getAuthStatus();
+        if (connectors.length === 0) {
+          addSystemMessage(t.muted("No connectors available."));
+          return;
+        }
+        launchWizard(ctx, {
+          title: "Authentication",
+          steps: [
+            {
+              type: "select",
+              message: "Choose a connector to configure:",
+              options: connectors.map((c) => ({
+                value: c.name,
+                label: c.label || c.name,
+                hint: c.configured ? "configured" : "not configured",
+              })),
+            },
+          ],
+          onComplete: async ([selected]) => {
+            dispatch({ type: "SET_PHASE", phase: "idle" });
+            const detail = connectors.find((c) => c.name === selected);
+            if (detail) {
+              addSystemMessage(formatAuthDetail(detail));
+              const missing = detail.required.filter((k) => !k.set);
+              if (missing.length > 0) {
+                const steps = missing.map((k) => ({
+                  type: "password" as const,
+                  message: `Enter ${k.label} (${k.variable}):`,
+                  validate: (v: string) => v.length < 1 ? "Value required" : undefined,
+                }));
+                launchWizard(ctx, {
+                  title: `Configure ${detail.label || detail.name}`,
+                  steps,
+                  onComplete: async (values) => {
+                    dispatch({ type: "SET_PHASE", phase: "idle" });
+                    try {
+                      const keys = missing.map((k, i) => `${k.variable}=${values[i]}`);
+                      const result = await backend.saveAuth(detail.name, keys);
+                      addSystemMessage(t.green(`${result.label}: ${result.saved} key(s) saved.`));
+                    } catch (err) {
+                      addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+                    }
+                  },
+                });
+              }
+            } else {
+              addSystemMessage(formatError(`Unknown connector: ${selected}`));
+            }
+          },
+        });
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+      return;
+    }
+
+    const authParts = authArg.split(/\s+/);
+    const connectorName = authParts[0]!;
+    const keys = authParts.slice(1);
+
+    if (keys.length === 0) {
+      try {
+        const connectors = await backend.getAuthStatus();
+        const detail = connectors.find((c) => c.name === connectorName);
+        if (!detail) {
+          addSystemMessage(formatError(`Unknown connector: ${connectorName}`));
+        } else {
+          addSystemMessage(formatAuthDetail(detail));
+        }
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+      return;
+    }
+
+    try {
+      const result = await backend.saveAuth(connectorName, keys);
+      addSystemMessage(t.green(`${result.label}: ${result.saved} key(s) saved.`));
+    } catch (err) {
+      addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  async function connectorHealth(name: string): Promise<void> {
+    if (!requireDaemon(ctx, "Health checks")) return;
+    const results = await backend.checkHealth();
+    if (name) {
+      const match = results.find((r) => r.name.toLowerCase() === name.toLowerCase());
+      if (match) {
+        const icon = match.healthy ? "✓" : "✗";
+        const status = match.healthy
+          ? t.green(`${icon} ${match.name}: healthy (${match.latencyMs}ms)`)
+          : t.red(`${icon} ${match.name}: ${match.error}`);
+        addSystemMessage(status);
+      } else {
+        addSystemMessage(formatError(`Unknown connector: ${name}`));
+      }
+    } else {
+      addSystemMessage(formatHealth(results));
+    }
+  }
+
+  // ── Channel sub-wizards ───────────────────────────────────────────────
 
   async function channelAddWizard(): Promise<void> {
     launchWizard(ctx, {
@@ -552,12 +620,11 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
           addSystemMessage(t.muted("Connecting WhatsApp — a QR code will appear shortly..."));
           const result = await backend.addChannel("whatsapp", { enabled: true }, buildQRCallbacks(addSystemMessage));
           if (result.ok) {
-            addSystemMessage(t.green(`\u2713 Channel "whatsapp" added and connected`));
+            addSystemMessage(t.green(`✓ Channel "whatsapp" added and connected`));
           } else {
             addSystemMessage(formatError(result.error ?? `Failed to add "whatsapp"`));
           }
         } else if (channelName === "telegram") {
-          // Chain: ask for token
           launchWizard(ctx, {
             title: "Add Telegram Channel",
             steps: [
@@ -572,7 +639,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
               dispatch({ type: "SET_PHASE", phase: "idle" });
               const result = await backend.addChannel("telegram", { token: token! });
               if (result.ok) {
-                addSystemMessage(t.green(`\u2713 Channel "telegram" added and connected`));
+                addSystemMessage(t.green(`✓ Channel "telegram" added and connected`));
               } else {
                 addSystemMessage(formatError(result.error ?? `Failed to add "telegram"`));
               }
@@ -581,6 +648,52 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
         }
       },
     });
+  }
+
+  async function channelAddDirect(channelName: string, tokens: string[]): Promise<void> {
+    if (channelName === "telegram" && tokens[0]) {
+      const result = await backend.addChannel(channelName, { token: tokens[0] });
+      if (result.ok) {
+        addSystemMessage(t.green(`✓ Channel "${channelName}" added and connected`));
+      } else {
+        addSystemMessage(formatError(result.error ?? `Failed to add "${channelName}"`));
+      }
+      return;
+    }
+    if (channelName === "whatsapp") {
+      addSystemMessage(t.muted("Connecting WhatsApp — a QR code will appear shortly..."));
+      const result = await backend.addChannel(channelName, { enabled: true }, buildQRCallbacks(addSystemMessage));
+      if (result.ok) {
+        addSystemMessage(t.green(`✓ Channel "whatsapp" added and connected`));
+      } else {
+        addSystemMessage(formatError(result.error ?? `Failed to add "whatsapp"`));
+      }
+      return;
+    }
+    if (channelName === "telegram") {
+      launchWizard(ctx, {
+        title: "Add Telegram Channel",
+        steps: [
+          {
+            type: "text",
+            message: "Enter your Telegram bot token (from @BotFather):",
+            placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+            validate: validateTelegramToken,
+          },
+        ],
+        onComplete: async ([token]) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          const result = await backend.addChannel("telegram", { token: token! });
+          if (result.ok) {
+            addSystemMessage(t.green(`✓ Channel "telegram" added and connected`));
+          } else {
+            addSystemMessage(formatError(result.error ?? `Failed to add "telegram"`));
+          }
+        },
+      });
+      return;
+    }
+    addSystemMessage(formatChannelSetupHint(channelName));
   }
 
   async function channelConnectWizard(): Promise<void> {
@@ -597,7 +710,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
         dispatch({ type: "SET_PHASE", phase: "idle" });
         const result = await backend.connectChannel(channelName!);
         if (result.ok) {
-          addSystemMessage(t.green(`\u2713 Channel "${channelName}" connected`));
+          addSystemMessage(t.green(`✓ Channel "${channelName}" connected`));
         } else {
           addSystemMessage(formatError(result.error ?? `Failed to connect "${channelName}"`));
           addSystemMessage(formatChannelSetupHint(channelName!));
@@ -630,7 +743,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
           dispatch({ type: "SET_PHASE", phase: "idle" });
           const result = await backend.disconnectChannel(channelName!);
           if (result.ok) {
-            addSystemMessage(t.green(`\u2713 Channel "${channelName}" disconnected`));
+            addSystemMessage(t.green(`✓ Channel "${channelName}" disconnected`));
           } else {
             addSystemMessage(formatError(result.error ?? `Failed to disconnect "${channelName}"`));
           }
@@ -655,7 +768,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
         dispatch({ type: "SET_PHASE", phase: "idle" });
         const result = await backend.removeChannel(channelName!);
         if (result.ok) {
-          addSystemMessage(t.green(`\u2713 Channel "${channelName}" removed`));
+          addSystemMessage(t.green(`✓ Channel "${channelName}" removed`));
         } else {
           addSystemMessage(formatError(result.error ?? `Failed to remove "${channelName}"`));
         }

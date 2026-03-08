@@ -36,12 +36,8 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./x/connector.js")).XConnector,
   gdrive: async () =>
     (await import("./gdrive/connector.js")).GDriveConnector,
-  onedrive: async () =>
-    (await import("./onedrive/connector.js")).OneDriveConnector,
   gmail: async () =>
     (await import("./gmail/connector.js")).GmailConnector,
-  outlook: async () =>
-    (await import("./outlook/connector.js")).OutlookConnector,
   hubspot: async () =>
     (await import("./hubspot/connector.js")).HubSpotConnector,
   shopify: async () =>

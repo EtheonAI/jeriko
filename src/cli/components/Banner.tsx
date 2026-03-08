@@ -12,8 +12,8 @@ import { formatWelcome } from "../format.js";
  * Print the welcome banner to stdout.
  * Called before Ink's render() to ensure it stays in scrollback.
  */
-export function printBanner(version: string, model: string, cwd: string): void {
+export function printBanner(version: string, model: string, cwd: string, mode?: string): void {
   console.log("");
-  console.log(formatWelcome(version, model, cwd));
+  console.log(formatWelcome(version, model, cwd, mode));
   console.log("");
 }

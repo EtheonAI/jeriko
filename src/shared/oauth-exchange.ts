@@ -34,6 +34,12 @@ export interface TokenExchangeProvider {
   extraAuthParams?: Record<string, string>;
   /** Extra params to include in the token exchange POST. */
   extraTokenParams?: Record<string, string>;
+  /**
+   * If true, omit `response_type=code` from the authorization URL.
+   * Most OAuth 2.0 providers require it, but Stripe Apps does not —
+   * their authorize endpoint only expects client_id, redirect_uri, and state.
+   */
+  skipResponseType?: boolean;
 }
 
 /** Result of a successful token exchange. */
@@ -75,6 +81,7 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
     scopes: [],
     tokenExchangeAuth: "basic",
+    skipResponseType: true,
   }],
   ["github", {
     name: "github",
@@ -100,13 +107,6 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     extraAuthParams: { access_type: "offline", prompt: "consent" },
     extraTokenParams: { access_type: "offline", prompt: "consent" },
   }],
-  ["onedrive", {
-    name: "onedrive",
-    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scopes: ["Files.ReadWrite.All", "offline_access"],
-    tokenExchangeAuth: "body",
-  }],
   ["vercel", {
     name: "vercel",
     authUrl: "https://vercel.com/oauth/authorize",
@@ -124,13 +124,6 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     extraAuthParams: { access_type: "offline", prompt: "consent" },
     extraTokenParams: { access_type: "offline", prompt: "consent" },
   }],
-  ["outlook", {
-    name: "outlook",
-    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-    tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-    scopes: ["Mail.ReadWrite", "Mail.Send", "offline_access"],
-    tokenExchangeAuth: "body",
-  }],
   ["hubspot", {
     name: "hubspot",
     authUrl: "https://app.hubspot.com/oauth/authorize",
@@ -144,6 +137,7 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     tokenUrl: "https://{shop}.myshopify.com/admin/oauth/access_token",
     scopes: ["read_products", "write_products", "read_orders", "write_orders", "read_customers", "write_customers", "read_inventory", "write_inventory"],
     tokenExchangeAuth: "body",
+    skipResponseType: true,
   }],
   ["instagram", {
     name: "instagram",
@@ -269,8 +263,13 @@ export async function buildAuthorizationUrl(
     client_id: clientId,
     redirect_uri: redirectUri,
     state,
-    response_type: "code",
   });
+
+  // Most OAuth 2.0 providers require response_type=code.
+  // Stripe Apps is an exception — their authorize endpoint rejects it.
+  if (!provider.skipResponseType) {
+    params.set("response_type", "code");
+  }
 
   if (provider.scopes.length > 0) {
     params.set("scope", provider.scopes.join(" "));

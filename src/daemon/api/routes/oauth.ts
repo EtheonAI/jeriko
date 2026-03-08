@@ -286,8 +286,13 @@ export function handleOAuthStart(
     client_id: clientId,
     redirect_uri: redirectUri,
     state: stateToken,
-    response_type: "code",
   });
+
+  // Most OAuth 2.0 providers require response_type=code.
+  // Stripe Apps is an exception — their authorize endpoint rejects it.
+  if (!provider.skipResponseType) {
+    authParams.set("response_type", "code");
+  }
 
   if (provider.scopes.length > 0) {
     authParams.set("scope", provider.scopes.join(" "));

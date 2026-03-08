@@ -20,7 +20,7 @@ import {
 } from "../format.js";
 import { t } from "../theme.js";
 import { validateApiKey, BUILT_IN_PROVIDER_IDS, MIN_API_KEY_LENGTH } from "../lib/setup.js";
-import { getProviderAuth, getOAuthConfig, hasOAuth } from "../lib/provider-auth.js";
+import { getProviderAuth, getOAuthConfig, hasOAuth, getAvailableAuthChoices } from "../lib/provider-auth.js";
 import { runOAuthFlow } from "../lib/oauth-flow.js";
 import { verifyApiKey } from "../wizard/verify.js";
 
@@ -153,17 +153,18 @@ function connectAndSwitch(
   targetModel?: string,
 ): void {
   const state: ConnectState = { provider, targetModel };
-  const authDef = getProviderAuth(provider.id);
+  const daemonAvailable = ctx.backend.mode === "daemon";
+  const choices = getAvailableAuthChoices(provider.id, daemonAvailable);
 
   // Provider has multiple auth methods (e.g. OpenRouter: OAuth + API key)
-  if (authDef && authDef.choices.length > 1) {
+  if (choices && choices.length > 1) {
     launchWizard(ctx, {
       title: `Connect ${provider.name}`,
       steps: [
         {
           type: "select",
           message: "How would you like to authenticate?",
-          options: authDef.choices.map((c) => ({
+          options: choices.map((c) => ({
             value: c.id,
             label: c.label,
             hint: c.hint,
@@ -172,7 +173,7 @@ function connectAndSwitch(
       ],
       onComplete: async ([choiceId]) => {
         ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-        const choice = authDef.choices.find((c) => c.id === choiceId);
+        const choice = choices.find((c) => c.id === choiceId);
         if (!choice) return;
 
         if (choice.method === "oauth-pkce") {
@@ -185,7 +186,7 @@ function connectAndSwitch(
     return;
   }
 
-  // No OAuth — straight to API key
+  // Single choice or no OAuth — straight to API key
   connectApiKey(ctx, state);
 }
 

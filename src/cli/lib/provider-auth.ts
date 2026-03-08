@@ -180,3 +180,33 @@ export function hasOAuth(providerId: string): boolean {
 export function getOAuthConfig(providerId: string): OAuthConfig | undefined {
   return AUTH_REGISTRY.get(providerId)?.oauth;
 }
+
+/**
+ * Get available auth choices for a provider, filtered by daemon availability.
+ *
+ * OAuth flows that require the relay (useRelay: true) need the daemon running
+ * to receive the callback. When the daemon is unavailable, these choices are
+ * filtered out so the user isn't offered an option that will fail.
+ *
+ * @returns Filtered auth choices. If no auth def exists, returns undefined
+ *          (caller should fall through to default API key flow).
+ */
+export function getAvailableAuthChoices(
+  providerId: string,
+  daemonAvailable: boolean,
+): readonly AuthChoice[] | undefined {
+  const authDef = AUTH_REGISTRY.get(providerId);
+  if (!authDef) return undefined;
+
+  if (daemonAvailable) return authDef.choices;
+
+  // Filter out OAuth choices that depend on the relay/daemon
+  const oauthConfig = authDef.oauth;
+  const filtered = authDef.choices.filter((choice) => {
+    if (choice.method !== "oauth-pkce") return true;
+    // Keep OAuth if it doesn't use the relay (local callback works without daemon)
+    return oauthConfig ? !oauthConfig.useRelay : false;
+  });
+
+  return filtered.length > 0 ? filtered : undefined;
+}

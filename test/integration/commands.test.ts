@@ -546,17 +546,17 @@ describe("Command: /connect", () => {
 
     const text = lastSent();
     expect(text).toContain("doesn't support OAuth");
-    expect(text).toContain("/auth twilio");
+    expect(text).toContain("auth twilio");
   });
 
-  it("with non-OAuth connector: paypal", async () => {
+  it("with non-OAuth connector: paypal (API-key only)", async () => {
     resetCapture();
     emitCommand("/connect paypal");
     await settle();
 
     const text = lastSent();
     expect(text).toContain("doesn't support OAuth");
-    expect(text).toContain("/auth paypal");
+    expect(text).toContain("auth paypal");
   });
 
   it("with unknown connector shows oauth list", async () => {
@@ -570,9 +570,8 @@ describe("Command: /connect", () => {
 
   // Test each OAuth provider's /connect flow
   for (const provider of OAUTH_PROVIDERS) {
-    it(`/connect ${provider.name} generates login URL when configured`, async () => {
-      const hasClientId = !!process.env[provider.clientIdVar];
-      const hasToken = !!process.env[provider.tokenEnvVar];
+    it(`/connect ${provider.name} generates login URL or says already connected`, async () => {
+      const isConfigured = isConnectorConfigured(provider.name);
 
       resetCapture();
       emitCommand(`/connect ${provider.name}`);
@@ -580,15 +579,14 @@ describe("Command: /connect", () => {
 
       const text = lastSent();
 
-      if (!hasClientId) {
-        // Missing OAuth credentials
-        expect(text).toContain("not configured");
-        expect(text).toContain(provider.clientIdVar);
-      } else if (hasToken) {
-        // Already connected
+      if (isConfigured) {
+        // Already connected (connector has required env vars set)
         expect(text).toContain("already connected");
+      } else if (provider.authUrl.includes("{")) {
+        // Provider requires context (e.g. Shopify's {shop}) — shows usage without args
+        expect(text).toContain("requires a");
       } else {
-        // Should generate login URL
+        // Should generate login URL (relay handles client ID resolution)
         expect(text).toContain(`Connect ${provider.label}`);
         expect(text).toContain(`/${provider.name}/start`);
         expect(text).toContain("state=");
@@ -776,8 +774,8 @@ describe("Per-chat isolation", () => {
 // ---------------------------------------------------------------------------
 
 describe("Connector registry", () => {
-  it("defines exactly 27 connectors", () => {
-    expect(CONNECTOR_DEFS.length).toBe(27);
+  it("defines exactly 25 connectors", () => {
+    expect(CONNECTOR_DEFS.length).toBe(25);
   });
 
   it("all connectors have required fields", () => {

@@ -36,7 +36,7 @@ import { ConnectorManager } from "../../src/daemon/services/connectors/manager.j
 
 const ALL_CONNECTORS = [
   "stripe", "paypal", "github", "twilio", "vercel", "x",
-  "gdrive", "onedrive", "gmail", "outlook",
+  "gdrive", "gmail",
   "hubspot", "shopify", "instagram", "threads",
   "slack", "discord", "sendgrid",
   "square", "gitlab", "cloudflare",
@@ -46,12 +46,12 @@ const ALL_CONNECTORS = [
 
 /** Connectors that extend ConnectorBase directly (not BearerConnector). */
 const CONNECTOR_BASE_DIRECT = [
-  "stripe", "paypal", "github", "twilio", "x", "vercel", "sendgrid", "cloudflare",
+  "stripe", "github", "twilio", "x", "vercel", "sendgrid", "cloudflare",
 ] as const;
 
 /** Connectors that extend BearerConnector. */
 const BEARER_CONNECTORS = [
-  "gdrive", "onedrive", "gmail", "outlook",
+  "paypal", "gdrive", "gmail",
   "hubspot", "shopify", "instagram", "threads",
   "slack", "discord",
   "square", "gitlab",
@@ -60,7 +60,7 @@ const BEARER_CONNECTORS = [
 ] as const;
 
 /** Connectors with no OAuth support (API key / credentials only). */
-const NON_OAUTH_CONNECTORS = ["twilio", "paypal", "sendgrid", "cloudflare", "slack"] as const;
+const NON_OAUTH_CONNECTORS = ["paypal", "twilio", "sendgrid", "cloudflare", "slack"] as const;
 
 /** Connectors that support OAuth (have oauth config in CONNECTOR_DEFS). */
 const OAUTH_CONNECTORS = ALL_CONNECTORS.filter(
@@ -79,7 +79,7 @@ describe("CONNECTOR_FACTORIES registry", () => {
   });
 
   test("has exactly 25 entries", () => {
-    expect(Object.keys(CONNECTOR_FACTORIES)).toHaveLength(27);
+    expect(Object.keys(CONNECTOR_FACTORIES)).toHaveLength(25);
   });
 
   test("every factory is a function", () => {
@@ -110,7 +110,7 @@ describe("CONNECTOR_DEFS", () => {
   });
 
   test("has exactly 25 entries", () => {
-    expect(CONNECTOR_DEFS).toHaveLength(27);
+    expect(CONNECTOR_DEFS).toHaveLength(25);
   });
 
   test("matches CONNECTOR_FACTORIES exactly", () => {
@@ -252,7 +252,7 @@ describe("ConnectorManager", () => {
     restoreEnv(savedEnv);
   });
 
-  test("names returns all 27 connectors", () => {
+  test("names returns all 25 connectors", () => {
     expect(manager.names.sort()).toEqual([...ALL_CONNECTORS].sort());
   });
 
@@ -310,9 +310,9 @@ describe("ConnectorManager", () => {
     expect(status.healthy).toBe(false);
   });
 
-  test("healthAll returns status for all 27 connectors", async () => {
+  test("healthAll returns status for all 25 connectors", async () => {
     const results = await manager.healthAll();
-    expect(results).toHaveLength(27);
+    expect(results).toHaveLength(25);
     const names = results.map((r) => r.name).sort();
     expect(names).toEqual([...ALL_CONNECTORS].sort());
   });
@@ -503,13 +503,6 @@ describe("BAKED_OAUTH_CLIENT_IDS", () => {
     expect(gmailProvider!.bakedIdKey).toBe("google");
   });
 
-  test("microsoft key covers onedrive and outlook", () => {
-    const onedriveProvider = getOAuthProvider("onedrive");
-    const outlookProvider = getOAuthProvider("outlook");
-    expect(onedriveProvider!.bakedIdKey).toBe("microsoft");
-    expect(outlookProvider!.bakedIdKey).toBe("microsoft");
-  });
-
   test("atlassian key covers jira", () => {
     const jiraProvider = getOAuthProvider("jira");
     expect(jiraProvider!.bakedIdKey).toBe("atlassian");
@@ -529,7 +522,7 @@ describe("BAKED_OAUTH_CLIENT_IDS", () => {
 // ===========================================================================
 
 describe("Connector tool aliases", () => {
-  test("connector tool defines aliases for all 27 connectors", async () => {
+  test("connector tool defines aliases for all 25 connectors", async () => {
     // Import the tool definition
     const { connectorTool } = await import("../../src/daemon/agent/tools/connector.js");
 
@@ -597,11 +590,14 @@ describe("isConnectorConfigured", () => {
   });
 
   test("requires ALL non-alternative env vars (PayPal)", () => {
-    // Only one of two required
+    // PayPal requires PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET
+    expect(isConnectorConfigured("paypal")).toBe(false);
+
+    // Set only one — still not configured
     process.env.PAYPAL_CLIENT_ID = "fake_id";
     expect(isConnectorConfigured("paypal")).toBe(false);
 
-    // Both set
+    // Set both — now configured
     process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
     expect(isConnectorConfigured("paypal")).toBe(true);
   });

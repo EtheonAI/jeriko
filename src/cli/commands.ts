@@ -17,24 +17,26 @@ export interface CommandCategory {
 /**
  * Grouped command categories for the help screen.
  * Each category contains commands with usage hints.
+ *
+ * Naming: plural nouns for collection managers (/sessions, /connectors, /skills, etc.)
+ * Each manages its domain with subcommands.
  */
 export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
   {
-    label: "Session",
+    label: "Sessions",
     commands: [
       ["/help",           "Show available commands"],
       ["/new",            "Start a new session"],
-      ["/session",        "Show current session details"],
-      ["/sessions",       "List recent sessions"],
+      ["/sessions",       "Manage sessions (list, switch, delete, rename)"],
       ["/resume <slug>",  "Resume a previous session"],
-      ["/switch <slug>",  "Alias for /resume"],
       ["/history",        "Show message history"],
       ["/clear",          "Clear session messages"],
       ["/compact",        "Trigger context compaction"],
-      ["/share",          "Share current session"],
+      ["/share",          "Share current session (list, revoke)"],
+      ["/stop",           "Abort the current AI response"],
       ["/kill",           "Destroy session and start fresh"],
       ["/archive",        "Archive session and start fresh"],
-      ["/delete <slug>",  "Delete a specific session"],
+      ["/cost",           "Session cost breakdown"],
     ],
   },
   {
@@ -48,24 +50,18 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     ],
   },
   {
-    label: "Channels",
+    label: "Channels & Connectors",
     commands: [
-      ["/channels",       "List messaging channels"],
-      ["/channel …",      "connect | disconnect | add | remove <name>"],
+      ["/channels",         "Manage channels (add, connect, disconnect, remove)"],
+      ["/connectors",       "Manage connectors (connect, disconnect, auth, health)"],
     ],
   },
   {
     label: "Management",
     commands: [
-      ["/connectors",     "List connector status"],
-      ["/connect <name>", "Connect a service"],
-      ["/disconnect <n>", "Disconnect a service"],
-      ["/auth [name]",    "Connector authentication"],
-      ["/triggers",       "List active triggers"],
-      ["/tasks",          "List background tasks"],
-      ["/skills",         "List installed skills"],
-      ["/skill <name>",   "Show skill details"],
-      ["/notifications",  "Notification preferences"],
+      ["/tasks",            "Tasks hub (trigger, schedule, cron)"],
+      ["/skills",           "Manage skills (list, create, remove, <name>)"],
+      ["/notifications",    "Notification preferences (on, off)"],
     ],
   },
   {
@@ -73,9 +69,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     commands: [
       ["/plan",            "Show billing plan and usage"],
       ["/upgrade",         "Upgrade to Pro plan"],
-      ["/billing",         "Manage billing and invoices"],
-      ["/cancel",          "Cancel subscription"],
-      ["/cost",            "Session cost breakdown"],
+      ["/billing",         "Manage billing, invoices, or cancel"],
     ],
   },
   {
@@ -83,7 +77,6 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
     commands: [
       ["/onboard",        "Run setup wizard"],
       ["/status",         "Daemon status and stats"],
-      ["/health",         "Check connector health"],
       ["/sys",            "System info"],
       ["/config",         "Show configuration"],
       ["/theme [name]",   "Show or switch theme"],
@@ -98,53 +91,45 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
 /**
  * Canonical slash command map. Keys are completion targets,
  * values are short descriptions shown in help and suggestions.
+ *
+ * Plural nouns for collection managers — each handles its domain
+ * with subcommands (list, add, remove, connect, etc.)
  */
 export const SLASH_COMMANDS = new Map<string, string>([
-  // Session
+  // Sessions
   ["/help",           "Show available commands"],
   ["/new",            "Start a new session"],
-  ["/session",        "Show current session details"],
-  ["/sessions",       "List recent sessions"],
+  ["/sessions",       "Manage sessions"],
   ["/resume",         "Resume a previous session"],
-  ["/switch",         "Alias for /resume"],
   ["/history",        "Show message history"],
   ["/clear",          "Clear session messages"],
   ["/compact",        "Trigger context compaction"],
   ["/share",          "Share current session"],
+  ["/stop",           "Abort the current AI response"],
   ["/kill",           "Destroy session and start fresh"],
   ["/archive",        "Archive session and start fresh"],
-  ["/delete",         "Delete a specific session"],
+  ["/cost",           "Session cost breakdown"],
 
   // Models
   ["/model",          "Switch model, add/remove provider"],
-  ["/models",         "Alias for /model list"],
 
-  // Channels
-  ["/channels",       "List messaging channels"],
-  ["/channel",        "Connect or disconnect a channel"],
+  // Channels & Connectors
+  ["/channels",       "Manage channels"],
+  ["/connectors",     "Manage connectors"],
 
   // Management
-  ["/connectors",     "List connector status"],
-  ["/connect",        "Connect a service"],
-  ["/disconnect",     "Disconnect a service"],
-  ["/auth",           "Connector authentication"],
-  ["/triggers",       "List active triggers"],
-  ["/tasks",          "List background tasks"],
-  ["/skills",         "List installed skills"],
-  ["/skill",          "Show skill details"],
+  ["/tasks",          "Tasks hub"],
+  ["/skills",         "Manage skills"],
   ["/notifications",  "Notification preferences"],
 
   // Billing
   ["/plan",           "Show billing plan and usage"],
   ["/upgrade",        "Upgrade to Pro plan"],
-  ["/billing",        "Manage billing and invoices"],
-  ["/cancel",         "Cancel subscription"],
-  ["/cost",           "Session cost breakdown"],
+  ["/billing",        "Manage billing, invoices, or cancel"],
 
   // System
   ["/onboard",        "Run setup wizard"],
   ["/status",         "Daemon status and stats"],
-  ["/health",         "Check connector health"],
   ["/sys",            "System info"],
   ["/config",         "Show configuration"],
   ["/theme",          "Show or switch theme"],

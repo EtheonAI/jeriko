@@ -24,7 +24,6 @@ export interface RelayOAuthCredentials {
  *
  * Multiple providers can share the same credential pair:
  *   - gmail + gdrive → GOOGLE_OAUTH_*
- *   - outlook + onedrive → MICROSOFT_OAUTH_*
  */
 const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; clientSecretKey: keyof Env }> = new Map([
   ["stripe",       { clientIdKey: "STRIPE_OAUTH_CLIENT_ID",       clientSecretKey: "STRIPE_OAUTH_CLIENT_SECRET" }],
@@ -32,8 +31,6 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; cli
   ["x",            { clientIdKey: "X_OAUTH_CLIENT_ID",            clientSecretKey: "X_OAUTH_CLIENT_SECRET" }],
   ["gdrive",       { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",       clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
   ["gmail",        { clientIdKey: "GOOGLE_OAUTH_CLIENT_ID",       clientSecretKey: "GOOGLE_OAUTH_CLIENT_SECRET" }],
-  ["onedrive",     { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID",    clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
-  ["outlook",      { clientIdKey: "MICROSOFT_OAUTH_CLIENT_ID",    clientSecretKey: "MICROSOFT_OAUTH_CLIENT_SECRET" }],
   ["vercel",       { clientIdKey: "VERCEL_OAUTH_CLIENT_ID",       clientSecretKey: "VERCEL_OAUTH_CLIENT_SECRET" }],
   ["hubspot",      { clientIdKey: "HUBSPOT_OAUTH_CLIENT_ID",      clientSecretKey: "HUBSPOT_OAUTH_CLIENT_SECRET" }],
   ["shopify",      { clientIdKey: "SHOPIFY_OAUTH_CLIENT_ID",      clientSecretKey: "SHOPIFY_OAUTH_CLIENT_SECRET" }],

@@ -128,9 +128,12 @@ describe("Audit: Baked OAuth ID coverage", () => {
     }
   });
 
-  it("every BAKED_OAUTH_CLIENT_IDS key is referenced by at least one provider", () => {
+  it("every BAKED_OAUTH_CLIENT_IDS key is referenced by at least one provider (except orphan keys)", () => {
     const providerKeys = new Set(OAUTH_PROVIDERS.map((p) => p.bakedIdKey));
+    // "paypal" baked key exists but PayPal is API-key-only (no OAuth provider)
+    const orphanKeys = new Set(["paypal"]);
     for (const key of Object.keys(BAKED_OAUTH_CLIENT_IDS)) {
+      if (orphanKeys.has(key)) continue;
       expect(providerKeys.has(key)).toBe(true);
     }
   });
@@ -143,15 +146,6 @@ describe("Audit: Baked OAuth ID coverage", () => {
     expect(googleProviders.map((p) => p.name).sort()).toEqual([
       "gdrive",
       "gmail",
-    ]);
-
-    // microsoft is shared by onedrive + outlook
-    const msProviders = OAUTH_PROVIDERS.filter(
-      (p) => p.bakedIdKey === "microsoft",
-    );
-    expect(msProviders.map((p) => p.name).sort()).toEqual([
-      "onedrive",
-      "outlook",
     ]);
 
     // atlassian is used by jira
@@ -973,7 +967,7 @@ describe("Audit: Relay PROVIDER_CREDENTIAL_MAP coverage", () => {
     // The relay credential map in oauth-secrets.ts should cover all 23 providers.
     // We verify by listing expected entries from our reading of the file.
     const expectedRelayProviders = [
-      "stripe", "github", "x", "gdrive", "gmail", "onedrive", "outlook",
+      "stripe", "github", "x", "gdrive", "gmail",
       "vercel", "hubspot", "shopify", "instagram", "threads",
       "square", "gitlab",
       "notion", "linear", "jira", "airtable", "asana",
@@ -1001,27 +995,30 @@ describe("Audit: Cross-layer consistency", () => {
     }
   });
 
-  it("BAKED_OAUTH_CLIENT_IDS has exactly the unique bakedIdKeys", () => {
+  it("BAKED_OAUTH_CLIENT_IDS covers all unique bakedIdKeys", () => {
     const uniqueKeys = new Set(OAUTH_PROVIDERS.map((p) => p.bakedIdKey));
     const bakedKeys = Object.keys(BAKED_OAUTH_CLIENT_IDS);
-    expect(bakedKeys.length).toBe(uniqueKeys.size);
+    // Baked IDs may include orphan keys (e.g. "paypal") not referenced by any provider
+    expect(bakedKeys.length).toBeGreaterThanOrEqual(uniqueKeys.size);
+    for (const key of uniqueKeys) {
+      expect(bakedKeys).toContain(key);
+    }
   });
 
-  it("providers with extraTokenParams have them in auth URL only (not exchange)", () => {
-    // Verify that extraTokenParams on daemon providers are NOT on exchange providers
-    // (they are auth URL params, not token exchange params; gdrive/gmail are special)
+  it("providers with extraTokenParams have matching exchange params", () => {
+    // All daemon providers with extraTokenParams must have the params mirrored
+    // on the relay exchange side — either as extraTokenParams or extraAuthParams,
+    // depending on where the params are needed (token body vs auth URL).
     const withExtra = OAUTH_PROVIDERS.filter((p) => p.extraTokenParams);
     for (const p of withExtra) {
       const exchange = TOKEN_EXCHANGE_PROVIDERS.get(p.name)!;
-      // gdrive and gmail have extraTokenParams on both (access_type, prompt)
-      // Other providers (jira, dropbox) should not have them on exchange
-      if (p.name === "gdrive" || p.name === "gmail") {
-        expect(exchange.extraTokenParams).toBeDefined();
-      }
-      // jira and dropbox extra params are auth-URL-only, not on exchange
-      if (p.name === "jira" || p.name === "dropbox") {
-        expect(exchange.extraTokenParams).toBeUndefined();
-      }
+      // Params may be in extraTokenParams (for token exchange body) or
+      // extraAuthParams (for authorization URL) depending on the provider
+      const exchangeExtra = exchange.extraTokenParams ?? exchange.extraAuthParams;
+      expect(exchangeExtra).toBeDefined();
+      const daemonKeys = Object.keys(p.extraTokenParams!).sort();
+      const exchangeKeys = Object.keys(exchangeExtra!).sort();
+      expect(exchangeKeys).toEqual(daemonKeys);
     }
   });
 });

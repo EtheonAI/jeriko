@@ -58,8 +58,8 @@ describe("Welcome Banner", () => {
     expect(c).toContain("v2.0.0");
     expect(c).toContain("claude-sonnet");
     expect(c).toContain("/help");
-    expect(c).toContain("model");
-    expect(c).toContain("cwd");
+    expect(c).toContain("/model");
+    expect(c).toContain("Welcome to Jeriko!");
   });
 });
 
@@ -91,15 +91,16 @@ describe("Help Screen", () => {
     expect(c).toContain("/model");
     expect(c).toContain("/channels");
     expect(c).toContain("/connectors");
-    expect(c).toContain("/triggers");
+    expect(c).toContain("/tasks");
     expect(c).toContain("/skills");
     expect(c).toContain("/status");
-    expect(c).toContain("/health");
     expect(c).toContain("/sys");
     expect(c).toContain("/config");
     expect(c).toContain("/plan");
     expect(c).toContain("/billing");
     expect(c).toContain("/cost");
+    expect(c).toContain("/stop");
+    expect(c).toContain("/notifications");
   });
 
   test("contains exit hint", () => {
@@ -304,9 +305,8 @@ describe("Channel Help", () => {
 
   test("shows command usage", () => {
     const c = clean(formatChannelHelp());
-    expect(c).toContain("/channel connect");
-    expect(c).toContain("/channel disconnect");
-    expect(c).toContain("/channels");
+    expect(c).toContain("/channels connect");
+    expect(c).toContain("/channels disconnect");
   });
 });
 

@@ -24,7 +24,7 @@ import {
 describe("TOKEN_EXCHANGE_PROVIDERS", () => {
   it("has entries for all OAuth providers", () => {
     const expectedProviders = [
-      "stripe", "github", "x", "gdrive", "onedrive", "vercel", "gmail", "outlook",
+      "stripe", "github", "x", "gdrive", "vercel", "gmail",
       "hubspot", "shopify", "instagram", "threads", "square", "gitlab",
       "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
       "discord",
@@ -600,11 +600,6 @@ describe("OAuthProvider bakedIdKey", () => {
     const gdrive = getOAuthProvider("gdrive")!;
     expect(gmail.bakedIdKey).toBe(gdrive.bakedIdKey);
     expect(gmail.bakedIdKey).toBe("google");
-
-    const outlook = getOAuthProvider("outlook")!;
-    const onedrive = getOAuthProvider("onedrive")!;
-    expect(outlook.bakedIdKey).toBe(onedrive.bakedIdKey);
-    expect(outlook.bakedIdKey).toBe("microsoft");
   });
 
   it("unique providers have unique bakedIdKeys", () => {

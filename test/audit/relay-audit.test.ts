@@ -822,7 +822,7 @@ describe("relay protocol — OAuth callback format", () => {
   });
 
   test("oauth_start message preserves provider name", () => {
-    const providers = ["github", "x", "gdrive", "gmail", "onedrive", "outlook", "vercel", "stripe"];
+    const providers = ["github", "x", "gdrive", "gmail", "vercel", "stripe"];
     for (const provider of providers) {
       const msg: RelayOAuthStartMessage = {
         type: "oauth_start",

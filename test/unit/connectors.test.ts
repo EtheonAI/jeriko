@@ -47,11 +47,11 @@ const FIXTURES: EnvFixture[] = [
   },
   {
     name: "paypal",
-    vars: { PAYPAL_CLIENT_ID: "fake-client-id", PAYPAL_CLIENT_SECRET: "fake-client-secret" },
+    vars: { PAYPAL_ACCESS_TOKEN: "fake-access-token" },
     knownMethod: "webhooks.list",
     knownParams: {},
     unknownMethodError: "Unknown PayPal method",
-    networkInit: true,
+    networkInit: false,
   },
   {
     name: "github",
@@ -89,25 +89,11 @@ const FIXTURES: EnvFixture[] = [
     unknownMethodError: "Unknown Google Drive method",
   },
   {
-    name: "onedrive",
-    vars: { ONEDRIVE_ACCESS_TOKEN: "fake-onedrive-token" },
-    knownMethod: "files.list",
-    knownParams: {},
-    unknownMethodError: "Unknown OneDrive method",
-  },
-  {
     name: "gmail",
     vars: { GMAIL_ACCESS_TOKEN: "fake-gmail-token" },
     knownMethod: "messages.list",
     knownParams: {},
     unknownMethodError: "Unknown Gmail method",
-  },
-  {
-    name: "outlook",
-    vars: { OUTLOOK_ACCESS_TOKEN: "fake-outlook-token" },
-    knownMethod: "messages.list",
-    knownParams: {},
-    unknownMethodError: "Unknown Outlook method",
   },
 ];
 
@@ -312,35 +298,6 @@ describe("Gmail call dispatch (all 21 methods)", () => {
   }
 });
 
-describe("Outlook call dispatch (all 15 methods)", () => {
-  let connector: ConnectorInterface;
-
-  beforeEach(async () => {
-    process.env.OUTLOOK_ACCESS_TOKEN = "fake-outlook-token";
-    connector = await loadConnector("outlook");
-  });
-
-  afterEach(() => {
-    delete process.env.OUTLOOK_ACCESS_TOKEN;
-  });
-
-  const methods = [
-    "messages.list", "messages.get", "messages.send", "messages.reply",
-    "messages.forward", "messages.delete", "messages.move", "messages.update",
-    "folders.list", "folders.get", "folders.create", "folders.delete", "folders.messages",
-    "search", "profile",
-  ];
-
-  for (const method of methods) {
-    it(`dispatches ${method}`, async () => {
-      const result = await connector.call(method, { id: "test-id", message_id: "test-id", folder_id: "test-id", to: "test@test.com", subject: "test", body: "test", query: "test", destination_id: "inbox" });
-      if (!result.ok) {
-        expect(result.error).not.toContain("Unknown Outlook method");
-      }
-    });
-  }
-});
-
 describe("GDrive call dispatch (all 11 methods)", () => {
   let connector: ConnectorInterface;
 
@@ -365,36 +322,6 @@ describe("GDrive call dispatch (all 11 methods)", () => {
       const result = await connector.call(method, { file_id: "test-id", permission_id: "test-id", mimeType: "text/plain", webhook_url: "https://example.com" });
       if (!result.ok) {
         expect(result.error).not.toContain("Unknown Google Drive method");
-      }
-    });
-  }
-});
-
-describe("OneDrive call dispatch (all 14 methods)", () => {
-  let connector: ConnectorInterface;
-
-  beforeEach(async () => {
-    process.env.ONEDRIVE_ACCESS_TOKEN = "fake-onedrive-token";
-    connector = await loadConnector("onedrive");
-  });
-
-  afterEach(() => {
-    delete process.env.ONEDRIVE_ACCESS_TOKEN;
-  });
-
-  const methods = [
-    "files.list", "files.get", "files.get_by_path", "files.create_folder",
-    "files.copy", "files.move", "files.delete", "files.search",
-    "sharing.create_link", "sharing.list",
-    "subscriptions.create", "subscriptions.list", "subscriptions.delete",
-    "delta",
-  ];
-
-  for (const method of methods) {
-    it(`dispatches ${method}`, async () => {
-      const result = await connector.call(method, { item_id: "test-id", subscription_id: "test-id", query: "test", name: "test", path: "/test", destination_id: "root", webhook_url: "https://example.com" });
-      if (!result.ok) {
-        expect(result.error).not.toContain("Unknown OneDrive method");
       }
     });
   }
@@ -576,17 +503,14 @@ describe("PayPal connector (direct instantiation)", () => {
   });
 
   it("init throws without env vars", async () => {
-    const origId = process.env.PAYPAL_CLIENT_ID;
-    const origSecret = process.env.PAYPAL_CLIENT_SECRET;
-    delete process.env.PAYPAL_CLIENT_ID;
-    delete process.env.PAYPAL_CLIENT_SECRET;
+    const origToken = process.env.PAYPAL_ACCESS_TOKEN;
+    delete process.env.PAYPAL_ACCESS_TOKEN;
 
     const { PayPalConnector } = await import("../../src/daemon/services/connectors/paypal/connector.js");
     const connector = new PayPalConnector();
-    await expect(connector.init()).rejects.toThrow("PAYPAL_CLIENT_ID");
+    await expect(connector.init()).rejects.toThrow("PAYPAL_ACCESS_TOKEN");
 
-    if (origId) process.env.PAYPAL_CLIENT_ID = origId;
-    if (origSecret) process.env.PAYPAL_CLIENT_SECRET = origSecret;
+    if (origToken) process.env.PAYPAL_ACCESS_TOKEN = origToken;
   });
 
   it("call returns error for unknown method (without init — proves dispatch)", async () => {

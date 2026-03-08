@@ -63,6 +63,11 @@ export interface OAuthFlowOptions {
    * through the daemon's HTTP server via IPC.
    */
   callbackPort?: number;
+  /**
+   * If true, omit `response_type=code` from the authorization URL.
+   * Stripe Apps doesn't use response_type — only client_id, redirect_uri, state.
+   */
+  skipResponseType?: boolean;
 }
 
 export interface OAuthFlowResult {
@@ -162,6 +167,7 @@ export async function runOAuthFlow(opts: OAuthFlowOptions): Promise<OAuthFlowRes
     useRelay,
     relayProvider,
     callbackPort,
+    skipResponseType,
   } = opts;
 
   // ---------------------------------------------------------------------------
@@ -181,6 +187,7 @@ export async function runOAuthFlow(opts: OAuthFlowOptions): Promise<OAuthFlowRes
       responseKeyField,
       timeoutMs,
       relayProvider,
+      skipResponseType,
     });
   }
 
@@ -224,19 +231,19 @@ export async function runOAuthFlow(opts: OAuthFlowOptions): Promise<OAuthFlowRes
   }
 
   // Build auth URL
-  const authParams = new URLSearchParams({
-    callback_url: callbackUrl,
-    ...(pkce ? {
-      code_challenge: codeChallenge!,
-      code_challenge_method: "S256",
-    } : {
-      client_id: clientId,
-      redirect_uri: callbackUrl,
-      response_type: "code",
-    }),
-    ...(scopes ? { scope: scopes } : {}),
-    ...extraAuthParams,
-  });
+  const authParams = new URLSearchParams({ callback_url: callbackUrl });
+  if (pkce) {
+    authParams.set("code_challenge", codeChallenge!);
+    authParams.set("code_challenge_method", "S256");
+  } else {
+    authParams.set("client_id", clientId);
+    authParams.set("redirect_uri", callbackUrl);
+    if (!skipResponseType) authParams.set("response_type", "code");
+  }
+  if (scopes) authParams.set("scope", scopes);
+  if (extraAuthParams) {
+    for (const [k, v] of Object.entries(extraAuthParams)) authParams.set(k, v);
+  }
 
   const fullAuthUrl = `${authUrl}?${authParams.toString()}`;
 
@@ -272,6 +279,7 @@ interface RelayOAuthOptions {
   responseKeyField: string;
   timeoutMs: number;
   relayProvider: string;
+  skipResponseType?: boolean;
 }
 
 /**
@@ -286,7 +294,7 @@ interface RelayOAuthOptions {
 async function runRelayOAuthFlow(opts: RelayOAuthOptions): Promise<OAuthFlowResult> {
   const {
     authUrl, tokenUrl, clientId, pkce, scopes, extraAuthParams,
-    responseKeyField, timeoutMs, relayProvider,
+    responseKeyField, timeoutMs, relayProvider, skipResponseType,
   } = opts;
 
   // Verify daemon is reachable (required for relay flow)
@@ -323,20 +331,19 @@ async function runRelayOAuthFlow(opts: RelayOAuthOptions): Promise<OAuthFlowResu
   }
 
   // Build auth URL with relay callback
-  const authParams = new URLSearchParams({
-    callback_url: callbackUrl,
-    ...(pkce ? {
-      code_challenge: codeChallenge!,
-      code_challenge_method: "S256",
-    } : {
-      client_id: clientId,
-      redirect_uri: callbackUrl,
-      response_type: "code",
-    }),
-    state: compositeState,
-    ...(scopes ? { scope: scopes } : {}),
-    ...extraAuthParams,
-  });
+  const authParams = new URLSearchParams({ callback_url: callbackUrl, state: compositeState });
+  if (pkce) {
+    authParams.set("code_challenge", codeChallenge!);
+    authParams.set("code_challenge_method", "S256");
+  } else {
+    authParams.set("client_id", clientId);
+    authParams.set("redirect_uri", callbackUrl);
+    if (!skipResponseType) authParams.set("response_type", "code");
+  }
+  if (scopes) authParams.set("scope", scopes);
+  if (extraAuthParams) {
+    for (const [k, v] of Object.entries(extraAuthParams)) authParams.set(k, v);
+  }
 
   const fullAuthUrl = `${authUrl}?${authParams.toString()}`;
 

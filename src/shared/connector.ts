@@ -101,15 +101,6 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     limitParam: "page_size",
   },
   {
-    name: "onedrive",
-    label: "OneDrive",
-    description: "Files, folders, sharing",
-    required: ["ONEDRIVE_ACCESS_TOKEN"],
-    optional: [],
-    oauth: { clientIdVar: "ONEDRIVE_OAUTH_CLIENT_ID", clientSecretVar: "ONEDRIVE_OAUTH_CLIENT_SECRET" },
-    limitParam: "top",
-  },
-  {
     name: "gmail",
     label: "Gmail",
     description: "Email, labels, drafts, threads",
@@ -117,15 +108,6 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     optional: [],
     oauth: { clientIdVar: "GMAIL_OAUTH_CLIENT_ID", clientSecretVar: "GMAIL_OAUTH_CLIENT_SECRET" },
     limitParam: "max_results",
-  },
-  {
-    name: "outlook",
-    label: "Outlook",
-    description: "Email, folders, calendar",
-    required: ["OUTLOOK_ACCESS_TOKEN"],
-    optional: [],
-    oauth: { clientIdVar: "OUTLOOK_OAUTH_CLIENT_ID", clientSecretVar: "OUTLOOK_OAUTH_CLIENT_SECRET" },
-    limitParam: "top",
   },
   {
     name: "hubspot",

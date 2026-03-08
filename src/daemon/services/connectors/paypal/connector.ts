@@ -1,93 +1,48 @@
 /**
  * PayPal connector — orders, payments, subscriptions, and webhook handling.
  *
- * Extends ConnectorBase for unified lifecycle, dispatch, and HTTP helpers.
- * PayPal uses OAuth2 client_credentials to obtain a Bearer token.
+ * Extends BearerConnector for unified OAuth2 Bearer token lifecycle.
+ * Token obtained via relay OAuth flow (PAYPAL_ACCESS_TOKEN).
+ * Sandbox mode controlled by PAYPAL_SANDBOX or PAYPAL_MODE env vars.
  */
 
 import type { ConnectorResult, WebhookEvent } from "../interface.js";
-import { ConnectorBase } from "../base.js";
-import { refreshToken } from "../middleware.js";
+import { BearerConnector, type BearerAuthConfig } from "../base.js";
 
-export class PayPalConnector extends ConnectorBase {
+export class PayPalConnector extends BearerConnector {
   readonly name = "paypal";
   readonly version = "1.0.0";
 
-  protected readonly healthPath = "/v1/notifications/webhooks-event-types";
-  protected readonly label = "PayPal";
+  protected readonly auth: BearerAuthConfig = {
+    baseUrl: "https://api-m.paypal.com",
+    tokenVar: "PAYPAL_ACCESS_TOKEN",
+    refreshTokenVar: "PAYPAL_REFRESH_TOKEN",
+    clientIdVar: "PAYPAL_OAUTH_CLIENT_ID",
+    clientSecretVar: "PAYPAL_OAUTH_CLIENT_SECRET",
+    tokenUrl: "https://api-m.paypal.com/v1/oauth2/token",
+    healthPath: "/v1/notifications/webhooks-event-types",
+    label: "PayPal",
+  };
 
-  private clientId = "";
-  private clientSecret = "";
   private webhookId = "";
-  private _baseUrl = "https://api-m.paypal.com";
-  private accessToken = "";
-
-  /** Base URL — switches between production and sandbox. */
-  protected get baseUrl(): string {
-    return this._baseUrl;
-  }
+  private _sandboxBaseUrl = "";
 
   // ---------------------------------------------------------------------------
-  // Lifecycle
+  // Lifecycle — sandbox override + webhook config
   // ---------------------------------------------------------------------------
 
   override async init(): Promise<void> {
-    const clientId = process.env.PAYPAL_CLIENT_ID;
-    const clientSecret = process.env.PAYPAL_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      throw new Error(
-        "PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET env vars are required",
-      );
-    }
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
+    await super.init();
     this.webhookId = process.env.PAYPAL_WEBHOOK_ID ?? "";
 
     if (process.env.PAYPAL_SANDBOX === "true" || process.env.PAYPAL_MODE === "sandbox") {
-      this._baseUrl = "https://api-m.sandbox.paypal.com";
+      this._sandboxBaseUrl = "https://api-m.sandbox.paypal.com";
     }
-
-    // Obtain initial access token via client_credentials grant.
-    await this.authenticate();
   }
 
-  override async shutdown(): Promise<void> {
-    this.accessToken = "";
-  }
-
-  // ---------------------------------------------------------------------------
-  // Auth — OAuth2 client_credentials -> Bearer token
-  // ---------------------------------------------------------------------------
-
-  protected async buildAuthHeader(): Promise<string> {
-    return `Bearer ${await this.getToken()}`;
-  }
-
-  private async getToken(): Promise<string> {
-    if (this.accessToken) return this.accessToken;
-    return refreshToken(this.name, () => this.authenticate());
-  }
-
-  private async authenticate(): Promise<string> {
-    const credentials = Buffer.from(
-      `${this.clientId}:${this.clientSecret}`,
-    ).toString("base64");
-    const res = await fetch(`${this._baseUrl}/v1/oauth2/token`, {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${credentials}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: "grant_type=client_credentials",
-    });
-
-    if (!res.ok) {
-      throw new Error(`PayPal OAuth2 failed: HTTP ${res.status}`);
-    }
-
-    const data = (await res.json()) as { access_token: string };
-    this.accessToken = data.access_token;
-    return this.accessToken;
+  /** Override base URL when sandbox mode is active. */
+  protected override get baseUrl(): string {
+    return this._sandboxBaseUrl || this.auth.baseUrl;
   }
 
   // ---------------------------------------------------------------------------
@@ -252,13 +207,12 @@ export class PayPalConnector extends ConnectorBase {
     body: string,
   ): Promise<boolean> {
     try {
-      const token = await this.getToken();
       const res = await fetch(
-        `${this._baseUrl}/v1/notifications/verify-webhook-signature`,
+        `${this.baseUrl}/v1/notifications/verify-webhook-signature`,
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${token}`,
+            Authorization: await this.buildAuthHeader(),
             "Content-Type": "application/json",
           },
           body: JSON.stringify({

@@ -353,7 +353,7 @@ describe("command registry", () => {
     "clipboard", "window", "camera", "open", "location",
     // integrations
     "stripe", "github", "paypal", "vercel", "twilio", "x",
-    "gdrive", "onedrive", "gmail", "outlook", "hubspot", "shopify",
+    "gdrive", "gmail", "hubspot", "shopify",
     "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
     "notion", "linear", "jira", "airtable", "asana",
     "mailchimp", "dropbox", "connectors",
@@ -398,7 +398,7 @@ describe("category assignment", () => {
     os: ["notes", "remind", "calendar", "contacts", "music", "clipboard", "window", "camera", "open", "location"],
     integrations: [
       "stripe", "github", "paypal", "vercel", "twilio", "x",
-      "gdrive", "onedrive", "gmail", "outlook", "hubspot", "shopify",
+      "gdrive", "gmail", "hubspot", "shopify",
       "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
       "notion", "linear", "jira", "airtable", "asana",
       "mailchimp", "dropbox", "connectors",

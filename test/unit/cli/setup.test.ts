@@ -233,7 +233,7 @@ describe("PROVIDER_ENV_KEYS", () => {
     expect(PROVIDER_ENV_KEYS).toContain("GROQ_API_KEY");
     expect(PROVIDER_ENV_KEYS).toContain("DEEPSEEK_API_KEY");
     expect(PROVIDER_ENV_KEYS).toContain("OPENROUTER_API_KEY");
-    expect(PROVIDER_ENV_KEYS).toContain("GOOGLE_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("GEMINI_API_KEY");
     expect(PROVIDER_ENV_KEYS).toContain("MISTRAL_API_KEY");
   });
 
@@ -285,7 +285,7 @@ describe("needsSetup", () => {
 
   test("returns false when any provider key is set", () => {
     // Test a sample of keys beyond the original two
-    for (const key of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GOOGLE_API_KEY"]) {
+    for (const key of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY"]) {
       // Clear all first
       for (const k of PROVIDER_ENV_KEYS) delete process.env[k];
       process.env[key] = "test-value";

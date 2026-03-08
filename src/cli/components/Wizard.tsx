@@ -23,7 +23,7 @@
  *   ───────────────────────────────────
  */
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Text, Box, useInput } from "ink";
 import { PALETTE } from "../theme.js";
 import type { WizardConfig, WizardStep } from "../types.js";
@@ -48,6 +48,13 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
   const [checkedSet, setCheckedSet] = useState<Set<string>>(new Set());
   const [textBuffer, setTextBuffer] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // Guard: deactivate input handling during the first render cycle.
+  // The Enter key that submitted the slash command can leak into useInput
+  // before the wizard visually renders. Ink's isActive option on useInput
+  // properly disconnects the stdin listener until the effect fires.
+  const [inputActive, setInputActive] = useState(false);
+  useEffect(() => { setInputActive(true); }, []);
 
   const step = config.steps[stepIndex];
   if (!step) return null;
@@ -216,7 +223,7 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
         return;
       }
     },
-    { isActive: true },
+    { isActive: inputActive },
   );
 
   // ── Render ────────────────────────────────────────────────────────

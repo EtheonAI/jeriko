@@ -18,7 +18,6 @@
 declare const __BAKED_RELAY_AUTH_SECRET__: string | undefined;
 declare const __BAKED_GITHUB_CLIENT_ID__: string | undefined;
 declare const __BAKED_GOOGLE_CLIENT_ID__: string | undefined;
-declare const __BAKED_MICROSOFT_CLIENT_ID__: string | undefined;
 declare const __BAKED_X_CLIENT_ID__: string | undefined;
 declare const __BAKED_VERCEL_CLIENT_ID__: string | undefined;
 declare const __BAKED_STRIPE_CLIENT_ID__: string | undefined;
@@ -36,6 +35,7 @@ declare const __BAKED_DROPBOX_CLIENT_ID__: string | undefined;
 declare const __BAKED_DISCORD_CLIENT_ID__: string | undefined;
 declare const __BAKED_INSTAGRAM_CLIENT_ID__: string | undefined;
 declare const __BAKED_THREADS_CLIENT_ID__: string | undefined;
+declare const __BAKED_PAYPAL_CLIENT_ID__: string | undefined;
 
 /**
  * Baked-in OAuth client IDs, keyed by a logical group name.
@@ -52,7 +52,6 @@ export const BAKED_RELAY_AUTH_SECRET: string | undefined =
 export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>> = {
   github:       typeof __BAKED_GITHUB_CLIENT_ID__       !== "undefined" ? __BAKED_GITHUB_CLIENT_ID__       : undefined,
   google:       typeof __BAKED_GOOGLE_CLIENT_ID__       !== "undefined" ? __BAKED_GOOGLE_CLIENT_ID__       : undefined,
-  microsoft:    typeof __BAKED_MICROSOFT_CLIENT_ID__    !== "undefined" ? __BAKED_MICROSOFT_CLIENT_ID__    : undefined,
   x:            typeof __BAKED_X_CLIENT_ID__            !== "undefined" ? __BAKED_X_CLIENT_ID__            : undefined,
   vercel:       typeof __BAKED_VERCEL_CLIENT_ID__       !== "undefined" ? __BAKED_VERCEL_CLIENT_ID__       : undefined,
   stripe:       typeof __BAKED_STRIPE_CLIENT_ID__       !== "undefined" ? __BAKED_STRIPE_CLIENT_ID__       : undefined,
@@ -70,4 +69,5 @@ export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>
   discord:      typeof __BAKED_DISCORD_CLIENT_ID__      !== "undefined" ? __BAKED_DISCORD_CLIENT_ID__      : undefined,
   instagram:    typeof __BAKED_INSTAGRAM_CLIENT_ID__    !== "undefined" ? __BAKED_INSTAGRAM_CLIENT_ID__    : undefined,
   threads:      typeof __BAKED_THREADS_CLIENT_ID__      !== "undefined" ? __BAKED_THREADS_CLIENT_ID__      : undefined,
+  paypal:       typeof __BAKED_PAYPAL_CLIENT_ID__       !== "undefined" ? __BAKED_PAYPAL_CLIENT_ID__       : undefined,
 };

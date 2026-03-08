@@ -82,7 +82,7 @@ if (relayExchange) {
   // Map daemon env vars to RELAY_ prefix for the local relay
   const providerGroupMap: Record<string, string> = {
     github: "GITHUB", stripe: "STRIPE", x: "X", vercel: "VERCEL",
-    gmail: "GOOGLE", gdrive: "GOOGLE", outlook: "MICROSOFT", onedrive: "MICROSOFT",
+    gmail: "GOOGLE", gdrive: "GOOGLE",
   };
   const group = providerGroupMap[providerName] ?? providerName.toUpperCase();
   process.env[`RELAY_${group}_OAUTH_CLIENT_ID`] = clientId;

@@ -164,29 +164,29 @@ jobs:
           for f in dist/jeriko-*; do
             filename=$(basename "$f")
             echo "Uploading $filename..."
-            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/${filename}" \
+            wrangler r2 object put "${BUCKET}/releases/${VERSION}/${filename}" \
               --file "$f" --content-type "application/octet-stream"
           done
 
           # Upload manifest
-          wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/manifest.json" \
+          wrangler r2 object put "${BUCKET}/releases/${VERSION}/manifest.json" \
             --file dist/manifest.json --content-type "application/json"
 
           # Upload templates
           if [ -f dist/templates.tar.gz ]; then
-            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/templates.tar.gz" \
+            wrangler r2 object put "${BUCKET}/releases/${VERSION}/templates.tar.gz" \
               --file dist/templates.tar.gz --content-type "application/gzip"
           fi
 
           # Upload agent prompt
           if [ -f dist/agent.md ]; then
-            wrangler r2 object put --remote "${BUCKET}/releases/${VERSION}/agent.md" \
+            wrangler r2 object put "${BUCKET}/releases/${VERSION}/agent.md" \
               --file dist/agent.md --content-type "text/markdown"
           fi
 
           # Update latest pointer
           echo -n "$VERSION" > dist/latest
-          wrangler r2 object put --remote "${BUCKET}/releases/latest" \
+          wrangler r2 object put "${BUCKET}/releases/latest" \
             --file dist/latest --content-type "text/plain"
 
           echo "CDN upload complete: $VERSION"

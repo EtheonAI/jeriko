@@ -250,6 +250,33 @@ export function getUserId(): string | undefined {
   return USER_ID_PATTERN.test(raw) ? raw : undefined;
 }
 
+/**
+ * Reload secrets from ~/.config/jeriko/.env into process.env.
+ *
+ * The daemon may start before onboarding writes JERIKO_USER_ID and API keys.
+ * This re-reads the .env file so late-written values become available without
+ * a full daemon restart.
+ */
+export function reloadSecrets(): void {
+  const envPath = path.join(getConfigDir(), ".env");
+  try {
+    const content = fs.readFileSync(envPath, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim().replace(/^["']|["']$/g, "");
+      if (key && !process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  } catch {
+    // .env may not exist yet — not an error
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Directory helpers
 // ---------------------------------------------------------------------------

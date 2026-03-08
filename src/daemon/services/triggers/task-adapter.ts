@@ -21,6 +21,48 @@ import type {
 } from "./engine.js";
 import type { EmailConfig } from "./email.js";
 
+// ---------------------------------------------------------------------------
+// Shared constants — single source of truth for task taxonomy.
+// Used by CLI handlers, channel router, and agent tools.
+// ---------------------------------------------------------------------------
+
+/** Engine-level trigger types (the 6 internal types). */
+export const TRIGGER_TYPES = ["cron", "webhook", "file", "http", "email", "once"] as const;
+export type TriggerType = typeof TRIGGER_TYPES[number];
+
+/** Event-driven trigger sources (the "trigger" user-facing category). */
+export const EVENT_TRIGGER_TYPES = ["webhook", "file", "http", "email"] as const;
+export type EventTriggerType = typeof EVENT_TRIGGER_TYPES[number];
+
+/** Schedule-like trigger types (recurring). */
+export const SCHEDULE_TRIGGER_TYPES = ["schedule", "cron"] as const;
+
+/** Webhook service names that the engine recognizes. */
+export const WEBHOOK_SERVICES = ["stripe", "github", "paypal", "twilio"] as const;
+export type WebhookService = typeof WEBHOOK_SERVICES[number];
+
+/** Email connector services. */
+export const EMAIL_SERVICES = ["gmail"] as const;
+
+/** File event types. */
+export const FILE_EVENTS = ["create", "modify", "delete"] as const;
+
+// ---------------------------------------------------------------------------
+// Task type classification helpers — used by CLI /tasks filters
+// ---------------------------------------------------------------------------
+
+export function isEventTrigger(type: string): boolean {
+  return (EVENT_TRIGGER_TYPES as readonly string[]).includes(type);
+}
+
+export function isScheduleTrigger(type: string): boolean {
+  return type === "schedule" || type === "cron";
+}
+
+export function isTimeTrigger(type: string): boolean {
+  return isScheduleTrigger(type) || type === "once";
+}
+
 // Webhook event type patterns per service (for CLI hint display)
 export const TRIGGER_EVENT_TYPES: Record<string, string[]> = {
   stripe: [
@@ -120,8 +162,8 @@ function buildTriggerFromSpec(
 ): Omit<TriggerConfig, "id"> & { id?: string } {
   const [source, event] = spec.includes(":") ? spec.split(":", 2) : [spec, undefined];
 
-  // Webhook services: stripe, paypal, github, twilio
-  if (["stripe", "paypal", "github", "twilio"].includes(source)) {
+  // Webhook services
+  if ((WEBHOOK_SERVICES as readonly string[]).includes(source)) {
     const config: WebhookConfig = { service: source as WebhookConfig["service"] };
     const secret = params.secret as string | undefined;
     if (secret) config.secret = secret;

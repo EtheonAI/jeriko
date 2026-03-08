@@ -19,6 +19,8 @@ mock.module("../../src/cli/lib/daemon.js", () => ({
   isDaemonRunning: () => false,
   cleanupPidFile: () => {},
   spawnDaemon: async () => null,
+  ensureDaemon: async () => false,
+  waitForSocket: async () => false,
 }));
 
 // Mock local provider detection — tests control flow via prompter responses,
@@ -380,7 +382,7 @@ describe("persistSetup() — config writing", () => {
     expect(config.channels).toEqual({});
   });
 
-  it("writes WhatsApp channel config when provided", async () => {
+  it("writes empty channels config (channels added post-setup via /connect)", async () => {
     const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
 
     const result: OnboardingResult = {
@@ -388,7 +390,6 @@ describe("persistSetup() — config writing", () => {
       model: "claude",
       apiKey: "sk-ant-test-1234567890abcdef",
       envKey: "ANTHROPIC_API_KEY",
-      channels: { whatsapp: true },
     };
 
     await persistSetup(result);
@@ -397,34 +398,7 @@ describe("persistSetup() — config writing", () => {
     const config = JSON.parse(
       fs.readFileSync(path.join(configDir, "config.json"), "utf-8"),
     );
-    expect(config.channels.whatsapp).toEqual({ enabled: true });
-
-    const envContent = fs.readFileSync(path.join(configDir, ".env"), "utf-8");
-    expect(envContent).toContain("WHATSAPP_ENABLED=true");
-  });
-
-  it("writes Telegram channel config when provided", async () => {
-    const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
-
-    const result: OnboardingResult = {
-      provider: "anthropic",
-      model: "claude",
-      apiKey: "sk-ant-test-1234567890abcdef",
-      envKey: "ANTHROPIC_API_KEY",
-      channels: { telegram: { token: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890" } },
-    };
-
-    await persistSetup(result);
-
-    const configDir = path.join(testDir, ".config", "jeriko");
-    const config = JSON.parse(
-      fs.readFileSync(path.join(configDir, "config.json"), "utf-8"),
-    );
-    expect(config.channels.telegram.token).toBe("123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890");
-    expect(config.channels.telegram.adminIds).toEqual([]);
-
-    const envContent = fs.readFileSync(path.join(configDir, ".env"), "utf-8");
-    expect(envContent).toContain("TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890");
+    expect(config.channels).toEqual({});
   });
 });
 
@@ -738,25 +712,13 @@ describe("OnboardingResult — interface contract", () => {
     expect(result.envKey).toBe("ANTHROPIC_API_KEY");
   });
 
-  it("supports optional channels field", () => {
-    const result: OnboardingResult = {
-      provider: "anthropic",
-      model: "claude",
-      apiKey: "test-key",
-      envKey: "ANTHROPIC_API_KEY",
-      channels: { telegram: { token: "123:abc" }, whatsapp: true },
-    };
-    expect(result.channels!.telegram!.token).toBe("123:abc");
-    expect(result.channels!.whatsapp).toBe(true);
-  });
-
-  it("channels is undefined when not configured", () => {
+  it("does not include channels (channels added post-setup via /connect)", () => {
     const result: OnboardingResult = {
       provider: "anthropic",
       model: "claude",
       apiKey: "test-key",
       envKey: "ANTHROPIC_API_KEY",
     };
-    expect(result.channels).toBeUndefined();
+    expect("channels" in result).toBe(false);
   });
 });

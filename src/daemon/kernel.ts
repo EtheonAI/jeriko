@@ -405,6 +405,22 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
           return;
         }
 
+        // Connector-level webhooks: "connector:<name>" — route to ConnectorManager.
+        // These come from app-level webhook URLs (e.g. PayPal, Stripe Connect)
+        // that the relay broadcasts to all connected daemons.
+        if (triggerId.startsWith("connector:") && state.connectors) {
+          const connectorName = triggerId.slice("connector:".length);
+          try {
+            const event = await state.connectors.dispatchWebhook(connectorName, headers, body);
+            if (event) {
+              log.info(`Connector webhook processed: ${connectorName} → ${event.type}`);
+            }
+          } catch (err) {
+            log.error(`Connector webhook failed (${connectorName}): ${err}`);
+          }
+          return;
+        }
+
         if (!state.triggers) return;
 
         let payload: unknown;
@@ -648,6 +664,13 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     unsubs.push(orchestratorBus.on("sub:tool_result", (d) => emit({ type: "sub:tool_result", ...d })));
     unsubs.push(orchestratorBus.on("sub:complete", (d) => emit({ type: "sub:complete", ...d })));
 
+    // IPC keepalive — prevents idle timeout when agent is blocked on long operations
+    // (extended thinking, tool execution, sub-agent delegation). Resets the client's
+    // idle timer so the connection stays alive during legitimate long-running work.
+    const keepaliveTimer = setInterval(() => {
+      emit({ type: "keepalive", ts: Date.now() });
+    }, 30_000);
+
     try {
     for await (const event of runAgent(agentConfig, history)) {
       // Stream each event to the CLI in real-time
@@ -663,8 +686,9 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
 
     } finally {
-      // Unsubscribe from orchestratorBus events
+      // Unsubscribe from orchestratorBus events + stop keepalive
       unsubs.forEach(u => u());
+      clearInterval(keepaliveTimer);
     }
 
     if (!response && lastError) {
@@ -764,15 +788,22 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     return channels.status();
   });
 
-  registerMethod("channel_connect", async (params) => {
-    const name = params.name as string;
+  registerStreamMethod("channel_connect", async (params, emit) => {
+    const name = (params.name as string)?.toLowerCase();
     if (!name) throw new Error("name is required");
 
     const adapter = channels.get(name);
-    if (!adapter) throw new Error(`Channel "${name}" is not registered`);
+    if (adapter) {
+      // Already registered — just reconnect
+      await channels.connect(name);
+      return channels.statusOf(name);
+    }
 
-    await channels.connect(name);
-    return channels.statusOf(name);
+    // Not registered — auto-add (create adapter, register, connect, persist config)
+    const { addChannel } = await import("./services/channels/lifecycle.js");
+    const onQR = (qr: string) => { emit({ type: "qr", qr }); };
+    const channelConfig = params.config as Record<string, unknown> | undefined;
+    return addChannel(channels, name, channelConfig, { onQR });
   });
 
   registerMethod("channel_disconnect", async (params) => {
@@ -1144,7 +1175,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!name) throw new Error("name is required");
 
     const { getConnectorDef, isConnectorConfigured } = await import("../shared/connector.js");
-    const { getOAuthProvider, isOAuthCapable } = await import("./services/oauth/providers.js");
+    const { getOAuthProvider, isOAuthCapable, resolveOAuthContext } = await import("./services/oauth/providers.js");
 
     const def = getConnectorDef(name);
     if (!def) throw new Error(`Unknown connector: ${name}`);
@@ -1160,9 +1191,27 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (provider) {
       const { generateState } = await import("./services/oauth/state.js");
       const { buildOAuthStartUrl } = await import("../shared/urls.js");
-      const { getUserId } = await import("../shared/config.js");
-      const stateToken = generateState(provider.name, "cli", "cli", getUserId());
-      const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
+      const { getUserId, reloadSecrets } = await import("../shared/config.js");
+
+      // Reload secrets from .env — the user ID may have been written after daemon boot
+      // (e.g. onboarding wizard runs after launchd starts the daemon).
+      let userId = getUserId();
+      if (!userId) {
+        reloadSecrets();
+        userId = getUserId();
+      }
+      if (!userId) {
+        throw new Error("No user ID found. Run `jeriko init` or restart the daemon after onboarding.");
+      }
+
+      const stateToken = generateState(provider.name, "cli", "cli", userId);
+
+      // Resolve provider-specific context from params or env (e.g. Shopify's {shop})
+      const args = (params.args as string[]) ?? [];
+      const oauthContext = resolveOAuthContext(provider, args);
+      if (oauthContext instanceof Error) throw oauthContext;
+
+      const loginUrl = buildOAuthStartUrl(provider.name, stateToken, oauthContext);
       return { ok: true, name, status: "oauth_required", loginUrl, label: provider.label };
     }
 

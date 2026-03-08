@@ -53,9 +53,9 @@ describe("EmailTrigger IMAP mode", () => {
 
   it("respects custom host and port", () => {
     const trigger = new EmailTrigger({
-      host: "imap.outlook.com",
+      host: "imap.gmail.com",
       port: 993,
-      user: "user@outlook.com",
+      user: "user@gmail.com",
       password: "secret",
       intervalMs: 60_000,
     });
@@ -132,8 +132,8 @@ describe("EmailTrigger connector mode", () => {
     expect(trigger.validate()).toBeNull();
   });
 
-  it("supports outlook connector", () => {
-    const trigger = new EmailTrigger({ connector: "outlook" });
+  it("supports gmail connector", () => {
+    const trigger = new EmailTrigger({ connector: "gmail" });
     expect(trigger.validate()).toBeNull();
   });
 });
@@ -358,14 +358,14 @@ describe("TriggerStore email persistence", () => {
       type: "email",
       enabled: false,
       config: {
-        host: "imap.outlook.com",
+        host: "imap.gmail.com",
         port: 993,
-        user: "user@outlook.com",
+        user: "user@gmail.com",
         password: "secret",
         intervalMs: 90_000,
       },
-      action: { type: "shell", command: "echo outlook" },
-      label: "Outlook watcher",
+      action: { type: "shell", command: "echo gmail" },
+      label: "Gmail watcher",
     });
 
     const engine2 = new TriggerEngine();
@@ -376,8 +376,8 @@ describe("TriggerStore email persistence", () => {
     expect(loaded!.type).toBe("email");
 
     const config = loaded!.config as EmailConfig;
-    expect(config.host).toBe("imap.outlook.com");
-    expect(config.user).toBe("user@outlook.com");
+    expect(config.host).toBe("imap.gmail.com");
+    expect(config.user).toBe("user@gmail.com");
     expect(config.intervalMs).toBe(90_000);
 
     await engine2.stop();

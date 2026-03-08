@@ -560,9 +560,12 @@ if [ "$OS" = "Darwin" ]; then
     <string>/usr/local/bin:/usr/bin:/bin:$BIN_DIR</string>
   </dict>
   <key>RunAtLoad</key>
-  <false/>
+  <true/>
   <key>KeepAlive</key>
-  <false/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>StandardOutPath</key>
   <string>$DATA_DIR/data/logs/server.log</string>
   <key>StandardErrorPath</key>
@@ -573,9 +576,7 @@ if [ "$OS" = "Darwin" ]; then
 </plist>
 LAUNCHD
 
-  ok "launchd service → $PLIST"
-  echo -e "   Start:  ${BOLD}launchctl load $PLIST${NC}"
-  echo -e "   Stop:   ${BOLD}launchctl unload $PLIST${NC}"
+  ok "launchd service → $PLIST (starts on login)"
 fi
 
 # ── systemd service (Linux) ─────────────────────────────────────
@@ -601,10 +602,10 @@ RestartSec=5
 WantedBy=default.target
 SYSTEMD
 
-  ok "systemd service → $SYSTEMD_DIR/jeriko.service"
-  echo "   Enable: systemctl --user enable jeriko"
-  echo "   Start:  systemctl --user start jeriko"
-  echo "   Logs:   journalctl --user -u jeriko -f"
+  # Enable for auto-start on login — don't start now (wizard does that)
+  systemctl --user daemon-reload 2>/dev/null || true
+  systemctl --user enable jeriko 2>/dev/null || true
+  ok "systemd service → $SYSTEMD_DIR/jeriko.service (enabled, starts on login)"
 fi
 
 # ── PATH check ──────────────────────────────────────────────────
@@ -655,10 +656,12 @@ echo "    jeriko <TAB>                 # list all commands"
 echo "    jeriko stripe <TAB>          # list subcommands"
 echo ""
 
-# ── First launch hint ─────────────────────────────────────────────
+# ── First launch — onboarding wizard ──────────────────────────────
 if [ ! -f "$CONF_DIR/config.json" ]; then
-  echo -e "  ${BOLD}Run 'jeriko' to start the setup wizard.${NC}"
   echo ""
+  echo -e "${BOLD}Launching setup wizard...${NC}"
+  echo ""
+  exec "$BIN_DIR/jeriko"
 fi
 
 # ── Telemetry (opt-out: DO_NOT_TRACK=1) ────────────────────────

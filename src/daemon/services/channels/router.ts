@@ -14,6 +14,7 @@
 import type { ChannelRegistry, MessageMetadata, KeyboardLayout } from "./index.js";
 import { getLogger } from "../../../shared/logger.js";
 import { runAgent, type AgentRunConfig } from "../../agent/agent.js";
+import { orchestratorBus } from "../../agent/orchestrator.js";
 import {
   createSession,
   updateSession,
@@ -36,6 +37,11 @@ import {
 } from "./binding.js";
 import { kvGet, kvSet } from "../../storage/kv.js";
 import type { STTConfig, TTSConfig } from "../../../shared/config.js";
+import {
+  EVENT_TRIGGER_TYPES,
+  WEBHOOK_SERVICES,
+  isEventTrigger,
+} from "../triggers/task-adapter.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -221,6 +227,9 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     };
     activeRuns.set(chatId, run);
 
+    const unsubs: Array<() => void> = [];
+    let statusTimer: ReturnType<typeof setInterval> | null = null;
+
     try {
       // Download attachments, transcribe voice, and build vision content blocks.
       let augmentedText = text;
@@ -334,6 +343,36 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       let lastEditAt = 0;
       const toolResults: string[] = [];
 
+      // Subscribe to orchestratorBus for live sub-agent events.
+      // Without this, sub-agent activity (delegate, parallel_tasks) is invisible
+      // and the channel shows "Thinking..." indefinitely until timeout.
+      let lastStatusLabel = "";
+      unsubs.push(orchestratorBus.on("sub:started", (d) => {
+        statusLabel = `Sub-agent: ${d.label}`;
+      }));
+      unsubs.push(orchestratorBus.on("sub:tool_call", (d) => {
+        statusLabel = `Sub-agent → ${d.toolName}`;
+      }));
+      unsubs.push(orchestratorBus.on("sub:tool_result", () => {
+        // Keep sub-agent label active — next event will update
+      }));
+      unsubs.push(orchestratorBus.on("sub:complete", (d) => {
+        statusLabel = d.status === "error"
+          ? `Sub-agent failed: ${d.label}`
+          : "";
+      }));
+
+      // Periodic status update — pushes live edits even when runAgent is blocked
+      // waiting for sub-agent/tool completion (generator yields nothing during delegation).
+      statusTimer = setInterval(async () => {
+        if (!sent?.messageId || controller.signal.aborted) return;
+        if (statusLabel === lastStatusLabel) return; // no change — skip edit
+        lastStatusLabel = statusLabel;
+        const preview = buildPreview(response, statusLabel);
+        await editSafe(metadata, sent.messageId, preview);
+        lastEditAt = Date.now();
+      }, EDIT_INTERVAL_MS);
+
       for await (const event of runAgent(runConfig, history)) {
         if (controller.signal.aborted) break;
 
@@ -359,14 +398,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             break;
         }
 
-        // Debounced live edit
+        // Debounced live edit — for events from the generator
         const now = Date.now();
         if (sent?.messageId && now - lastEditAt >= EDIT_INTERVAL_MS) {
+          lastStatusLabel = statusLabel;
           const preview = buildPreview(response, statusLabel);
           await editSafe(metadata, sent.messageId, preview);
           lastEditAt = now;
         }
       }
+
+      clearInterval(statusTimer);
 
       if (controller.signal.aborted) {
         // Aborted — message already handled by /stop
@@ -407,6 +449,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         await safeSend(metadata, `Error: ${msg}`);
       }
     } finally {
+      unsubs.forEach((u) => u());
+      if (statusTimer) clearInterval(statusTimer);
       clearInterval(typingTimer);
       activeRuns.delete(chatId);
     }
@@ -557,21 +601,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             ],
             [
               { label: "Connectors", data: "/connectors" },
-              { label: "Skills", data: "/skill" },
-              { label: "Tasks", data: "/task" },
+              { label: "Skills", data: "/skills" },
+              { label: "Tasks", data: "/tasks" },
             ],
             [
-              { label: "Providers", data: "/providers" },
               { label: "Channels", data: "/channels" },
               { label: "Share", data: "/share" },
+              { label: "Notifications", data: "/notifications" },
             ],
             [
               { label: "Billing", data: "/billing" },
-              { label: "Notifications", data: "/notifications" },
               { label: "Config", data: "/config" },
+              { label: "Status", data: "/status" },
             ],
             [
-              { label: "Status", data: "/status" },
               { label: "System", data: "/sys" },
             ],
           ],
@@ -636,17 +679,64 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       }
 
       case "session":
-        await safeSend(
-          metadata,
-          [`session: ${state.sessionId}`, describeModel(state.model)].join("\n"),
-        );
-        return;
-
       case "sessions": {
         const subCmd = rest[0]?.toLowerCase();
 
-        // /sessions switch — list sessions to switch to
+        // /session list — list sessions
+        if (subCmd === "list" || subCmd === "ls" || (!subCmd && command === "sessions")) {
+          const currentSession = getSession(state.sessionId);
+          const sessionCount = listSessions(100).length;
+          const sessionTitle = currentSession?.title ?? "Untitled";
+          const sessionAge = currentSession?.updated_at
+            ? formatAge(currentSession.updated_at)
+            : "just now";
+
+          await safeKeyboard(
+            metadata,
+            [
+              `Current: ${currentSession?.slug ?? state.sessionId}`,
+              `Title: ${sessionTitle}`,
+              `Model: ${state.model}`,
+              `Updated: ${sessionAge}`,
+              `Total: ${sessionCount} session(s)`,
+            ].join("\n"),
+            [
+              [
+                { label: "New Session", data: "/new" },
+                { label: "Switch", data: "/sessions switch" },
+              ],
+              [
+                { label: "Delete", data: "/sessions delete" },
+                { label: "Archive", data: "/archive" },
+              ],
+              [
+                { label: "Rename", data: "/sessions rename" },
+                { label: "History", data: "/history" },
+              ],
+            ],
+          );
+          return;
+        }
+
+        // /session switch [slug] — switch to another session
         if (subCmd === "switch") {
+          const switchTarget = rest[1];
+          if (switchTarget) {
+            const target = getSessionBySlug(switchTarget) ?? getSession(switchTarget);
+            if (!target) {
+              await safeSend(metadata, `Session not found: ${switchTarget}`);
+              return;
+            }
+            const switchModel = target.model ?? opts.defaultModel;
+            sessionsByChat.set(chatId, {
+              sessionId: target.id,
+              model: switchModel,
+            });
+            bindSession(metadata.channel, chatId, target.id, switchModel);
+            await safeSend(metadata, `Switched to session: ${target.slug} (${target.id})`);
+            return;
+          }
+          // No target — show picker
           const recent = listSessions(10);
           if (recent.length === 0) {
             await safeSend(metadata, "No sessions available.");
@@ -659,7 +749,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const age = formatAge(s.updated_at);
             lines.push(`${active ? "●" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
             if (!active) {
-              buttons.push([{ label: s.slug, data: `/switch ${s.slug}` }]);
+              buttons.push([{ label: s.slug, data: `/sessions switch ${s.slug}` }]);
             }
           }
           if (buttons.length > 0) {
@@ -675,8 +765,28 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /sessions delete — list sessions to delete
+        // /session delete [slug] — delete a session
         if (subCmd === "delete" || subCmd === "del") {
+          const targetSlug = rest[1];
+          if (targetSlug) {
+            const target = getSessionBySlug(targetSlug) ?? getSession(targetSlug);
+            if (!target) {
+              await safeSend(metadata, `Session not found: ${targetSlug}`);
+              return;
+            }
+            if (target.id === state.sessionId) {
+              await safeSend(metadata, "Cannot delete the active session. Use /kill to destroy and start fresh.");
+              return;
+            }
+            deleteSession(target.id);
+            await safeKeyboard(
+              metadata,
+              `Session deleted: ${target.slug}`,
+              [[{ label: "« Session", data: "/sessions" }]],
+            );
+            return;
+          }
+          // No slug — show picker
           const recent = listSessions(10);
           if (recent.length === 0) {
             await safeSend(metadata, "No sessions to delete.");
@@ -689,7 +799,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const age = formatAge(s.updated_at);
             lines.push(`${active ? "● current" : "○"} ${s.slug} — ${s.model ?? "?"} — ${age}`);
             if (!active) {
-              buttons.push([{ label: `Delete ${s.slug}`, data: `/sessions rm ${s.slug}` }]);
+              buttons.push([{ label: `Delete ${s.slug}`, data: `/sessions delete ${s.slug}` }]);
             }
           }
           if (buttons.length > 0) {
@@ -705,11 +815,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /sessions rm <slug|id> — delete a specific session
+        // /session rm <slug> — alias for delete
         if (subCmd === "rm" || subCmd === "remove") {
           const targetSlug = rest[1];
           if (!targetSlug) {
-            await safeSend(metadata, "Usage: /sessions rm <session-slug>");
+            await safeSend(metadata, "Usage: /sessions delete <session-slug>");
             return;
           }
           const target = getSessionBySlug(targetSlug) ?? getSession(targetSlug);
@@ -725,12 +835,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeKeyboard(
             metadata,
             `Session deleted: ${target.slug}`,
-            [[{ label: "« Sessions", data: "/sessions" }]],
+            [[{ label: "« Session", data: "/sessions" }]],
           );
           return;
         }
 
-        // /sessions rename <title> — rename current session
+        // /session rename <title>
         if (subCmd === "rename") {
           const newTitle = rest.slice(1).join(" ").trim();
           if (!newTitle) {
@@ -741,50 +851,24 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeKeyboard(
             metadata,
             `Session renamed: ${newTitle}`,
-            [[{ label: "« Sessions", data: "/sessions" }]],
+            [[{ label: "« Session", data: "/sessions" }]],
           );
           return;
         }
 
-        // /sessions — hub menu
-        const currentSession = getSession(state.sessionId);
-        const sessionCount = listSessions(100).length;
-        const sessionTitle = currentSession?.title ?? "Untitled";
-        const sessionAge = currentSession?.updated_at
-          ? formatAge(currentSession.updated_at)
-          : "just now";
-
-        await safeKeyboard(
+        // /session (no subcommand) — show current session detail
+        await safeSend(
           metadata,
-          [
-            `Current: ${currentSession?.slug ?? state.sessionId}`,
-            `Title: ${sessionTitle}`,
-            `Model: ${state.model}`,
-            `Updated: ${sessionAge}`,
-            `Total: ${sessionCount} session(s)`,
-          ].join("\n"),
-          [
-            [
-              { label: "New Session", data: "/new" },
-              { label: "Switch", data: "/sessions switch" },
-            ],
-            [
-              { label: "Delete", data: "/sessions delete" },
-              { label: "Archive", data: "/archive" },
-            ],
-            [
-              { label: "Rename", data: "/sessions rename" },
-              { label: "History", data: "/history" },
-            ],
-          ],
+          [`session: ${state.sessionId}`, describeModel(state.model)].join("\n"),
         );
         return;
       }
 
+      // Legacy aliases — route to unified /session
       case "delete":
       case "del": {
         if (!arg) {
-          await safeSend(metadata, "Usage: /delete <session-slug>");
+          await safeSend(metadata, "Usage: /sessions delete <session-slug>");
           return;
         }
         const delTarget = getSessionBySlug(arg) ?? getSession(arg);
@@ -803,7 +887,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
       case "switch": {
         if (!arg) {
-          await safeSend(metadata, "Usage: /switch <session-slug-or-id>");
+          await safeSend(metadata, "Usage: /sessions switch <session-slug-or-id>");
           return;
         }
         const target = getSessionBySlug(arg) ?? getSession(arg);
@@ -1045,244 +1129,335 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
-      case "connect": {
-        const { CONNECTOR_DEFS, isConnectorConfigured } = await import("../../../shared/connector.js");
-        const { getOAuthProvider, isOAuthCapable, OAUTH_PROVIDERS } = await import("../oauth/providers.js");
-        const { generateState } = await import("../oauth/state.js");
+      // ── Unified connectors block ──────────────────────────────────
+      // All connector operations: connect, disconnect, auth, health, detail, list.
+      // Legacy top-level commands (connect, disconnect, auth, health) route here.
+      case "connect":
+      case "disconnect":
+      case "auth":
+      case "health":
+      case "connector":
+      case "connectors": {
+        // Normalize: legacy top-level commands become subcommands under /connectors
+        const connSub = ["connect", "disconnect", "auth", "health"].includes(command)
+          ? command
+          : rest[0]?.toLowerCase() ?? "";
+        const connRest = ["connect", "disconnect", "auth", "health"].includes(command)
+          ? rest
+          : rest.slice(1);
+        const connName = connRest[0]?.toLowerCase();
 
-        const connectorName = rest[0]?.toLowerCase();
+        const {
+          CONNECTOR_DEFS, getConnectorDef, isConnectorConfigured,
+          primaryVarName, isSlotSet, slotLabel,
+        } = await import("../../../shared/connector.js");
+        const { getOAuthProvider, isOAuthCapable, resolveOAuthContext, OAUTH_PROVIDERS } = await import("../oauth/providers.js");
 
-        // No args — show all OAuth providers as buttons
-        if (!connectorName) {
-          const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data: string }> = [];
 
-          for (const p of OAUTH_PROVIDERS) {
-            const ready = isConnectorConfigured(p.name);
-            const label = ready ? `${p.label} ✓` : p.label;
-            const data = ready ? `/disconnect ${p.name}` : `/connect ${p.name}`;
+        // ── connect — OAuth connect flow ──────────────────────────────
+        if (connSub === "connect") {
+          if (!connName) {
+            const buttons: KeyboardLayout = [];
+            let row: Array<{ label: string; data: string }> = [];
 
-            row.push({ label, data });
-            if (row.length === 3) {
-              buttons.push(row);
-              row = [];
+            for (const p of OAUTH_PROVIDERS) {
+              const ready = isConnectorConfigured(p.name);
+              const label = ready ? `${p.label} ✓` : p.label;
+              const data = ready ? `/connectors disconnect ${p.name}` : `/connectors connect ${p.name}`;
+              row.push({ label, data });
+              if (row.length === 3) { buttons.push(row); row = []; }
             }
-          }
-          if (row.length > 0) buttons.push(row);
+            if (row.length > 0) buttons.push(row);
 
-          // Add API-key connectors that aren't OAuth-capable
-          const apiKeyRow: Array<{ label: string; data: string }> = [];
-          for (const def of CONNECTOR_DEFS) {
-            if (!isOAuthCapable(def.name)) {
-              const ready = isConnectorConfigured(def.name);
-              const label = ready ? `${def.label} ✓` : def.label;
-              apiKeyRow.push({ label, data: `/auth ${def.name}` });
+            const apiKeyRow: Array<{ label: string; data: string }> = [];
+            for (const def of CONNECTOR_DEFS) {
+              if (!isOAuthCapable(def.name)) {
+                const ready = isConnectorConfigured(def.name);
+                const label = ready ? `${def.label} ✓` : def.label;
+                apiKeyRow.push({ label, data: `/connectors auth ${def.name}` });
+              }
             }
+            if (apiKeyRow.length > 0) buttons.push(apiKeyRow);
+
+            const connectedCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
+            await safeKeyboard(
+              metadata,
+              `Connectors (${connectedCount}/${CONNECTOR_DEFS.length} connected)\nTap to connect or disconnect:`,
+              buttons,
+            );
+            return;
           }
-          if (apiKeyRow.length > 0) buttons.push(apiKeyRow);
 
-          const connectedCount = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name)).length;
-          await safeKeyboard(
-            metadata,
-            `Connectors (${connectedCount}/${CONNECTOR_DEFS.length} connected)\nTap to connect or disconnect:`,
-            buttons,
-          );
-          return;
-        }
+          const provider = getOAuthProvider(connName);
+          if (!provider) {
+            const oauthNames = OAUTH_PROVIDERS.map((p) => p.name).join(", ");
+            await safeSend(
+              metadata,
+              `${connName} doesn't support OAuth.\nUse /connectors auth ${connName} <key> instead.\n\nOAuth connectors: ${oauthNames}`,
+            );
+            return;
+          }
 
-        // Specific connector
-        const provider = getOAuthProvider(connectorName);
-        if (!provider) {
-          const oauthNames = OAUTH_PROVIDERS.map((p) => p.name).join(", ");
+          if (isConnectorConfigured(connName)) {
+            await safeSend(
+              metadata,
+              `${provider.label} is already connected.\nUse /connectors disconnect ${connName} to remove it first.`,
+            );
+            return;
+          }
+
+          if (process.env.STRIPE_BILLING_SECRET_KEY) {
+            try {
+              const { canActivateConnector } = await import("../../billing/license.js");
+              const check = canActivateConnector();
+              if (!check.allowed) { await safeSend(metadata, check.reason!); return; }
+            } catch { /* billing module not available — allow */ }
+          }
+
+          const { generateState } = await import("../oauth/state.js");
+          const { getUserId } = await import("../../../shared/config.js");
+          const stateToken = generateState(provider.name, chatId, metadata.channel, getUserId());
+          const { buildOAuthStartUrl } = await import("../../../shared/urls.js");
+
+          // Extract required context from auth URL placeholders (e.g. {shop} for Shopify).
+          // Placeholders are resolved from env vars or connect args.
+          const oauthContext = resolveOAuthContext(provider, connRest.slice(1));
+          if (oauthContext instanceof Error) {
+            await safeSend(metadata, oauthContext.message);
+            return;
+          }
+
+          const loginUrl = buildOAuthStartUrl(provider.name, stateToken, oauthContext);
+
           await safeSend(
             metadata,
-            `${connectorName} doesn't support OAuth.\nUse /auth ${connectorName} <key> instead.\n\nOAuth connectors: ${oauthNames}`,
+            `Connect ${provider.label}:\n${loginUrl}\n\nLink expires in 10 minutes.`,
           );
+
+          if (metadata.message_id) {
+            await opts.channels.deleteMessage(metadata.channel, metadata.chat_id, metadata.message_id);
+          }
           return;
         }
 
-        // Already connected?
-        if (isConnectorConfigured(connectorName)) {
-          await safeSend(
-            metadata,
-            `${provider.label} is already connected.\nUse /disconnect ${connectorName} to remove it first.`,
-          );
-          return;
-        }
-
-        // Billing gate: check if the tier allows a new connector
-        if (process.env.STRIPE_BILLING_SECRET_KEY) {
-          try {
-            const { canActivateConnector } = await import("../../billing/license.js");
-            const check = canActivateConnector();
-            if (!check.allowed) {
-              await safeSend(metadata, check.reason!);
+        // ── disconnect — remove credentials ───────────────────────────
+        if (connSub === "disconnect") {
+          if (!connName) {
+            const connected = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
+            if (connected.length === 0) {
+              await safeSend(metadata, "No connectors are connected.");
               return;
             }
-          } catch { /* billing module not available — allow */ }
-        }
 
-        // Generate state token and send the login link.
-        // userId is embedded in the composite state for relay routing.
-        const { getUserId } = await import("../../../shared/config.js");
-        const stateToken = generateState(provider.name, chatId, metadata.channel, getUserId());
-        const { buildOAuthStartUrl } = await import("../../../shared/urls.js");
-        const loginUrl = buildOAuthStartUrl(provider.name, stateToken);
-
-        await safeSend(
-          metadata,
-          `Connect ${provider.label}:\n${loginUrl}\n\nLink expires in 10 minutes.`,
-        );
-
-        // Delete the user's /connect message — it's now processed and keeping it
-        // in chat history is unnecessary. The bot's reply contains the login link.
-        if (metadata.message_id) {
-          await opts.channels.deleteMessage(
-            metadata.channel,
-            metadata.chat_id,
-            metadata.message_id,
-          );
-        }
-        return;
-      }
-
-      case "disconnect": {
-        const { getConnectorDef, isConnectorConfigured } = await import("../../../shared/connector.js");
-        const { getOAuthProvider, isOAuthCapable } = await import("../oauth/providers.js");
-        const { deleteSecret } = await import("../../../shared/secrets.js");
-
-        const connectorName = rest[0]?.toLowerCase();
-
-        if (!connectorName) {
-          // Show connected connectors as buttons
-          const { CONNECTOR_DEFS } = await import("../../../shared/connector.js");
-          const connected = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
-
-          if (connected.length === 0) {
-            await safeSend(metadata, "No connectors are connected.");
-            return;
-          }
-
-          const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data: string }> = [];
-          for (const d of connected) {
-            row.push({ label: d.label, data: `/disconnect ${d.name}` });
-            if (row.length === 3) {
-              buttons.push(row);
-              row = [];
+            const buttons: KeyboardLayout = [];
+            let row: Array<{ label: string; data: string }> = [];
+            for (const d of connected) {
+              row.push({ label: d.label, data: `/connectors disconnect ${d.name}` });
+              if (row.length === 3) { buttons.push(row); row = []; }
             }
-          }
-          if (row.length > 0) buttons.push(row);
+            if (row.length > 0) buttons.push(row);
 
-          await safeKeyboard(metadata, "Tap a connector to disconnect:", buttons);
-          return;
-        }
-
-        const def = getConnectorDef(connectorName);
-        if (!def) {
-          await safeSend(metadata, `Unknown connector: ${connectorName}`);
-          return;
-        }
-
-        if (!isConnectorConfigured(connectorName)) {
-          await safeSend(metadata, `${def.label} is not connected.`);
-          return;
-        }
-
-        // Delete the OAuth token(s)
-        const provider = getOAuthProvider(connectorName);
-        if (provider) {
-          deleteSecret(provider.tokenEnvVar);
-          if (provider.refreshTokenEnvVar) {
-            deleteSecret(provider.refreshTokenEnvVar);
-          }
-        } else {
-          // API-key connector — delete all required vars
-          const { primaryVarName } = await import("../../../shared/connector.js");
-          for (const entry of def.required) {
-            deleteSecret(primaryVarName(entry));
-          }
-        }
-
-        // Evict from connector manager cache so next get() re-initializes
-        const connectorMgr = opts.getConnectors?.();
-        if (connectorMgr) {
-          await connectorMgr.evict(connectorName);
-        }
-
-        await safeKeyboard(
-          metadata,
-          `${def.label} disconnected.`,
-          [
-            [
-              { label: `Reconnect`, data: isOAuthCapable(connectorName) ? `/connect ${connectorName}` : `/auth ${connectorName}` },
-              { label: "Connectors", data: "/connectors" },
-            ],
-          ],
-        );
-        return;
-      }
-
-      case "connectors":
-      case "connector": {
-        const { CONNECTOR_DEFS, getConnectorDef, isConnectorConfigured } = await import("../../../shared/connector.js");
-        const { isOAuthCapable, getOAuthProvider } = await import("../oauth/providers.js");
-
-        const detailName = rest[0]?.toLowerCase();
-
-        // ── Detail view: /connector <name> ──
-        if (detailName) {
-          const def = getConnectorDef(detailName);
-          if (!def) {
-            await safeSend(metadata, `Unknown connector: ${detailName}`);
+            await safeKeyboard(metadata, "Tap a connector to disconnect:", buttons);
             return;
           }
 
-          const ready = isConnectorConfigured(detailName);
-          const oauth = isOAuthCapable(detailName);
-          const provider = getOAuthProvider(detailName);
+          const def = getConnectorDef(connName);
+          if (!def) { await safeSend(metadata, `Unknown connector: ${connName}`); return; }
+          if (!isConnectorConfigured(connName)) { await safeSend(metadata, `${def.label} is not connected.`); return; }
+
+          const { deleteSecret } = await import("../../../shared/secrets.js");
+          const provider = getOAuthProvider(connName);
+          if (provider) {
+            deleteSecret(provider.tokenEnvVar);
+            if (provider.refreshTokenEnvVar) deleteSecret(provider.refreshTokenEnvVar);
+          } else {
+            for (const entry of def.required) deleteSecret(primaryVarName(entry));
+          }
+
+          const connectorMgr = opts.getConnectors?.();
+          if (connectorMgr) await connectorMgr.evict(connName);
+
+          await safeKeyboard(
+            metadata,
+            `${def.label} disconnected.`,
+            [[
+              { label: "Reconnect", data: isOAuthCapable(connName) ? `/connectors connect ${connName}` : `/connectors auth ${connName}` },
+              { label: "Connectors", data: "/connectors" },
+            ]],
+          );
+          return;
+        }
+
+        // ── auth — API key management ─────────────────────────────────
+        if (connSub === "auth") {
+          if (!connName) {
+            const buttons: KeyboardLayout = [];
+            let row: Array<{ label: string; data: string }> = [];
+            for (const def of CONNECTOR_DEFS) {
+              const ready = isConnectorConfigured(def.name);
+              const label = ready ? `${def.label} ✓` : def.label;
+              row.push({ label, data: `/connectors auth ${def.name}` });
+              if (row.length === 3) { buttons.push(row); row = []; }
+            }
+            if (row.length > 0) buttons.push(row);
+
+            await safeKeyboard(metadata, "Configure a connector — tap for details:", buttons);
+            return;
+          }
+
+          const def = getConnectorDef(connName);
+          if (!def) {
+            const names = CONNECTOR_DEFS.map((d) => d.name).join(", ");
+            await safeSend(metadata, `Unknown connector: ${connName}\nAvailable: ${names}`);
+            return;
+          }
+
+          const keys = connRest.slice(1);
+          if (keys.length === 0) {
+            const ready = isConnectorConfigured(def.name);
+            const lines = [`${def.label} \u2014 ${def.description}`];
+            lines.push(`Status: ${ready ? "configured \u25CF" : "not configured \u25CB"}`);
+            lines.push("");
+            lines.push("Required:");
+            for (const entry of def.required) {
+              lines.push(`  ${isSlotSet(entry) ? "\u25CF" : "\u25CB"} ${slotLabel(entry)}`);
+            }
+            if (def.optional.length > 0) {
+              lines.push("Optional:");
+              for (const v of def.optional) {
+                lines.push(`  ${process.env[v] ? "\u25CF" : "\u25CB"} ${v}`);
+              }
+            }
+            lines.push("");
+            if (def.required.length === 1) {
+              lines.push(`Set: /connectors auth ${def.name} <key>`);
+            } else {
+              lines.push(`Set: /connectors auth ${def.name} ${def.required.map((e) => `<${primaryVarName(e)}>`).join(" ")}`);
+            }
+            await safeSend(metadata, lines.join("\n"));
+            return;
+          }
+
+          if (keys.length < def.required.length) {
+            const varNames = def.required.map((e) => primaryVarName(e));
+            await safeSend(
+              metadata,
+              `${def.label} requires ${def.required.length} key(s):\n${varNames.join("\n")}\n\nUsage: /connectors auth ${def.name} ${varNames.map((v) => `<${v}>`).join(" ")}`,
+            );
+            return;
+          }
+
+          if (!isConnectorConfigured(def.name) && process.env.STRIPE_BILLING_SECRET_KEY) {
+            try {
+              const { canActivateConnector } = await import("../../billing/license.js");
+              const check = canActivateConnector();
+              if (!check.allowed) { await safeSend(metadata, check.reason!); return; }
+            } catch { /* billing module not available — allow */ }
+          }
+
+          const { saveSecret } = await import("../../../shared/secrets.js");
+          for (let i = 0; i < def.required.length; i++) {
+            const varName = primaryVarName(def.required[i]!);
+            saveSecret(varName, keys[i]!);
+          }
+
+          if (metadata.message_id) {
+            await opts.channels.deleteMessage(metadata.channel, metadata.chat_id, metadata.message_id);
+          }
+
+          await safeSend(
+            metadata,
+            `${def.label} configured. Keys saved securely.\nUse /connectors health ${def.name} to verify connectivity.`,
+          );
+          return;
+        }
+
+        // ── health — connectivity check ───────────────────────────────
+        if (connSub === "health") {
+          if (!connName) {
+            const configured = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
+            if (configured.length === 0) {
+              await safeKeyboard(
+                metadata,
+                "No connectors configured.",
+                [[{ label: "Connect", data: "/connectors connect" }, { label: "Auth", data: "/connectors auth" }]],
+              );
+              return;
+            }
+
+            const buttons: KeyboardLayout = [];
+            let row: Array<{ label: string; data: string }> = [];
+            for (const def of configured) {
+              row.push({ label: def.label, data: `/connectors health ${def.name}` });
+              if (row.length === 3) { buttons.push(row); row = []; }
+            }
+            if (row.length > 0) buttons.push(row);
+
+            await safeKeyboard(metadata, `${configured.length} connector(s) ready — tap to health check:`, buttons);
+            return;
+          }
+
+          const def = getConnectorDef(connName);
+          if (!def) { await safeSend(metadata, `Unknown connector: ${connName}`); return; }
+          if (!isConnectorConfigured(def.name)) {
+            await safeSend(metadata, `${def.label} is not configured.\nUse /connectors auth ${def.name} to set it up.`);
+            return;
+          }
+
+          await safeSend(metadata, `Checking ${def.label}...`);
+          const result = await checkConnectorHealth(def.name);
+          if (result.healthy) {
+            await safeSend(metadata, `${def.label}: healthy (${result.latency}ms)`);
+          } else {
+            await safeSend(metadata, `${def.label}: failed \u2014 ${result.error}`);
+          }
+          return;
+        }
+
+        // ── Detail view: /connectors <name> ───────────────────────────
+        if (connSub && !["list"].includes(connSub)) {
+          const def = getConnectorDef(connSub);
+          if (!def) { await safeSend(metadata, `Unknown connector: ${connSub}`); return; }
+
+          const ready = isConnectorConfigured(connSub);
+          const oauth = isOAuthCapable(connSub);
+          const provider = getOAuthProvider(connSub);
 
           if (ready) {
-            // Connected — show status + actions
-            const buttons: KeyboardLayout = [
-              [
-                { label: "Health Check", data: `/health ${def.name}` },
-                { label: "Disconnect", data: `/disconnect ${def.name}` },
-              ],
-              [{ label: "← Connectors", data: "/connectors" }],
-            ];
             await safeKeyboard(
               metadata,
               `${def.label} — Connected ✓\n${def.description}`,
-              buttons,
+              [
+                [
+                  { label: "Health Check", data: `/connectors health ${def.name}` },
+                  { label: "Disconnect", data: `/connectors disconnect ${def.name}` },
+                ],
+                [{ label: "← Connectors", data: "/connectors" }],
+              ],
             );
           } else if (oauth && provider) {
-            // Not connected — OAuth (relay handles credentials)
-            const buttons: KeyboardLayout = [
-              [{ label: `Connect ${def.label}`, data: `/connect ${def.name}` }],
-              [{ label: "← Connectors", data: "/connectors" }],
-            ];
             await safeKeyboard(
               metadata,
               `${def.label} — Not connected\n${def.description}\n\nTap to start OAuth:`,
-              buttons,
+              [
+                [{ label: `Connect ${def.label}`, data: `/connectors connect ${def.name}` }],
+                [{ label: "← Connectors", data: "/connectors" }],
+              ],
             );
           } else {
-            // Not connected — API key
-            const buttons: KeyboardLayout = [
-              [{ label: `Set API Key`, data: `/auth ${def.name}` }],
-              [{ label: "← Connectors", data: "/connectors" }],
-            ];
             await safeKeyboard(
               metadata,
               `${def.label} — Not connected\n${def.description}\n\nRequires API key:`,
-              buttons,
+              [
+                [{ label: "Set API Key", data: `/connectors auth ${def.name}` }],
+                [{ label: "← Connectors", data: "/connectors" }],
+              ],
             );
           }
           return;
         }
 
-        // ── Grid view: /connectors ──
+        // ── Grid view: /connectors (no sub) ───────────────────────────
         let configuredCount = 0;
         const buttons: KeyboardLayout = [];
         let row: Array<{ label: string; data: string }> = [];
@@ -1291,11 +1466,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           const ready = isConnectorConfigured(def.name);
           if (ready) configuredCount++;
           const label = ready ? `${def.label} ✓` : def.label;
-          row.push({ label, data: `/connector ${def.name}` });
-          if (row.length === 3) {
-            buttons.push(row);
-            row = [];
-          }
+          row.push({ label, data: `/connectors ${def.name}` });
+          if (row.length === 3) { buttons.push(row); row = []; }
         }
         if (row.length > 0) buttons.push(row);
 
@@ -1304,173 +1476,6 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           `Connectors: ${configuredCount}/${CONNECTOR_DEFS.length} connected\nTap for details:`,
           buttons,
         );
-        return;
-      }
-
-      case "auth": {
-        const {
-          CONNECTOR_DEFS, getConnectorDef, isConnectorConfigured,
-          primaryVarName, isSlotSet, slotLabel,
-        } = await import("../../../shared/connector.js");
-        const { saveSecret } = await import("../../../shared/secrets.js");
-
-        const connectorName = rest[0]?.toLowerCase();
-
-        // No args — show all connectors as buttons
-        if (!connectorName) {
-          const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data: string }> = [];
-          for (const def of CONNECTOR_DEFS) {
-            const ready = isConnectorConfigured(def.name);
-            const label = ready ? `${def.label} ✓` : def.label;
-            row.push({ label, data: `/auth ${def.name}` });
-            if (row.length === 3) {
-              buttons.push(row);
-              row = [];
-            }
-          }
-          if (row.length > 0) buttons.push(row);
-
-          await safeKeyboard(
-            metadata,
-            "Configure a connector — tap for details:",
-            buttons,
-          );
-          return;
-        }
-
-        const def = getConnectorDef(connectorName);
-        if (!def) {
-          const names = CONNECTOR_DEFS.map((d) => d.name).join(", ");
-          await safeSend(metadata, `Unknown connector: ${connectorName}\nAvailable: ${names}`);
-          return;
-        }
-
-        // No keys provided — show what's needed for this connector
-        const keys = rest.slice(1);
-        if (keys.length === 0) {
-          const ready = isConnectorConfigured(def.name);
-          const lines = [`${def.label} \u2014 ${def.description}`];
-          lines.push(`Status: ${ready ? "configured \u25CF" : "not configured \u25CB"}`);
-          lines.push("");
-          lines.push("Required:");
-          for (const entry of def.required) {
-            lines.push(`  ${isSlotSet(entry) ? "\u25CF" : "\u25CB"} ${slotLabel(entry)}`);
-          }
-          if (def.optional.length > 0) {
-            lines.push("Optional:");
-            for (const v of def.optional) {
-              lines.push(`  ${process.env[v] ? "\u25CF" : "\u25CB"} ${v}`);
-            }
-          }
-          lines.push("");
-          if (def.required.length === 1) {
-            lines.push(`Set: /auth ${def.name} <key>`);
-          } else {
-            lines.push(`Set: /auth ${def.name} ${def.required.map((e) => `<${primaryVarName(e)}>`).join(" ")}`);
-          }
-          await safeSend(metadata, lines.join("\n"));
-          return;
-        }
-
-        // Validate key count
-        if (keys.length < def.required.length) {
-          const varNames = def.required.map((e) => primaryVarName(e));
-          await safeSend(
-            metadata,
-            `${def.label} requires ${def.required.length} key(s):\n${varNames.join("\n")}\n\nUsage: /auth ${def.name} ${varNames.map((v) => `<${v}>`).join(" ")}`,
-          );
-          return;
-        }
-
-        // Billing gate: check if the tier allows a new connector (skip if already configured)
-        if (!isConnectorConfigured(def.name) && process.env.STRIPE_BILLING_SECRET_KEY) {
-          try {
-            const { canActivateConnector } = await import("../../billing/license.js");
-            const check = canActivateConnector();
-            if (!check.allowed) {
-              await safeSend(metadata, check.reason!);
-              return;
-            }
-          } catch { /* billing module not available — allow */ }
-        }
-
-        // Save each required key using the primary env var name
-        for (let i = 0; i < def.required.length; i++) {
-          const varName = primaryVarName(def.required[i]!);
-          saveSecret(varName, keys[i]!);
-        }
-
-        // Delete the user's message containing the API keys (security)
-        if (metadata.message_id) {
-          await opts.channels.deleteMessage(
-            metadata.channel,
-            metadata.chat_id,
-            metadata.message_id,
-          );
-        }
-
-        await safeSend(
-          metadata,
-          `${def.label} configured. Keys saved securely.\nUse /health ${def.name} to verify connectivity.`,
-        );
-        return;
-      }
-
-      case "health": {
-        const { CONNECTOR_DEFS, getConnectorDef, isConnectorConfigured } = await import("../../../shared/connector.js");
-
-        const connectorName = rest[0]?.toLowerCase();
-
-        // No args — show configured connectors as buttons for individual health checks
-        if (!connectorName) {
-          const configured = CONNECTOR_DEFS.filter((d) => isConnectorConfigured(d.name));
-          if (configured.length === 0) {
-            await safeKeyboard(
-              metadata,
-              "No connectors configured.",
-              [[{ label: "Connect", data: "/connect" }, { label: "Auth", data: "/auth" }]],
-            );
-            return;
-          }
-
-          const buttons: KeyboardLayout = [];
-          let row: Array<{ label: string; data: string }> = [];
-          for (const def of configured) {
-            row.push({ label: def.label, data: `/health ${def.name}` });
-            if (row.length === 3) {
-              buttons.push(row);
-              row = [];
-            }
-          }
-          if (row.length > 0) buttons.push(row);
-
-          await safeKeyboard(
-            metadata,
-            `${configured.length} connector(s) ready — tap to health check:`,
-            buttons,
-          );
-          return;
-        }
-
-        const def = getConnectorDef(connectorName);
-        if (!def) {
-          await safeSend(metadata, `Unknown connector: ${connectorName}`);
-          return;
-        }
-
-        if (!isConnectorConfigured(def.name)) {
-          await safeSend(metadata, `${def.label} is not configured.\nUse /auth ${def.name} to set it up.`);
-          return;
-        }
-
-        await safeSend(metadata, `Checking ${def.label}...`);
-        const result = await checkConnectorHealth(def.name);
-        if (result.healthy) {
-          await safeSend(metadata, `${def.label}: healthy (${result.latency}ms)`);
-        } else {
-          await safeSend(metadata, `${def.label}: failed \u2014 ${result.error}`);
-        }
         return;
       }
 
@@ -1502,13 +1507,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         const subCommand = rest[0]?.toLowerCase();
 
-        // /skill or /skill list — show installed skills
+        // /skills or /skills list — show installed skills
         if (!subCommand || subCommand === "list") {
           const skills = await listSkills();
           if (skills.length === 0) {
             await safeSend(
               metadata,
-              "No skills installed.\nCreate one: /skill create <name> <description>",
+              "No skills installed.\nCreate one: /skills create <name> <description>",
             );
             return;
           }
@@ -1518,7 +1523,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           for (const skill of skills) {
             const indicator = skill.userInvocable ? "\u25CF" : "";
             const label = indicator ? `${skill.name} ${indicator}` : skill.name;
-            row.push({ label, data: `/skill ${skill.name}` });
+            row.push({ label, data: `/skills ${skill.name}` });
             if (row.length === 3) {
               buttons.push(row);
               row = [];
@@ -1531,7 +1536,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /skill create <name> <description>
+        // /skills create <name> <description>
         if (subCommand === "create") {
           const skillName = rest[1];
           const skillDescription = rest.slice(2).join(" ").trim();
@@ -1539,7 +1544,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           if (!skillName || !skillDescription) {
             await safeSend(
               metadata,
-              "Usage: /skill create <name> <description>\n\nName: lowercase alphanumeric + hyphens, 2-50 chars\nDescription: minimum 10 characters",
+              "Usage: /skills create <name> <description>\n\nName: lowercase alphanumeric + hyphens, 2-50 chars\nDescription: minimum 10 characters",
             );
             return;
           }
@@ -1548,7 +1553,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const skillDir = await scaffoldSkill(skillName, skillDescription);
             await safeSend(
               metadata,
-              `Skill created: ${skillName}\nPath: ${skillDir}\n\nEdit SKILL.md to add instructions, then validate:\n/skill ${skillName}`,
+              `Skill created: ${skillName}\nPath: ${skillDir}\n\nEdit SKILL.md to add instructions, then validate:\n/skills ${skillName}`,
             );
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
@@ -1557,11 +1562,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /skill remove <name>
+        // /skills remove <name>
         if (subCommand === "remove" || subCommand === "delete") {
           const skillName = rest[1];
           if (!skillName) {
-            await safeSend(metadata, "Usage: /skill remove <name>");
+            await safeSend(metadata, "Usage: /skills remove <name>");
             return;
           }
 
@@ -1575,7 +1580,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /skill <name> — show skill details
+        // /skills <name> — show skill details
         try {
           const manifest = await loadSkill(subCommand);
           const lines = [
@@ -1704,8 +1709,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
-      case "notifications":
-      case "notify": {
+      case "notify":
+      case "notifications": {
         const notifyKey = `notify:${metadata.channel}:${chatId}`;
         const subCommand = rest[0]?.toLowerCase();
 
@@ -1760,7 +1765,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const buttons: KeyboardLayout = [];
             for (const def of CHANNEL_DEFS) {
               if (registered.has(def.name)) continue;
-              buttons.push([{ label: def.label, data: `/channel add ${def.name}` }]);
+              buttons.push([{ label: def.label, data: `/channels add ${def.name}` }]);
             }
             if (buttons.length === 0) {
               await safeKeyboard(
@@ -1790,8 +1795,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               `${def.label} is already registered.`,
               [
                 [
-                  { label: "Reconnect", data: `/channel reconnect ${def.name}` },
-                  { label: "Remove", data: `/channel remove ${def.name}` },
+                  { label: "Reconnect", data: `/channels reconnect ${def.name}` },
+                  { label: "Remove", data: `/channels remove ${def.name}` },
                 ],
                 [{ label: "← Channels", data: "/channels" }],
               ],
@@ -1903,7 +1908,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               return;
             }
             const buttons: KeyboardLayout = removable.map((ch) => [
-              { label: ch.name, data: `/channel remove ${ch.name}` },
+              { label: ch.name, data: `/channels remove ${ch.name}` },
             ]);
             buttons.push([{ label: "← Channels", data: "/channels" }]);
             await safeKeyboard(metadata, "Remove a channel:", buttons);
@@ -1922,7 +1927,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               `${channelArg} removed.`,
               [
                 [
-                  { label: "Re-add", data: `/channel add ${channelArg}` },
+                  { label: "Re-add", data: `/channels add ${channelArg}` },
                   { label: "← Channels", data: "/channels" },
                 ],
               ],
@@ -1938,7 +1943,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         if (subCommand === "connect" || subCommand === "reconnect") {
           if (!channelArg) {
-            await safeSend(metadata, "Usage: /channel connect <name>");
+            await safeSend(metadata, "Usage: /channels connect <name>");
             return;
           }
           try {
@@ -1959,7 +1964,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         if (subCommand === "disconnect") {
           if (!channelArg) {
-            await safeSend(metadata, "Usage: /channel disconnect <name>");
+            await safeSend(metadata, "Usage: /channels disconnect <name>");
             return;
           }
           if (channelArg === metadata.channel) {
@@ -1973,8 +1978,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               `${channelArg} disconnected.`,
               [
                 [
-                  { label: "Reconnect", data: `/channel connect ${channelArg}` },
-                  { label: "Remove", data: `/channel remove ${channelArg}` },
+                  { label: "Reconnect", data: `/channels connect ${channelArg}` },
+                  { label: "Remove", data: `/channels remove ${channelArg}` },
                 ],
                 [{ label: "← Channels", data: "/channels" }],
               ],
@@ -2006,13 +2011,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
             if (status.status === "connected" && chName !== metadata.channel) {
               buttons.push([
-                { label: "Disconnect", data: `/channel disconnect ${chName}` },
-                { label: "Remove", data: `/channel remove ${chName}` },
+                { label: "Disconnect", data: `/channels disconnect ${chName}` },
+                { label: "Remove", data: `/channels remove ${chName}` },
               ]);
             } else if (status.status !== "connected") {
               buttons.push([
-                { label: "Connect", data: `/channel connect ${chName}` },
-                { label: "Remove", data: `/channel remove ${chName}` },
+                { label: "Connect", data: `/channels connect ${chName}` },
+                { label: "Remove", data: `/channels remove ${chName}` },
               ]);
             }
             buttons.push([{ label: "← Channels", data: "/channels" }]);
@@ -2036,7 +2041,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 def.requiresToken
                   ? [{ label: "← Channels", data: "/channels" }]
                   : [
-                      { label: `Add ${def.label}`, data: `/channel add ${chName}` },
+                      { label: `Add ${def.label}`, data: `/channels add ${chName}` },
                       { label: "← Channels", data: "/channels" },
                     ],
               ],
@@ -2062,10 +2067,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const current = ch.name === metadata.channel ? " (you)" : "";
             if (ch.status === "connected") connectedCount++;
             lines.push(`${icon} ${def.label} — ${ch.status}${current}`);
-            buttons.push([{ label: `${def.label}${current}`, data: `/channel ${def.name}` }]);
+            buttons.push([{ label: `${def.label}${current}`, data: `/channels ${def.name}` }]);
           } else {
             lines.push(`  ${def.label} — not added`);
-            buttons.push([{ label: `+ ${def.label}`, data: `/channel add ${def.name}` }]);
+            buttons.push([{ label: `+ ${def.label}`, data: `/channels add ${def.name}` }]);
           }
         }
 
@@ -2229,7 +2234,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         // /triggers — list all triggers (flat, simple)
         const allTriggers = triggerEngine.listAll();
         if (allTriggers.length === 0) {
-          await safeSend(metadata, "No triggers configured.\n\nUse /task to create triggers, schedules, and cron jobs.");
+          await safeSend(metadata, "No triggers configured.\n\nUse /tasks to create triggers, schedules, and cron jobs.");
           return;
         }
 
@@ -2269,9 +2274,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         // ── Category: trigger ──────────────────────────────────────
         if (category === "trigger" || category === "triggers") {
-          const TRIGGER_TYPES = ["webhook", "file", "http", "email"];
-
-          // /task trigger new <type> ...
+          // /tasks trigger new <type> ...
           if (subCommand === "new" || subCommand === "create") {
             const triggerType = rest[2]?.toLowerCase();
             if (!triggerType) {
@@ -2280,14 +2283,14 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 "Create an event trigger — select type:",
                 [
                   [
-                    { label: "Webhook", data: "/task trigger new webhook" },
-                    { label: "File Watch", data: "/task trigger new file" },
+                    { label: "Webhook", data: "/tasks trigger new webhook" },
+                    { label: "File Watch", data: "/tasks trigger new file" },
                   ],
                   [
-                    { label: "HTTP Monitor", data: "/task trigger new http" },
-                    { label: "Email", data: "/task trigger new email" },
+                    { label: "HTTP Monitor", data: "/tasks trigger new http" },
+                    { label: "Email", data: "/tasks trigger new email" },
                   ],
-                  [{ label: "« Tasks", data: "/task" }],
+                  [{ label: "« Tasks", data: "/tasks" }],
                 ],
               );
               return;
@@ -2299,20 +2302,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
               if (triggerType === "webhook") {
                 const service = rest[3]?.toLowerCase();
-                if (!service || !["stripe", "paypal", "github", "twilio"].includes(service)) {
+                if (!service || !(WEBHOOK_SERVICES as readonly string[]).includes(service)) {
                   await safeKeyboard(
                     metadata,
                     "Select a webhook service:",
                     [
                       [
-                        { label: "Stripe", data: "/task trigger new webhook stripe" },
-                        { label: "GitHub", data: "/task trigger new webhook github" },
+                        { label: "Stripe", data: "/tasks trigger new webhook stripe" },
+                        { label: "GitHub", data: "/tasks trigger new webhook github" },
                       ],
                       [
-                        { label: "PayPal", data: "/task trigger new webhook paypal" },
-                        { label: "Twilio", data: "/task trigger new webhook twilio" },
+                        { label: "PayPal", data: "/tasks trigger new webhook paypal" },
+                        { label: "Twilio", data: "/tasks trigger new webhook twilio" },
                       ],
-                      [{ label: "« Triggers", data: "/task trigger" }],
+                      [{ label: "« Triggers", data: "/tasks trigger" }],
                     ],
                   );
                   return;
@@ -2322,7 +2325,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               } else if (triggerType === "file") {
                 const path = rest[3];
                 if (!path) {
-                  await safeSend(metadata, "Usage: /task trigger new file <path> [action]\n\nExample: /task trigger new file /var/log/app.log alert on changes");
+                  await safeSend(metadata, "Usage: /tasks trigger new file <path> [action]\n\nExample: /tasks trigger new file /var/log/app.log alert on changes");
                   return;
                 }
                 const action = rest.slice(4).join(" ") || "process file change";
@@ -2330,7 +2333,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               } else if (triggerType === "http") {
                 const url = rest[3] ?? "";
                 if (!url.startsWith("http")) {
-                  await safeSend(metadata, "Usage: /task trigger new http <url> [action]\n\nExample: /task trigger new http https://api.example.com alert if down");
+                  await safeSend(metadata, "Usage: /tasks trigger new http <url> [action]\n\nExample: /tasks trigger new http https://api.example.com alert if down");
                   return;
                 }
                 params = { name: `http: ${url}`, trigger: "http:any", url, action: rest.slice(4).join(" ") || "check endpoint status" };
@@ -2338,7 +2341,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 const connector = rest[3]?.toLowerCase() ?? "gmail";
                 params = { name: `${connector} email`, trigger: `${connector}:new_email`, action: rest.slice(4).join(" ") || "process new email" };
               } else {
-                await safeSend(metadata, `Unknown trigger type: ${triggerType}\nAvailable: webhook, file, http, email`);
+                await safeSend(metadata, `Unknown trigger type: ${triggerType}\nAvailable: ${EVENT_TRIGGER_TYPES.join(", ")}`);
                 return;
               }
 
@@ -2349,10 +2352,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 `Trigger created: ${trigger.label ?? trigger.id}\nType: ${trigger.type}\nStatus: enabled`,
                 [
                   [
-                    { label: "Pause", data: `/task disable ${trigger.id}` },
-                    { label: "Test", data: `/task test ${trigger.id}` },
+                    { label: "Pause", data: `/tasks disable ${trigger.id}` },
+                    { label: "Test", data: `/tasks test ${trigger.id}` },
                   ],
-                  [{ label: "« Triggers", data: "/task trigger" }],
+                  [{ label: "« Triggers", data: "/tasks trigger" }],
                 ],
               );
             } catch (err) {
@@ -2362,42 +2365,42 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             return;
           }
 
-          // /task trigger delete <id>
+          // /tasks trigger delete <id>
           if (subCommand === "delete" || subCommand === "remove") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task trigger delete <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks trigger delete <id>"); return; }
             const result = engine.remove(id);
             await safeSend(metadata, result ? `Trigger deleted: ${id}` : `Trigger not found: ${id}`);
             return;
           }
 
-          // /task trigger enable <id>
+          // /tasks trigger enable <id>
           if (subCommand === "enable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task trigger enable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks trigger enable <id>"); return; }
             const result = engine.enable(id);
             await safeSend(metadata, result ? `Trigger enabled: ${id}` : `Trigger not found: ${id}`);
             return;
           }
 
-          // /task trigger disable <id>
+          // /tasks trigger disable <id>
           if (subCommand === "disable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task trigger disable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks trigger disable <id>"); return; }
             const result = engine.disable(id);
             await safeSend(metadata, result ? `Trigger disabled: ${id}` : `Trigger not found: ${id}`);
             return;
           }
 
-          // /task trigger — list event triggers
-          const triggers = engine.listAll().filter((t) => TRIGGER_TYPES.includes(t.type));
+          // /tasks trigger — list event triggers
+          const triggers = engine.listAll().filter((t) => isEventTrigger(t.type));
           if (triggers.length === 0) {
             await safeKeyboard(
               metadata,
               "No event triggers configured.",
               [
-                [{ label: "New Trigger", data: "/task trigger new" }],
-                [{ label: "« Tasks", data: "/task" }],
+                [{ label: "New Trigger", data: "/tasks trigger new" }],
+                [{ label: "« Tasks", data: "/tasks" }],
               ],
             );
             return;
@@ -2409,11 +2412,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const icon = t.enabled ? "●" : "○";
             const runs = t.run_count ?? 0;
             tLines.push(`${icon} ${t.label ?? t.id} — ${t.type} — ${runs} runs`);
-            tButtons.push([{ label: t.label ?? t.id, data: `/task ${t.id}` }]);
+            tButtons.push([{ label: t.label ?? t.id, data: `/tasks ${t.id}` }]);
           }
           tButtons.push([
-            { label: "New Trigger", data: "/task trigger new" },
-            { label: "« Tasks", data: "/task" },
+            { label: "New Trigger", data: "/tasks trigger new" },
+            { label: "« Tasks", data: "/tasks" },
           ]);
 
           await safeKeyboard(
@@ -2427,7 +2430,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         // ── Category: schedule ─────────────────────────────────────
         if (category === "schedule" || category === "schedules") {
 
-          // /task schedule new [daily|weekly|monthly|custom] [time] [action...]
+          // /tasks schedule new [daily|weekly|monthly|custom] [time] [action...]
           if (subCommand === "new" || subCommand === "create") {
             const preset = rest[2]?.toLowerCase();
             if (!preset) {
@@ -2436,14 +2439,14 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 "Create a schedule — select frequency:",
                 [
                   [
-                    { label: "Daily", data: "/task schedule new daily" },
-                    { label: "Weekly", data: "/task schedule new weekly" },
+                    { label: "Daily", data: "/tasks schedule new daily" },
+                    { label: "Weekly", data: "/tasks schedule new weekly" },
                   ],
                   [
-                    { label: "Monthly", data: "/task schedule new monthly" },
-                    { label: "Custom", data: "/task schedule new custom" },
+                    { label: "Monthly", data: "/tasks schedule new monthly" },
+                    { label: "Custom", data: "/tasks schedule new custom" },
                   ],
-                  [{ label: "« Tasks", data: "/task" }],
+                  [{ label: "« Tasks", data: "/tasks" }],
                 ],
               );
               return;
@@ -2455,12 +2458,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
             if (!timeArg) {
               const hints: Record<string, string> = {
-                daily: "Usage: /task schedule new daily <HH:MM> <action>\nExample: /task schedule new daily 09:00 morning briefing",
-                weekly: "Usage: /task schedule new weekly <DAY> <HH:MM> <action>\nExample: /task schedule new weekly MON 09:00 weekly report",
-                monthly: "Usage: /task schedule new monthly <DAY> <action>\nExample: /task schedule new monthly 1 run monthly audit",
-                custom: "Usage: /task schedule new custom <interval> <action>\nIntervals: 5m, 1h, 30m\nExample: /task schedule new custom 30m check for updates",
+                daily: "Usage: /tasks schedule new daily <HH:MM> <action>\nExample: /tasks schedule new daily 09:00 morning briefing",
+                weekly: "Usage: /tasks schedule new weekly <DAY> <HH:MM> <action>\nExample: /tasks schedule new weekly MON 09:00 weekly report",
+                monthly: "Usage: /tasks schedule new monthly <DAY> <action>\nExample: /tasks schedule new monthly 1 run monthly audit",
+                custom: "Usage: /tasks schedule new custom <interval> <action>\nIntervals: 5m, 1h, 30m\nExample: /tasks schedule new custom 30m check for updates",
               };
-              await safeSend(metadata, hints[preset] ?? `Usage: /task schedule new ${preset} <time> <action>`);
+              await safeSend(metadata, hints[preset] ?? `Usage: /tasks schedule new ${preset} <time> <action>`);
               return;
             }
 
@@ -2498,10 +2501,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 `Schedule created: ${label}\nCron: ${expression}\nAction: ${prompt}\nStatus: enabled`,
                 [
                   [
-                    { label: "Pause", data: `/task disable ${trigger.id}` },
-                    { label: "Test", data: `/task test ${trigger.id}` },
+                    { label: "Pause", data: `/tasks disable ${trigger.id}` },
+                    { label: "Test", data: `/tasks test ${trigger.id}` },
                   ],
-                  [{ label: "« Schedules", data: "/task schedule" }],
+                  [{ label: "« Schedules", data: "/tasks schedule" }],
                 ],
               );
             } catch (err) {
@@ -2511,40 +2514,40 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             return;
           }
 
-          // /task schedule delete <id>
+          // /tasks schedule delete <id>
           if (subCommand === "delete" || subCommand === "remove") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task schedule delete <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks schedule delete <id>"); return; }
             const result = engine.remove(id);
             await safeSend(metadata, result ? `Schedule deleted: ${id}` : `Schedule not found: ${id}`);
             return;
           }
 
-          // /task schedule enable/disable <id>
+          // /tasks schedule enable/disable <id>
           if (subCommand === "enable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task schedule enable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks schedule enable <id>"); return; }
             engine.enable(id);
             await safeSend(metadata, `Schedule enabled: ${id}`);
             return;
           }
           if (subCommand === "disable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task schedule disable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks schedule disable <id>"); return; }
             engine.disable(id);
             await safeSend(metadata, `Schedule disabled: ${id}`);
             return;
           }
 
-          // /task schedule — list scheduled tasks (type=cron, not once)
+          // /tasks schedule — list scheduled tasks (type=cron, not once)
           const schedules = engine.listAll().filter((t) => t.type === "cron");
           if (schedules.length === 0) {
             await safeKeyboard(
               metadata,
               "No schedules configured.",
               [
-                [{ label: "New Schedule", data: "/task schedule new" }],
-                [{ label: "« Tasks", data: "/task" }],
+                [{ label: "New Schedule", data: "/tasks schedule new" }],
+                [{ label: "« Tasks", data: "/tasks" }],
               ],
             );
             return;
@@ -2556,11 +2559,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             const icon = s.enabled ? "●" : "○";
             const expr = (s.config as { expression: string }).expression;
             sLines.push(`${icon} ${s.label ?? s.id} — ${expr} — ${s.run_count ?? 0} runs`);
-            sButtons.push([{ label: s.label ?? s.id, data: `/task ${s.id}` }]);
+            sButtons.push([{ label: s.label ?? s.id, data: `/tasks ${s.id}` }]);
           }
           sButtons.push([
-            { label: "New Schedule", data: "/task schedule new" },
-            { label: "« Tasks", data: "/task" },
+            { label: "New Schedule", data: "/tasks schedule new" },
+            { label: "« Tasks", data: "/tasks" },
           ]);
 
           await safeKeyboard(
@@ -2574,20 +2577,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         // ── Category: cron ─────────────────────────────────────────
         if (category === "cron" || category === "crons") {
 
-          // /task cron new <expression> <action...>
+          // /tasks cron new <expression> <action...>
           if (subCommand === "new" || subCommand === "create") {
             const expr = rest[2];
             if (!expr) {
-              await safeSend(metadata, "Usage: /task cron new <cron-expression> <action>\n\nExamples:\n/task cron new \"0 */6 * * *\" check disk space\n/task cron new \"*/15 * * * *\" poll API\n/task cron new once 2026-06-01T09:00 one-time report");
+              await safeSend(metadata, "Usage: /tasks cron new <cron-expression> <action>\n\nExamples:\n/tasks cron new \"0 */6 * * *\" check disk space\n/tasks cron new \"*/15 * * * *\" poll API\n/tasks cron new once 2026-06-01T09:00 one-time report");
               return;
             }
 
             try {
               if (expr === "once") {
-                // /task cron new once <datetime> <action>
+                // /tasks cron new once <datetime> <action>
                 const datetime = rest[3];
                 if (!datetime) {
-                  await safeSend(metadata, "Usage: /task cron new once <ISO-datetime> <action>\nExample: /task cron new once 2026-06-01T09:00 run migration");
+                  await safeSend(metadata, "Usage: /tasks cron new once <ISO-datetime> <action>\nExample: /tasks cron new once 2026-06-01T09:00 run migration");
                   return;
                 }
                 const parsed = new Date(datetime);
@@ -2609,8 +2612,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                   `One-time task created: ${datetime}\nAction: ${prompt}`,
                   [
                     [
-                      { label: "Cancel", data: `/task delete ${trigger.id}` },
-                      { label: "« Cron", data: "/task cron" },
+                      { label: "Cancel", data: `/tasks delete ${trigger.id}` },
+                      { label: "« Cron", data: "/tasks cron" },
                     ],
                   ],
                 );
@@ -2631,10 +2634,10 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                 `Cron created: ${expr}\nAction: ${prompt}\nStatus: enabled`,
                 [
                   [
-                    { label: "Pause", data: `/task disable ${trigger.id}` },
-                    { label: "Test", data: `/task test ${trigger.id}` },
+                    { label: "Pause", data: `/tasks disable ${trigger.id}` },
+                    { label: "Test", data: `/tasks test ${trigger.id}` },
                   ],
-                  [{ label: "« Cron", data: "/task cron" }],
+                  [{ label: "« Cron", data: "/tasks cron" }],
                 ],
               );
             } catch (err) {
@@ -2644,40 +2647,40 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             return;
           }
 
-          // /task cron delete <id>
+          // /tasks cron delete <id>
           if (subCommand === "delete" || subCommand === "remove") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task cron delete <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks cron delete <id>"); return; }
             const result = engine.remove(id);
             await safeSend(metadata, result ? `Cron deleted: ${id}` : `Cron not found: ${id}`);
             return;
           }
 
-          // /task cron enable/disable <id>
+          // /tasks cron enable/disable <id>
           if (subCommand === "enable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task cron enable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks cron enable <id>"); return; }
             engine.enable(id);
             await safeSend(metadata, `Cron enabled: ${id}`);
             return;
           }
           if (subCommand === "disable") {
             const id = rest[2];
-            if (!id) { await safeSend(metadata, "Usage: /task cron disable <id>"); return; }
+            if (!id) { await safeSend(metadata, "Usage: /tasks cron disable <id>"); return; }
             engine.disable(id);
             await safeSend(metadata, `Cron disabled: ${id}`);
             return;
           }
 
-          // /task cron — list cron + once tasks
+          // /tasks cron — list cron + once tasks
           const crons = engine.listAll().filter((t) => t.type === "cron" || t.type === "once");
           if (crons.length === 0) {
             await safeKeyboard(
               metadata,
               "No cron jobs configured.",
               [
-                [{ label: "New Cron", data: "/task cron new" }],
-                [{ label: "« Tasks", data: "/task" }],
+                [{ label: "New Cron", data: "/tasks cron new" }],
+                [{ label: "« Tasks", data: "/tasks" }],
               ],
             );
             return;
@@ -2691,11 +2694,11 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               ? (c.config as { at: string }).at
               : (c.config as { expression: string }).expression;
             cLines.push(`${icon} ${c.label ?? c.id} — ${detail} — ${c.run_count ?? 0} runs`);
-            cButtons.push([{ label: c.label ?? c.id, data: `/task ${c.id}` }]);
+            cButtons.push([{ label: c.label ?? c.id, data: `/tasks ${c.id}` }]);
           }
           cButtons.push([
-            { label: "New Cron", data: "/task cron new" },
-            { label: "« Tasks", data: "/task" },
+            { label: "New Cron", data: "/tasks cron new" },
+            { label: "« Tasks", data: "/tasks" },
           ]);
 
           await safeKeyboard(
@@ -2709,28 +2712,28 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         // ── Shared operations: /task enable|disable|delete|test <id> ──
         if (category === "enable") {
           const id = rest[1];
-          if (!id) { await safeSend(metadata, "Usage: /task enable <id>"); return; }
+          if (!id) { await safeSend(metadata, "Usage: /tasks enable <id>"); return; }
           const result = engine.enable(id);
           await safeSend(metadata, result ? `Task enabled: ${id}` : `Task not found: ${id}`);
           return;
         }
         if (category === "disable" || category === "pause") {
           const id = rest[1];
-          if (!id) { await safeSend(metadata, "Usage: /task disable <id>"); return; }
+          if (!id) { await safeSend(metadata, "Usage: /tasks disable <id>"); return; }
           const result = engine.disable(id);
           await safeSend(metadata, result ? `Task disabled: ${id}` : `Task not found: ${id}`);
           return;
         }
         if (category === "delete" || category === "remove") {
           const id = rest[1];
-          if (!id) { await safeSend(metadata, "Usage: /task delete <id>"); return; }
+          if (!id) { await safeSend(metadata, "Usage: /tasks delete <id>"); return; }
           const result = engine.remove(id);
           await safeSend(metadata, result ? `Task deleted: ${id}` : `Task not found: ${id}`);
           return;
         }
         if (category === "test" || category === "run") {
           const id = rest[1];
-          if (!id) { await safeSend(metadata, "Usage: /task test <id>"); return; }
+          if (!id) { await safeSend(metadata, "Usage: /tasks test <id>"); return; }
           const task = engine.get(id);
           if (!task) { await safeSend(metadata, `Task not found: ${id}`); return; }
           await safeSend(metadata, `Firing: ${task.label ?? id}...`);
@@ -2748,8 +2751,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         if (category && !["list", "trigger", "triggers", "schedule", "schedules", "cron", "crons"].includes(category)) {
           const task = engine.get(category);
           if (task) {
-            const TRIGGER_TYPES = ["webhook", "file", "http", "email"];
-            const taskCategory = TRIGGER_TYPES.includes(task.type) ? "trigger" : task.type === "once" ? "cron" : "schedule";
+            const taskCategory = isEventTrigger(task.type) ? "trigger" : task.type === "once" ? "cron" : "schedule";
             const configSummary = task.type === "cron"
               ? `schedule: ${(task.config as { expression: string }).expression}`
               : task.type === "once"
@@ -2774,12 +2776,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               [
                 [
                   task.enabled
-                    ? { label: "Disable", data: `/task disable ${task.id}` }
-                    : { label: "Enable", data: `/task enable ${task.id}` },
-                  { label: "Test", data: `/task test ${task.id}` },
-                  { label: "Delete", data: `/task delete ${task.id}` },
+                    ? { label: "Disable", data: `/tasks disable ${task.id}` }
+                    : { label: "Enable", data: `/tasks enable ${task.id}` },
+                  { label: "Test", data: `/tasks test ${task.id}` },
+                  { label: "Delete", data: `/tasks delete ${task.id}` },
                 ],
-                [{ label: `« ${taskCategory === "trigger" ? "Triggers" : taskCategory === "schedule" ? "Schedules" : "Cron"}`, data: `/task ${taskCategory}` }],
+                [{ label: `« ${taskCategory === "trigger" ? "Triggers" : taskCategory === "schedule" ? "Schedules" : "Cron"}`, data: `/tasks ${taskCategory}` }],
               ],
             );
             return;
@@ -2788,8 +2790,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
         // ── /task — hub menu ────────────────────────────────────────
         const allTasks = engine.listAll();
-        const TRIGGER_TYPES_ALL = ["webhook", "file", "http", "email"];
-        const triggerCount = allTasks.filter((t) => TRIGGER_TYPES_ALL.includes(t.type)).length;
+        const triggerCount = allTasks.filter((t) => isEventTrigger(t.type)).length;
         const scheduleCount = allTasks.filter((t) => t.type === "cron").length;
         const cronCount = allTasks.filter((t) => t.type === "cron" || t.type === "once").length;
 
@@ -2798,17 +2799,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           [
             `Tasks (${allTasks.length} total)`,
             "",
-            `Triggers: ${triggerCount} (webhook, file, http, email)`,
+            `Triggers: ${triggerCount} (${EVENT_TRIGGER_TYPES.join(", ")})`,
             `Schedules: ${scheduleCount} (daily, weekly, monthly, custom)`,
             `Cron: ${cronCount} (cron expressions, one-time)`,
           ].join("\n"),
           [
             [
-              { label: `Triggers (${triggerCount})`, data: "/task trigger" },
-              { label: `Schedules (${scheduleCount})`, data: "/task schedule" },
+              { label: `Triggers (${triggerCount})`, data: "/tasks trigger" },
+              { label: `Schedules (${scheduleCount})`, data: "/tasks schedule" },
             ],
             [
-              { label: `Cron (${cronCount})`, data: "/task cron" },
+              { label: `Cron (${cronCount})`, data: "/tasks cron" },
             ],
           ],
         );

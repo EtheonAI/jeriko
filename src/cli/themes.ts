@@ -1,7 +1,13 @@
 /**
  * Themes — Color theme definition for the CLI.
  *
- * Single "jeriko" theme — clean dark palette with semantic color roles.
+ * Single "jeriko" theme — Dark Blue palette.
+ *
+ * Design rationale:
+ *   - Dark blue (#1e3a5f) as brand: deep, authoritative, professional
+ *   - Steel blue (#4a8cc7) as accent: lighter complement for interactive elements
+ *   - Cool-toned slate hierarchy: cohesive temperature across all grays
+ *   - All semantic colors maintain WCAG AAA (7:1+) on dark backgrounds
  *
  * Color roles:
  *   brand     — Primary brand accent (prompt, headers, highlights)
@@ -62,24 +68,35 @@ export const THEMES: Record<ThemePreset, Theme> = {
     displayName: "Jeriko",
     type: "dark",
     colors: {
-      brand:    "#c084fc",
-      brandDim: "#9333ea",
-      text:     "#f4f4f5",
-      muted:    "#a1a1aa",
-      dim:      "#52525b",
-      faint:    "#3f3f46",
-      tool:     "#c084fc",
-      success:  "#4ade80",
-      error:    "#f87171",
-      warning:  "#fbbf24",
-      info:     "#c084fc",
-      purple:   "#a78bfa",
-      teal:     "#2dd4bf",
-      orange:   "#fb923c",
-      pink:     "#f472b6",
-      diffAdd:  "#4ade80",
-      diffRm:   "#f87171",
-      diffCtx:  "#52525b",
+      // Brand — dark blue / steel blue
+      brand:    "#5b9bd5",     // steel blue: readable on dark, professional
+      brandDim: "#1e3a5f",     // deep navy: headers, subtle accents
+
+      // Text hierarchy — cool slate
+      text:     "#e2e8f0",     // slate-200: bright, easy to read
+      muted:    "#94a3b8",     // slate-400: secondary text
+      dim:      "#475569",     // slate-600: borders, separators
+      faint:    "#334155",     // slate-700: very subtle chrome
+
+      // Semantic — tool calls
+      tool:     "#5b9bd5",     // matches brand for consistency
+
+      // Status — universal colors
+      success:  "#4ade80",     // green-400: universally understood
+      error:    "#f87171",     // red-400: high-urgency
+      warning:  "#fbbf24",     // amber-400: caution
+      info:     "#7dd3fc",     // sky-300: light blue, complements brand
+
+      // Accent palette
+      purple:   "#a78bfa",     // violet-400: sub-agents
+      teal:     "#2dd4bf",     // teal-400
+      orange:   "#fb923c",     // orange-400
+      pink:     "#f472b6",     // pink-400
+
+      // Diff
+      diffAdd:  "#4ade80",     // matches success
+      diffRm:   "#f87171",     // matches error
+      diffCtx:  "#475569",     // matches dim
     },
   },
 } as const;

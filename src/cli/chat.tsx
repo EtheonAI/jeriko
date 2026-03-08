@@ -49,12 +49,12 @@ export async function startChat(): Promise<void> {
 
   const version = await getVersion();
 
-  // First-run onboarding wizard (before Ink mounts)
+  // First-run onboarding wizard (before Ink mounts).
+  // Only handles provider setup — channels are added after via /connect.
   if (needsSetup()) {
     const result = await runOnboarding(new ClackPrompter(), version);
 
     if (!result) {
-      // User cancelled — can't proceed without a configured provider
       console.log("\nNo provider configured. Run `jeriko` again to start setup.");
       process.exit(0);
     }
@@ -70,21 +70,31 @@ export async function startChat(): Promise<void> {
       process.exit(1);
     }
 
-    // Restore stdin after clack wizard — clack may leave it paused or
-    // in raw mode, which prevents Ink from receiving keystrokes.
-    if (process.stdin.isPaused()) process.stdin.resume();
+    // Restore stdin after clack wizard. Clack uses readline internally
+    // which sets raw mode, pauses stdin, and may emit 'end'. Ink needs
+    // a flowing, non-raw, referenced stdin to receive keystrokes.
+    // Order matters: disable raw mode first, then resume, then ref.
     if (process.stdin.setRawMode) {
       try { process.stdin.setRawMode(false); } catch { /* not a TTY */ }
     }
+    process.stdin.resume();
+    if (typeof process.stdin.ref === "function") {
+      process.stdin.ref();
+    }
+
+    // Give the event loop a tick to settle stdin state before proceeding.
+    // Without this, Ink may see a stale stdin state and exit immediately.
+    await new Promise((r) => setTimeout(r, 50));
   }
 
-  // Choose backend (daemon or in-process)
+  // Single backend creation point — ensureDaemon() auto-starts if needed,
+  // provides visible feedback on failure, and gracefully degrades.
   const backend = await createBackend();
   const model = backend.model;
   const cwd = process.cwd();
 
   // Print banner before Ink takes over (stays in scrollback)
-  printBanner(version, model, cwd);
+  printBanner(version, model, cwd, backend.mode);
 
   // Always start idle (setup handled by wizard above)
   const initialPhase: Phase = "idle";

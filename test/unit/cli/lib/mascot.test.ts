@@ -35,15 +35,13 @@ describe("buildMascotCompact", () => {
     expect(/\u001b\[[0-9;]*m/.test(joined)).toBe(true);
   });
 
-  test("renders only braille pattern characters and spaces", () => {
+  test("renders block characters for cat face", () => {
     const result = buildMascotCompact();
     const plain = result.map(stripAnsi).join("");
-    for (const ch of plain) {
-      const code = ch.charCodeAt(0);
-      // Either regular space or Unicode Braille Patterns (U+2800–U+28FF)
-      const isBraille = code >= 0x2800 && code <= 0x28FF;
-      expect(ch === " " || isBraille).toBe(true);
-    }
+    // Cat face uses half-block and full-block characters
+    expect(plain).toContain("█");
+    expect(plain).toContain("▀");
+    expect(plain).toContain("▄");
   });
 
   test("consistent between calls", () => {

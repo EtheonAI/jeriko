@@ -49,8 +49,8 @@ const DIST = path.join(ROOT, "dist");
  * relay server as Cloudflare Worker secrets.
  *
  * Set these env vars in CI before building the release binary:
- *   BAKED_GITHUB_CLIENT_ID, BAKED_GOOGLE_CLIENT_ID, BAKED_MICROSOFT_CLIENT_ID,
- *   BAKED_X_CLIENT_ID, BAKED_VERCEL_CLIENT_ID, BAKED_STRIPE_CLIENT_ID
+ *   BAKED_GITHUB_CLIENT_ID, BAKED_GOOGLE_CLIENT_ID, BAKED_X_CLIENT_ID,
+ *   BAKED_VERCEL_CLIENT_ID, BAKED_STRIPE_CLIENT_ID
  *
  * If not set, the define injects `undefined` and users must provide client IDs
  * via their own env vars (self-hosted mode).
@@ -69,7 +69,6 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_RELAY_AUTH_SECRET__:       JSON.stringify(RELAY_AUTH_SECRET),
   __BAKED_GITHUB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),
   __BAKED_GOOGLE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GOOGLE_CLIENT_ID    ?? ""),
-  __BAKED_MICROSOFT_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MICROSOFT_CLIENT_ID ?? ""),
   __BAKED_X_CLIENT_ID__:            JSON.stringify(process.env.BAKED_X_CLIENT_ID         ?? ""),
   __BAKED_VERCEL_CLIENT_ID__:       JSON.stringify(process.env.BAKED_VERCEL_CLIENT_ID    ?? ""),
   __BAKED_STRIPE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_STRIPE_CLIENT_ID    ?? ""),
@@ -87,6 +86,7 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_DISCORD_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DISCORD_CLIENT_ID   ?? ""),
   __BAKED_INSTAGRAM_CLIENT_ID__:   JSON.stringify(process.env.BAKED_INSTAGRAM_CLIENT_ID ?? ""),
   __BAKED_THREADS_CLIENT_ID__:     JSON.stringify(process.env.BAKED_THREADS_CLIENT_ID   ?? ""),
+  __BAKED_PAYPAL_CLIENT_ID__:      JSON.stringify(process.env.BAKED_PAYPAL_CLIENT_ID    ?? ""),
 };
 
 /** Packages that are always external (optional deps, never bundled). */

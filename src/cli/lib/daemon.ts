@@ -125,6 +125,24 @@ async function waitForDaemonPid(timeoutMs: number): Promise<number | null> {
 }
 
 /**
+ * Ensure the daemon is running. Starts it if not.
+ * Returns true if daemon is ready (socket available).
+ */
+export async function ensureDaemon(timeoutMs = 10_000): Promise<boolean> {
+  if (isDaemonRunning()) {
+    // Process alive — just wait for socket if needed
+    if (existsSync(SOCKET_PATH)) return true;
+    return waitForSocket(timeoutMs);
+  }
+
+  // Not running — attempt to start
+  const pid = await spawnDaemon();
+  if (!pid) return false;
+
+  return waitForSocket(timeoutMs);
+}
+
+/**
  * Wait for the daemon socket to become available.
  *
  * The daemon writes its PID file early in boot (before migrations and HTTP

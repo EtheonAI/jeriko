@@ -245,78 +245,133 @@ export function formatCancelled(): string {
 
 /** Format an error message. */
 export function formatError(message: string): string {
-  return t.error(`error: ${message}`);
+  return `${t.error(`${ICONS.error} error`)}${t.dim(":")} ${t.text(message)}`;
+}
+
+/**
+ * Format a warning message with icon.
+ */
+export function formatWarning(message: string): string {
+  return `${t.warning(`${ICONS.warning} warning`)}${t.dim(":")} ${t.text(message)}`;
+}
+
+/**
+ * Format a success message with icon.
+ */
+export function formatSuccess(message: string): string {
+  return `${t.success(`${ICONS.success} ${message}`)}`;
 }
 
 // ---------------------------------------------------------------------------
-// Welcome banner — Claude-Code-style bordered two-column box
+// Welcome banner — Claude-Code-style responsive bordered two-column box
 // ---------------------------------------------------------------------------
 
 /**
- * Render welcome banner: full-width bordered box with mascot (left)
- * and info panel (right), separated by a vertical divider.
+ * Render welcome banner: full-terminal-width bordered box with mascot + info
+ * (left) and tips panel (right), separated by a vertical divider.
+ *
+ * Responsive: fills terminal width, adapts column proportions.
+ * Matches Claude Code's header pattern exactly.
  *
  * Layout:
- *   ╭─── Jeriko v2.1.0 ──────────────────────────────────────╮
- *   │                          │                               │
- *   │   (cat mascot)           │  model   claude-sonnet-4      │
- *   │                          │  cwd     ~/projects/myapp     │
- *   │                          │  ───────────────────────────  │
- *   │                          │  /help commands · /new ...    │
- *   │                          │                               │
- *   ╰─────────────────────────────────────────────────────────╯
+ *   ╭─── Jeriko v2.1.0 ──────────────────────────────────────────────────────────────╮
+ *   │                                         │ Tips                                  │
+ *   │         Welcome to Jeriko!              │ /help for commands                    │
+ *   │                                         │ /model to switch models               │
+ *   │            ▄▄       ▄▄                  │ ───────────────────────────────────── │
+ *   │            █▀▀▀▀▀▀▀▀▀▀▀█               │ Shortcuts                             │
+ *   │            █  ▀     ▀  █               │ /new start session                    │
+ *   │            █     ▄     █               │ esc interrupt                         │
+ *   │            ▀▀▀▀▀▀▀▀▀▀▀▀▀               │                                       │
+ *   │ claude-sonnet-4 · ~/projects/myapp      │                                       │
+ *   │            ~/Desktop/Projects/jeriko    │                                       │
+ *   ╰────────────────────────────────────────────────────────────────────────────────╯
  */
-export function formatWelcome(version: string, model: string, cwd: string): string {
+export function formatWelcome(version: string, model: string, cwd: string, mode?: string): string {
   const displayCwd = shortenHome(cwd);
-  const mascot = buildMascotCompact();
-  const infoLines = buildInfoContent(model, displayCwd);
+  const termWidth = getTerminalWidth();
+  const leftLines = buildLeftColumn(model, displayCwd, mode);
+  const rightLines = buildRightColumn();
 
-  return renderHeaderBox(version, mascot, infoLines);
+  return renderHeaderBox(version, leftLines, rightLines, termWidth);
+}
+
+/** Get current terminal width, with sane fallback. */
+function getTerminalWidth(): number {
+  return process.stdout?.columns ?? 80;
 }
 
 // ---------------------------------------------------------------------------
-// Welcome banner — right column content
+// Welcome banner — left column (welcome + mascot + info)
 // ---------------------------------------------------------------------------
 
-/** Build the right-column info lines (model, cwd, help hints). */
-function buildInfoContent(model: string, cwd: string): string[] {
+/** Build left column: welcome message, mascot, model + cwd info. */
+function buildLeftColumn(model: string, cwd: string, mode?: string): string[] {
+  const mascot = buildMascotCompact();
+
+  const lines: string[] = [
+    "",
+    t.header("Welcome to Jeriko!"),
+    "",
+    ...mascot,
+  ];
+
+  // Model info line
+  const modelParts: string[] = [model];
+  if (mode === "in-process") {
+    modelParts.push(t.warning("local"));
+  }
+  lines.push(`${t.muted(modelParts.join(t.dim(" · ")))}`);
+
+  // Cwd on its own line
+  lines.push(`${t.dim(cwd)}`);
+
+  return lines;
+}
+
+// ---------------------------------------------------------------------------
+// Welcome banner — right column (tips + shortcuts)
+// ---------------------------------------------------------------------------
+
+/** Build right column: tips and keyboard shortcuts. */
+function buildRightColumn(): string[] {
   return [
-    `${t.dim("model")}   ${t.text(model)}`,
-    `${t.dim("cwd")}     ${t.muted(cwd)}`,
+    t.text("Tips"),
+    `${t.brand("/help")} ${t.dim("for commands")}`,
+    `${t.brand("/model")} ${t.dim("to switch models")}`,
     "sep",
-    `${t.muted("/help")} ${t.dim("commands")}  ${t.dim(ICONS.dot)}  ${t.muted("/new")} ${t.dim("session")}`,
-    `${t.muted("/model")} ${t.dim("switch")}   ${t.dim(ICONS.dot)}  ${t.dim("esc")} ${t.dim("interrupt")}`,
+    t.text("Shortcuts"),
+    `${t.brand("/new")} ${t.dim("start session")}`,
+    `${t.muted("esc")} ${t.dim("interrupt")}`,
   ];
 }
 
 // ---------------------------------------------------------------------------
-// Welcome banner — two-column bordered box renderer
+// Welcome banner — responsive two-column bordered box renderer
 // ---------------------------------------------------------------------------
 
 /**
- * Render a full-width bordered box with two columns and a title in the
- * top border. Adapts to terminal width. Left column is sized to fit
- * the mascot; right column fills the remaining space.
+ * Render a full-terminal-width bordered box with two columns and a title
+ * in the top border. Fills available terminal width exactly.
+ *
+ * Left column: ~50% width, content centered.
+ * Right column: remaining width, content left-aligned.
+ * Columns separated by a vertical divider.
  */
 function renderHeaderBox(
   version: string,
   leftLines: string[],
   rightLines: string[],
+  termWidth: number,
 ): string {
-  // Measure content
-  const leftWidth = Math.max(...leftLines.map((l) => stripAnsi(l).length));
-  const rightContentWidth = Math.max(
-    ...rightLines.filter((l) => l !== "sep").map((l) => stripAnsi(l).length),
-  );
+  // Total inner width = terminal width minus the 2 outer border chars
+  const innerWidth = Math.max(termWidth - 2, 40);
 
-  // Column layout: padding + content + padding
-  const leftPad = 2;
-  const rightPad = 2;
-  const leftColWidth = leftWidth + leftPad * 2;
-  const rightColWidth = Math.max(rightContentWidth + rightPad * 2, 36);
+  // Split columns: left gets ~50%, right gets the rest, minus 1 for divider
+  const leftColWidth = Math.floor(innerWidth * 0.5);
+  const rightColWidth = innerWidth - leftColWidth - 1; // 1 for divider │
 
-  // Total inner width (between outer borders): left + divider + right
-  const innerWidth = leftColWidth + 1 + rightColWidth;
+  const pad = 2; // horizontal padding inside each column
 
   // Determine content height (whichever column is taller, + vertical padding)
   const contentHeight = Math.max(leftLines.length, rightLines.length) + 2;
@@ -336,12 +391,14 @@ function renderHeaderBox(
   const rows: string[] = [topBorder];
 
   for (let i = 0; i < contentHeight; i++) {
-    // Left cell
+    // Left cell — centered content
     const leftIdx = i - leftOffset;
     const leftLine = leftIdx >= 0 && leftIdx < leftLines.length ? leftLines[leftIdx]! : "";
     const leftVisual = stripAnsi(leftLine).length;
-    const leftCell =
-      " ".repeat(leftPad) + leftLine + " ".repeat(Math.max(0, leftColWidth - leftPad - leftVisual));
+    const leftTotalPad = Math.max(0, leftColWidth - leftVisual);
+    const leftLeadPad = Math.floor(leftTotalPad / 2);
+    const leftTrailPad = leftTotalPad - leftLeadPad;
+    const leftCell = " ".repeat(leftLeadPad) + leftLine + " ".repeat(leftTrailPad);
 
     // Right cell
     const rightIdx = i - rightOffset;
@@ -354,7 +411,7 @@ function renderHeaderBox(
     } else {
       const rightVisual = stripAnsi(rightLine).length;
       const rightCell =
-        " ".repeat(rightPad) + rightLine + " ".repeat(Math.max(0, rightColWidth - rightPad - rightVisual));
+        " ".repeat(pad) + rightLine + " ".repeat(Math.max(0, rightColWidth - pad - rightVisual));
       rows.push(`${t.dim(BOX.v)}${leftCell}${t.dim(BOX.v)}${rightCell}${t.dim(BOX.v)}`);
     }
   }
@@ -610,7 +667,10 @@ export function formatChannelList(
   }
 
   lines.push("");
-  lines.push(hint("Use", "/channel connect <name>", `or ${t.muted("/channel disconnect <name>")}`));
+  lines.push(hint("", "/channels add <name>", t.muted("add and connect a new channel")));
+  lines.push(hint("", "/channels connect <name>", t.muted("reconnect an existing channel")));
+  lines.push(hint("", "/channels disconnect <name>", t.muted("pause a channel")));
+  lines.push(hint("", "/channels remove <name>", t.muted("remove a channel")));
   return lines.join("\n");
 }
 
@@ -622,11 +682,11 @@ export function formatChannelHelp(): string {
     "",
     sectionHeader("Channel Management"),
     "",
-    treeItem(false, `${t.blue("/channel connect <name>")}     ${t.muted("Connect a channel")}`),
-    treeItem(false, `${t.blue("/channel disconnect <name>")}  ${t.muted("Disconnect a channel")}`),
-    treeItem(false, `${t.blue("/channel add <name>")}         ${t.muted("Add and connect a new channel")}`),
-    treeItem(false, `${t.blue("/channel remove <name>")}      ${t.muted("Remove a channel")}`),
-    treeItem(true,  `${t.blue("/channels")}                   ${t.muted("List all channels")}`),
+    treeItem(false, `${t.blue("/channels connect <name>")}     ${t.muted("Connect a channel")}`),
+    treeItem(false, `${t.blue("/channels disconnect <name>")}  ${t.muted("Disconnect a channel")}`),
+    treeItem(false, `${t.blue("/channels add <name>")}         ${t.muted("Add and connect a new channel")}`),
+    treeItem(false, `${t.blue("/channels remove <name>")}      ${t.muted("Remove a channel")}`),
+    treeItem(true,  `${t.blue("/channels list")}               ${t.muted("List all channels")}`),
     "",
     `  ${t.muted("Available channels:")}`,
     treeItem(false, `${t.text("telegram")}     ${t.muted("Bot token from @BotFather")}`),
@@ -647,13 +707,13 @@ export function formatChannelSetupHint(channel: string): string {
       `  2. Copy the bot token`,
       `  3. Set it: ${t.blue("export JERIKO_TELEGRAM_TOKEN=<your-token>")}`,
       `  4. Restart the daemon: ${t.blue("jeriko server restart")}`,
-      `  5. Then: ${t.blue("/channel connect telegram")}`,
+      `  5. Then: ${t.blue("/channels connect telegram")}`,
     ].join("\n"),
     whatsapp: [
       `  ${t.dim("To set up WhatsApp:")}`,
       `  1. Set: ${t.blue("export WHATSAPP_ENABLED=true")}`,
       `  2. Restart the daemon: ${t.blue("jeriko server restart")}`,
-      `  3. Connect: ${t.blue("/channel connect whatsapp")}`,
+      `  3. Connect: ${t.blue("/channels connect whatsapp")}`,
       `  4. Scan the QR code that appears in the daemon logs`,
       `     ${t.dim("Check logs:")} ${t.blue("jeriko server logs")}`,
     ].join("\n"),
@@ -799,9 +859,10 @@ export function formatModelList(
 export function formatConnectorList(connectors: ReadonlyArray<ConnectorInfo>): string {
   if (connectors.length === 0) return t.muted("  No connectors configured.");
 
+  const connected = connectors.filter((c) => c.status === "connected").length;
   const lines: string[] = [
     "",
-    sectionHeader("Connectors"),
+    sectionHeader(`Connectors (${connected}/${connectors.length} connected)`),
   ];
 
   for (let i = 0; i < connectors.length; i++) {
@@ -814,7 +875,10 @@ export function formatConnectorList(connectors: ReadonlyArray<ConnectorInfo>): s
   }
 
   lines.push("");
-  lines.push(hint("Use", "/connect <name>", `or ${t.muted("/disconnect <name>")}`));
+  lines.push(hint("", "/connectors connect <name>", t.muted("connect a service")));
+  lines.push(hint("", "/connectors disconnect <name>", t.muted("disconnect a service")));
+  lines.push(hint("", "/connectors auth <name>", t.muted("configure API keys")));
+  lines.push(hint("", "/connectors health [name]", t.muted("check connectivity")));
   return lines.join("\n");
 }
 
@@ -868,7 +932,7 @@ export function formatSkillList(skills: ReadonlyArray<SkillInfo>): string {
   }
 
   lines.push("");
-  lines.push(`  ${hint("Use", "/skill <name>", "for details.")} ${t.cyan(MODEL_CAPS.reasoning)} ${t.dim("= user-invocable")}`);
+  lines.push(`  ${hint("Use", "/skills <name>", "for details.")} ${t.cyan(MODEL_CAPS.reasoning)} ${t.dim("= user-invocable")}`);
   return lines.join("\n");
 }
 
@@ -1451,7 +1515,7 @@ export function formatTaskHub(
   }
 
   lines.push("");
-  lines.push(hint("Drill down:", "/task trigger /task schedule /task cron", ""));
+  lines.push(hint("Drill down:", "/tasks trigger /tasks schedule /tasks cron", ""));
   return lines.join("\n");
 }
 
@@ -1469,7 +1533,12 @@ export function formatTaskList(tasks: ReadonlyArray<TaskDef>): string {
  */
 export function formatNotificationList(prefs: ReadonlyArray<NotificationPref>): string {
   if (prefs.length === 0) {
-    return t.muted("No notification preferences set. All chats receive notifications by default.");
+    const lines = [
+      t.muted("No notification preferences set. All chats receive notifications by default."),
+      "",
+      hint("Toggle:", "/notifications on", `or ${t.muted("/notifications off")}`),
+    ];
+    return lines.join("\n");
   }
 
   const lines: string[] = [
@@ -1486,6 +1555,8 @@ export function formatNotificationList(prefs: ReadonlyArray<NotificationPref>): 
     ));
   }
 
+  lines.push("");
+  lines.push(hint("Toggle:", "/notifications on", `or ${t.muted("/notifications off")}`));
   return lines.join("\n");
 }
 
@@ -1494,7 +1565,7 @@ export function formatNotificationList(prefs: ReadonlyArray<NotificationPref>): 
 // ---------------------------------------------------------------------------
 
 /**
- * Format connector auth status for the /auth command.
+ * Format connector auth status for /connectors auth.
  */
 export function formatAuthStatus(connectors: ReadonlyArray<AuthStatus>): string {
   if (connectors.length === 0) {
@@ -1523,7 +1594,7 @@ export function formatAuthStatus(connectors: ReadonlyArray<AuthStatus>): string 
   }
 
   lines.push("");
-  lines.push(hint("Set keys:", "/auth <connector> <key1> [key2...]", ""));
+  lines.push(hint("Set keys:", "/connectors auth <name> <key1> [key2...]", ""));
   return lines.join("\n");
 }
 
@@ -1554,10 +1625,10 @@ export function formatAuthDetail(c: AuthStatus): string {
 
   lines.push("");
   if (c.required.length === 1) {
-    lines.push(hint("Set:", `/auth ${c.name} <key>`, ""));
+    lines.push(hint("Set:", `/connectors auth ${c.name} <key>`, ""));
   } else {
     const varNames = c.required.map((r) => `<${r.variable}>`).join(" ");
-    lines.push(hint("Set:", `/auth ${c.name} ${varNames}`, ""));
+    lines.push(hint("Set:", `/connectors auth ${c.name} ${varNames}`, ""));
   }
 
   return lines.join("\n");

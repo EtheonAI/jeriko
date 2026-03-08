@@ -121,10 +121,22 @@ export function buildOAuthCallbackUrl(provider: string): string {
  * Always a clean URL without userId in the path. The userId is embedded
  * in the composite state token for relay routing.
  */
-export function buildOAuthStartUrl(provider: string, stateToken: string): string {
+export function buildOAuthStartUrl(
+  provider: string,
+  stateToken: string,
+  context?: Record<string, string>,
+): string {
   const publicUrl = getPublicUrl();
-  const encodedState = encodeURIComponent(stateToken);
-  return `${publicUrl}/oauth/${provider}/start?state=${encodedState}`;
+  const params = new URLSearchParams({ state: stateToken });
+
+  // Provider-specific context (e.g. shop=mystore for Shopify)
+  if (context) {
+    for (const [key, value] of Object.entries(context)) {
+      params.set(key, value);
+    }
+  }
+
+  return `${publicUrl}/oauth/${provider}/start?${params.toString()}`;
 }
 
 /**

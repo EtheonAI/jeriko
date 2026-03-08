@@ -81,7 +81,8 @@ export const PROVIDER_ENV_KEYS: readonly string[] = [
   "DEEPSEEK_API_KEY",
   "OPENROUTER_API_KEY",
   "XAI_API_KEY",
-  "GOOGLE_API_KEY",
+  "GEMINI_API_KEY",
+  "GOOGLE_GENERATIVE_AI_API_KEY",
   "MISTRAL_API_KEY",
   "TOGETHER_API_KEY",
   "FIREWORKS_API_KEY",
@@ -94,6 +95,12 @@ export const PROVIDER_ENV_KEYS: readonly string[] = [
   "NEBIUS_API_KEY",
   "HF_TOKEN",
   "SAMBANOVA_API_KEY",
+  "REQUESTY_API_KEY",
+  "HELICONE_API_KEY",
+  "DASHSCOPE_API_KEY",
+  "SILICONFLOW_API_KEY",
+  "NOVITA_API_KEY",
+  "LMSTUDIO_API_KEY",
 ] as const;
 
 /** Provider IDs with native drivers — these don't need a providers[] config entry. */

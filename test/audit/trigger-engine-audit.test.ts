@@ -1483,7 +1483,7 @@ describe("Audit: email trigger type", () => {
     const t = engine.add({
       type: "email",
       enabled: false,
-      config: { connector: "outlook", from: "test@test.com" },
+      config: { connector: "gmail", from: "test@test.com" },
       action: { type: "shell", command: "echo email" },
       label: "Email persist test",
     });
@@ -1494,7 +1494,7 @@ describe("Audit: email trigger type", () => {
     expect(loaded).toBeDefined();
     expect(loaded!.type).toBe("email");
     expect(loaded!.label).toBe("Email persist test");
-    expect((loaded!.config as any).connector).toBe("outlook");
+    expect((loaded!.config as any).connector).toBe("gmail");
 
     engine2.remove(t.id);
     await engine2.stop();

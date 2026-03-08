@@ -161,6 +161,12 @@ function createMockBackend(overrides: Partial<Backend> = {}): Backend {
     // Tasks & Notifications
     listTasks: mock(() => Promise.resolve([])),
     listNotifications: mock(() => Promise.resolve([])),
+    setNotifications: mock(() => Promise.resolve()),
+
+    // Session control
+    abort: mock(() => {}),
+    deleteSessionById: mock((target: string) => Promise.resolve(target !== "current-session")),
+    disconnectService: mock(() => Promise.resolve({ ok: true, label: "GitHub" })),
 
     ...overrides,
   } as unknown as Backend;
@@ -209,24 +215,29 @@ describe("Session handlers", () => {
     expect(ctx.dispatched).toContainEqual({ type: "RESET_STATS" });
   });
 
-  test("/session shows session detail", async () => {
+  test("/sessions launches interactive picker", async () => {
     const ctx = createTestCtx();
     const h = createSessionHandlers(ctx);
-    await h.session();
-    expect(ctx.messages.length).toBeGreaterThan(0);
+    await h.sessions("");
+    // No args → wizard-based action picker
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.dispatched.some((a: any) => a.type === "SET_PHASE" && a.phase === "wizard")).toBe(true);
   });
 
-  test("/session handles no active session", async () => {
-    const ctx = createTestCtx({ getSessionDetail: mock(() => Promise.resolve(null)) } as any);
-    const h = createSessionHandlers(ctx);
-    await h.session();
-    expect(ctx.messages.length).toBeGreaterThan(0);
-  });
-
-  test("/sessions lists all sessions", async () => {
+  test("/sessions picker includes session actions", async () => {
     const ctx = createTestCtx();
     const h = createSessionHandlers(ctx);
-    await h.sessions();
+    await h.sessions("");
+    const wizard = ctx.wizardConfigRef.current!;
+    const options = wizard.steps[0]!.options!;
+    expect(options.some((o: any) => o.value === "detail")).toBe(true);
+    expect(options.some((o: any) => o.value === "list")).toBe(true);
+  });
+
+  test("/sessionslist lists all sessions", async () => {
+    const ctx = createTestCtx();
+    const h = createSessionHandlers(ctx);
+    await h.sessions("list");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
@@ -345,11 +356,65 @@ describe("Session handlers", () => {
     expect(ctx.dispatched).not.toContainEqual({ type: "CLEAR_MESSAGES" });
   });
 
-  test("/archive archives session", async () => {
+  test("/archive archives session and creates new one", async () => {
     const ctx = createTestCtx();
     const h = createSessionHandlers(ctx);
     await h.archive();
     expect(ctx.dispatched).toContainEqual({ type: "RESET_STATS" });
+    expect(ctx.dispatched).toContainEqual({ type: "CLEAR_MESSAGES" });
+    expect(ctx.dispatched).toContainEqual({ type: "SET_SESSION_SLUG", slug: "fresh-session-2" });
+    expect(ctx.messages[0]).toContain("archived");
+  });
+
+  test("/archive on error shows error without state changes", async () => {
+    const ctx = createTestCtx({
+      archiveSession: (() => Promise.reject(new Error("archive failure"))) as any,
+    });
+    const h = createSessionHandlers(ctx);
+    await h.archive();
+    expect(ctx.messages.some((m) => m.includes("archive failure"))).toBe(true);
+    expect(ctx.dispatched).not.toContainEqual({ type: "RESET_STATS" });
+  });
+
+  test("/sessionsdelete without slug shows usage hint", async () => {
+    const ctx = createTestCtx();
+    const h = createSessionHandlers(ctx);
+    await h.sessions("delete");
+    expect(ctx.messages[0]).toContain("Usage");
+  });
+
+  test("/sessionsdelete current session returns error (not crash)", async () => {
+    const ctx = createTestCtx({
+      deleteSessionById: mock((target: string) => Promise.resolve(false)) as any,
+    });
+    const h = createSessionHandlers(ctx);
+    await h.sessions("delete current-session");
+    expect(ctx.messages[0]).toContain("Cannot delete");
+  });
+
+  test("/sessionsdelete valid session shows success", async () => {
+    const ctx = createTestCtx({
+      deleteSessionById: mock((target: string) => Promise.resolve(true)) as any,
+    });
+    const h = createSessionHandlers(ctx);
+    await h.sessions("delete old-session");
+    expect(ctx.messages[0]).toContain("deleted");
+  });
+
+  test("/sessionsdelete handles backend error gracefully", async () => {
+    const ctx = createTestCtx({
+      deleteSessionById: (() => Promise.reject(new Error("db error"))) as any,
+    });
+    const h = createSessionHandlers(ctx);
+    await h.sessions("delete some-session");
+    expect(ctx.messages.some((m) => m.includes("db error"))).toBe(true);
+  });
+
+  test("/stop aborts the active AI response", async () => {
+    const ctx = createTestCtx();
+    const h = createSessionHandlers(ctx);
+    await h.stop();
+    expect(ctx.messages.length).toBeGreaterThan(0);
   });
 });
 
@@ -409,49 +474,58 @@ describe("Model handlers", () => {
 describe("Connector handlers", () => {
   // Connector commands require daemon mode — test both paths
 
-  test("/connectors in non-daemon mode shows daemon required", async () => {
+  test("/connectorsin non-daemon mode shows daemon required", async () => {
     const ctx = createTestCtx();
     const h = createConnectorHandlers(ctx);
-    await h.connectors();
+    await h.connectors("");
     expect(ctx.messages[0]).toContain("daemon");
   });
 
-  test("/connectors in daemon mode lists connectors", async () => {
+  test("/connectors in daemon mode launches interactive picker", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
-    await h.connectors();
+    await h.connectors("");
+    // No args → wizard-based action picker
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.dispatched.some((a: any) => a.type === "SET_PHASE" && a.phase === "wizard")).toBe(true);
+  });
+
+  test("/channelslist in daemon mode lists channels", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
+    const h = createConnectorHandlers(ctx);
+    await h.channels("list");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/channels in daemon mode lists channels", async () => {
+  test("/connectorsconnect without args in daemon mode launches wizard", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
-    await h.channels();
-    expect(ctx.messages.length).toBeGreaterThan(0);
-  });
-
-  test("/connect without args in daemon mode launches wizard", async () => {
-    const ctx = createTestCtx({ mode: "daemon" } as any);
-    const h = createConnectorHandlers(ctx);
-    await h.connect("");
+    await h.connectors("connect");
     // Either launches wizard or shows a "no services" message
     expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
-  test("/disconnect without args in daemon mode launches wizard", async () => {
+  test("/connectorsdisconnect without args in daemon mode launches wizard", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
-    await h.disconnect("");
+    await h.connectors("disconnect");
     // Either launches wizard or shows a "no services" message
     expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
-  test("/auth with no args launches auth wizard", async () => {
-    const ctx = createTestCtx();
+  test("/connectorsauth with no args launches auth wizard", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createConnectorHandlers(ctx);
-    await h.auth("");
+    await h.connectors("auth");
     // Either launches wizard or shows connectors
     expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
+  });
+
+  test("/connectorshealth checks connector health", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
+    const h = createConnectorHandlers(ctx);
+    await h.connectors("health");
+    expect(ctx.messages.length).toBeGreaterThan(0);
   });
 });
 
@@ -467,32 +541,32 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/skills lists skills", async () => {
+  test("/skillslist lists skills", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.skills();
+    await h.skills("list");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/skill with name shows detail", async () => {
+  test("/skillswith name shows detail", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.skill("test-skill");
+    await h.skills("test-skill");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/skill without name launches skill picker wizard", async () => {
+  test("/skillswithout name launches skill picker wizard", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.skill("");
+    await h.skills("");
     // Either launches wizard (if skills exist) or shows "no skills" message
     expect(ctx.messages.length > 0 || ctx.wizardConfigRef.current !== null).toBe(true);
   });
 
-  test("/skill with unknown name shows error", async () => {
+  test("/skillswith unknown name shows error", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.skill("not-found");
+    await h.skills("not-found");
     expect(ctx.messages[0]).toContain("not found");
   });
 
@@ -510,19 +584,14 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/status requires daemon", async () => {
+  test("/status requires daemon with actionable guidance", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.status();
-    // in-process mode, should show daemon required message
-    expect(ctx.messages[0]).toContain("daemon");
-  });
-
-  test("/health requires daemon", async () => {
-    const ctx = createTestCtx();
-    const h = createSystemHandlers(ctx);
-    await h.health();
-    expect(ctx.messages[0]).toContain("daemon");
+    const msg = ctx.messages[0]!;
+    expect(msg).toContain("daemon");
+    expect(msg).toContain("jeriko server start");
+    expect(msg).toContain("jeriko");
   });
 
   test("/plan shows plan info", async () => {
@@ -556,47 +625,51 @@ describe("System handlers", () => {
     expect(ctx.messages[0]).toContain("Checkout");
   });
 
-  test("/billing opens portal", async () => {
+  test("/billing opens portal with manage/cancel message", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.billing();
     expect(ctx.messages[0]).toContain("portal");
+    expect(ctx.messages[0]).toContain("cancel");
   });
 
-  test("/cancel redirects to billing portal", async () => {
-    const ctx = createTestCtx();
-    const h = createSystemHandlers(ctx);
-    await h.cancel();
-    expect(ctx.messages[0]).toContain("subscription");
-    expect(ctx.messages[0]).toContain("billing.example.com");
-  });
-
-  test("/task shows task hub", async () => {
+  test("/tasks no args launches wizard picker", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createSystemHandlers(ctx);
-    await h.task("");
+    await h.tasks("");
+    // No args now launches an interactive wizard instead of showing hub directly
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect((ctx.wizardConfigRef.current as any)?.title).toBe("Tasks");
+  });
+
+  test("/tasks list shows task hub", async () => {
+    const ctx = createTestCtx({ mode: "daemon" } as any);
+    const h = createSystemHandlers(ctx);
+    await h.tasks("list");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/task trigger filters triggers", async () => {
+  test("/taskstrigger filters triggers", async () => {
     const ctx = createTestCtx({ mode: "daemon" } as any);
     const h = createSystemHandlers(ctx);
-    await h.task("trigger");
+    await h.tasks("trigger");
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/task requires daemon", async () => {
+  test("/tasksrequires daemon", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.task("");
+    await h.tasks("");
     expect(ctx.messages[0]).toContain("daemon");
   });
 
-  test("/notifications lists notifications", async () => {
+  test("/notifications launches interactive toggle picker", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.notifications();
-    expect(ctx.messages.length).toBeGreaterThan(0);
+    await h.notifications("");
+    // No args → wizard-based enable/disable picker
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.dispatched.some((a: any) => a.type === "SET_PHASE" && a.phase === "wizard")).toBe(true);
   });
 
   test("/theme shows active theme", async () => {

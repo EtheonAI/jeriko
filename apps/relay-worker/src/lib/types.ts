@@ -47,11 +47,6 @@ export interface Env {
   /** Google OAuth client secret (shared by Gmail + GDrive). */
   GOOGLE_OAUTH_CLIENT_SECRET?: string;
 
-  /** Microsoft OAuth client ID (shared by OneDrive + Outlook). */
-  MICROSOFT_OAUTH_CLIENT_ID?: string;
-  /** Microsoft OAuth client secret (shared by OneDrive + Outlook). */
-  MICROSOFT_OAUTH_CLIENT_SECRET?: string;
-
   /** X (Twitter) OAuth client ID. */
   X_OAUTH_CLIENT_ID?: string;
   /** X (Twitter) OAuth client secret. */

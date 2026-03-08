@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 22 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(22);
+  it("defines exactly 20 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(20);
   });
 
   it("has all required fields on every provider", () => {
@@ -68,10 +68,8 @@ describe("OAuth providers", () => {
     expect(isOAuthCapable("github")).toBe(true);
     expect(isOAuthCapable("x")).toBe(true);
     expect(isOAuthCapable("gdrive")).toBe(true);
-    expect(isOAuthCapable("onedrive")).toBe(true);
     expect(isOAuthCapable("vercel")).toBe(true);
     expect(isOAuthCapable("gmail")).toBe(true);
-    expect(isOAuthCapable("outlook")).toBe(true);
     // API-key only
     expect(isOAuthCapable("paypal")).toBe(false);
     expect(isOAuthCapable("twilio")).toBe(false);
@@ -96,11 +94,6 @@ describe("OAuth providers", () => {
     const gd = getOAuthProvider("gdrive");
     expect(gd!.refreshTokenEnvVar).toBe("GDRIVE_REFRESH_TOKEN");
     expect(gd!.extraTokenParams).toEqual({ access_type: "offline", prompt: "consent" });
-  });
-
-  it("OneDrive has refresh token var", () => {
-    const od = getOAuthProvider("onedrive");
-    expect(od!.refreshTokenEnvVar).toBe("ONEDRIVE_REFRESH_TOKEN");
   });
 
   it("GitHub has no PKCE or refresh token", () => {
@@ -230,7 +223,7 @@ describe("PKCE", () => {
 
 describe("ConnectorDef OAuth metadata", () => {
   it("OAuth-capable connectors have oauth field", () => {
-    const oauthNames = ["github", "x", "gdrive", "onedrive", "vercel", "gmail", "outlook"];
+    const oauthNames = ["github", "x", "gdrive", "vercel", "gmail"];
     for (const name of oauthNames) {
       const def = getConnectorDef(name);
       expect(def!.oauth).toBeDefined();
@@ -240,7 +233,7 @@ describe("ConnectorDef OAuth metadata", () => {
   });
 
   it("API-key-only connectors have no oauth field", () => {
-    const apiKeyNames = ["paypal", "twilio"];
+    const apiKeyNames = ["twilio"];
     for (const name of apiKeyNames) {
       const def = getConnectorDef(name);
       expect(def!.oauth).toBeUndefined();
@@ -263,8 +256,8 @@ describe("ConnectorDef OAuth metadata", () => {
     }
   });
 
-  it("total connector count is 27", () => {
-    expect(CONNECTOR_DEFS.length).toBe(27);
+  it("total connector count is 25", () => {
+    expect(CONNECTOR_DEFS.length).toBe(25);
   });
 });
 

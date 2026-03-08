@@ -458,39 +458,50 @@ describe("formatWelcome", () => {
 
   test("contains cat mascot", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("⣿");
+    // Block-character cat face
+    expect(result).toContain("█");
+  });
+
+  test("contains welcome message", () => {
+    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
+    expect(result).toContain("Welcome to Jeriko!");
   });
 
   test("shows model", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("model");
     expect(result).toContain("claude");
   });
 
-  test("shows cwd", () => {
+  test("has two-column layout with border", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("cwd");
-  });
-
-  test("has stacked layout with mascot and info panel", () => {
-    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    // Mascot on top, info panel below
     expect(result).toContain("Jeriko");
-    expect(result).toContain("model");
     expect(result).toContain("claude");
-    // Bordered info panel with separator lines
+    // Bordered layout with separator lines
     expect(result).toContain("─");
+    expect(result).toContain("│");
   });
 
-  test("shows help hints", () => {
+  test("shows tips and shortcuts", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
     expect(result).toContain("/help");
     expect(result).toContain("/new");
+    expect(result).toContain("/model");
+    expect(result).toContain("Tips");
   });
 
   test("shortens home directory in cwd", () => {
     const home = process.env.HOME ?? "/tmp";
     expect(stripAnsi(formatWelcome("2.0.0", "claude", `${home}/projects`))).toContain("~/projects");
+  });
+
+  test("shows local warning when in-process", () => {
+    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp", "in-process"));
+    expect(result).toContain("local");
+  });
+
+  test("no local warning when mode is undefined", () => {
+    const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
+    expect(result).not.toContain("local");
   });
 });
 
@@ -574,35 +585,42 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 37 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(37);
+  test("has all 26 slash commands", () => {
+    expect(SLASH_COMMANDS.size).toBe(26);
   });
 
-  test("contains new v3 commands", () => {
-    expect(SLASH_COMMANDS.has("/models")).toBe(true);
+  test("contains unified v4 commands", () => {
     expect(SLASH_COMMANDS.has("/history")).toBe(true);
     expect(SLASH_COMMANDS.has("/clear")).toBe(true);
     expect(SLASH_COMMANDS.has("/compact")).toBe(true);
     expect(SLASH_COMMANDS.has("/connectors")).toBe(true);
-    expect(SLASH_COMMANDS.has("/connect")).toBe(true);
-    expect(SLASH_COMMANDS.has("/disconnect")).toBe(true);
-    expect(SLASH_COMMANDS.has("/triggers")).toBe(true);
+    expect(SLASH_COMMANDS.has("/channels")).toBe(true);
     expect(SLASH_COMMANDS.has("/skills")).toBe(true);
-    expect(SLASH_COMMANDS.has("/skill")).toBe(true);
     expect(SLASH_COMMANDS.has("/status")).toBe(true);
-    expect(SLASH_COMMANDS.has("/health")).toBe(true);
     expect(SLASH_COMMANDS.has("/sys")).toBe(true);
     expect(SLASH_COMMANDS.has("/config")).toBe(true);
-    expect(SLASH_COMMANDS.has("/session")).toBe(true);
+    expect(SLASH_COMMANDS.has("/sessions")).toBe(true);
     expect(SLASH_COMMANDS.has("/share")).toBe(true);
     expect(SLASH_COMMANDS.has("/cost")).toBe(true);
     expect(SLASH_COMMANDS.has("/billing")).toBe(true);
     expect(SLASH_COMMANDS.has("/kill")).toBe(true);
     expect(SLASH_COMMANDS.has("/archive")).toBe(true);
-    expect(SLASH_COMMANDS.has("/auth")).toBe(true);
     expect(SLASH_COMMANDS.has("/tasks")).toBe(true);
     expect(SLASH_COMMANDS.has("/notifications")).toBe(true);
-    expect(SLASH_COMMANDS.has("/cancel")).toBe(true);
+    expect(SLASH_COMMANDS.has("/stop")).toBe(true);
+    expect(SLASH_COMMANDS.has("/onboard")).toBe(true);
+  });
+
+  test("removed commands no longer exist", () => {
+    expect(SLASH_COMMANDS.has("/switch")).toBe(false);
+    expect(SLASH_COMMANDS.has("/models")).toBe(false);
+    expect(SLASH_COMMANDS.has("/triggers")).toBe(false);
+    expect(SLASH_COMMANDS.has("/cancel")).toBe(false);
+    expect(SLASH_COMMANDS.has("/connect")).toBe(false);
+    expect(SLASH_COMMANDS.has("/disconnect")).toBe(false);
+    expect(SLASH_COMMANDS.has("/auth")).toBe(false);
+    expect(SLASH_COMMANDS.has("/health")).toBe(false);
+    expect(SLASH_COMMANDS.has("/delete")).toBe(false);
   });
 });
 
@@ -881,7 +899,7 @@ describe("formatHelp (v3)", () => {
     expect(result).toContain("/skills");
     expect(result).toContain("/status");
     expect(result).toContain("/config");
-    expect(result).toContain("/session");
+    expect(result).toContain("/sessions");
     expect(result).toContain("/share");
   });
 });
@@ -1099,7 +1117,7 @@ describe("formatAuthStatus", () => {
     expect(result).toContain("configured");
     expect(result).toContain("GitHub");
     expect(result).toContain("not configured");
-    expect(result).toContain("/auth");
+    expect(result).toContain("/connectors auth");
   });
 });
 
@@ -1122,7 +1140,7 @@ describe("formatAuthDetail", () => {
     expect(result).toContain("Payment processing");
     expect(result).toContain("not configured");
     expect(result).toContain("STRIPE_SECRET_KEY");
-    expect(result).toContain("/auth stripe");
+    expect(result).toContain("/connectors auth stripe");
   });
 
   test("formats detail for a connector with multiple keys", () => {

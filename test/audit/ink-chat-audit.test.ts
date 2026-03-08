@@ -607,7 +607,6 @@ describe("slashCompleter", () => {
   test("filters by prefix", () => {
     const [completions] = slashCompleter("/he");
     expect(completions).toContain("/help");
-    expect(completions).toContain("/health");
     expect(completions.every((c) => c.startsWith("/he"))).toBe(true);
   });
 
@@ -630,13 +629,14 @@ describe("slashCompleter", () => {
 describe("command registry", () => {
   test("SLASH_COMMANDS has all expected commands", () => {
     const expected = [
-      "/help", "/new", "/session", "/sessions", "/resume", "/switch",
+      "/help", "/new", "/sessions", "/resume",
       "/history", "/clear", "/compact", "/share", "/kill", "/archive",
-      "/model", "/models", "/channels", "/channel",
-      "/connectors", "/connect", "/disconnect", "/auth",
-      "/triggers", "/tasks", "/skills", "/skill", "/notifications",
-      "/plan", "/upgrade", "/billing", "/cancel", "/cost",
-      "/onboard", "/status", "/health", "/sys", "/config", "/theme",
+      "/model", "/channels",
+      "/connectors",
+      "/tasks", "/skills", "/notifications",
+      "/plan", "/upgrade", "/billing", "/cost",
+      "/onboard", "/status", "/sys", "/config", "/theme",
+      "/stop",
     ];
     for (const cmd of expected) {
       expect(SLASH_COMMANDS.has(cmd)).toBe(true);

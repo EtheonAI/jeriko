@@ -95,10 +95,10 @@ export async function runSelfInstall(target: string): Promise<void> {
   // 7. Verify
   verifyInstallation();
 
-  // Done — daemon is NOT started here. The onboarding wizard (jeriko onboard
-  // or jeriko's first-run flow) writes config first, then starts the daemon
-  // via persistSetup() → spawnDaemon(). Starting here would create a daemon
-  // with no config that can't be reloaded when the wizard finishes.
+  // Done — daemon is NOT started here. It starts automatically when the user
+  // runs `jeriko` — createBackend() calls ensureDaemon() which auto-starts
+  // and waits for the socket. Starting here would create a daemon with no
+  // config that can't serve requests until the wizard finishes.
   console.log();
   success("Installation complete!");
   console.log();

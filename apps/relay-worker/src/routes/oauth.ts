@@ -51,8 +51,10 @@ const OAUTH_CALLBACK_TIMEOUT_MS = 30_000;
 // ---------------------------------------------------------------------------
 
 export interface PendingPKCE {
-  codeVerifier: string;
+  codeVerifier?: string;
   createdAt: number;
+  /** Provider-specific context preserved from /start to /callback (e.g. {shop} for Shopify). */
+  context?: Record<string, string>;
 }
 
 /** PKCE verifier timeout — must complete callback within 10 minutes. */
@@ -193,20 +195,24 @@ export function createOAuthRoutes(
 
     if (credentials && providerConfig) {
       // Relay has credentials — build the auth URL directly
-      const redirectUri = `https://bot.jeriko.ai/oauth/${provider}/callback`;
+      const reqUrl = new URL(c.req.url);
+      const redirectUri = `${reqUrl.origin}/oauth/${provider}/callback`;
       // Build provider-specific context from query params (e.g. ?shop=mystore for Shopify)
-      const urlParams = new URL(c.req.url).searchParams;
+      const urlParams = reqUrl.searchParams;
       const context: Record<string, string> = {};
       for (const [key, value] of urlParams) {
         if (key !== "state") context[key] = value;
       }
-      const result = await buildAuthorizationUrl(providerConfig, credentials.clientId, redirectUri, compositeState, Object.keys(context).length > 0 ? context : undefined);
+      const resolvedContext = Object.keys(context).length > 0 ? context : undefined;
+      const result = await buildAuthorizationUrl(providerConfig, credentials.clientId, redirectUri, compositeState, resolvedContext);
 
-      // Store PKCE verifier for use in /callback
-      if (result.codeVerifier && stateToken) {
+      // Persist PKCE verifier and/or context for use in /callback.
+      // Shopify needs context (shop name) preserved; X/Twitter needs PKCE verifier.
+      if (stateToken && (result.codeVerifier || resolvedContext)) {
         pendingPKCE.set(stateToken, {
           codeVerifier: result.codeVerifier,
           createdAt: Date.now(),
+          context: resolvedContext,
         });
       }
 
@@ -349,6 +355,7 @@ export function createOAuthRoutes(
         exchangeProvider,
         connections,
         pendingPKCE,
+        origin: url.origin,
         context: Object.keys(callbackContext).length > 0 ? callbackContext : undefined,
       });
     }
@@ -445,6 +452,8 @@ interface RelayExchangeContext {
   exchangeProvider: TokenExchangeProvider;
   connections: ConnectionManager;
   pendingPKCE: Map<string, PendingPKCE>;
+  /** Request origin (e.g. "https://relay.jeriko.ai") for building redirect URIs. */
+  origin: string;
   /** Provider-specific context for URL placeholder resolution (e.g. {shop} for Shopify). */
   context?: Record<string, string>;
 }
@@ -453,21 +462,26 @@ async function handleRelayExchange(
   c: { html: (html: string, status: ContentfulStatusCode) => Response | Promise<Response> },
   ctx: RelayExchangeContext,
 ): Promise<Response | Promise<Response>> {
-  const { provider, userId, code, stateToken, credentials, exchangeProvider, connections, pendingPKCE, context } = ctx;
+  const { provider, userId, code, stateToken, credentials, exchangeProvider, connections, pendingPKCE, origin, context } = ctx;
 
-  // Look up PKCE verifier if stored during /start
+  // Look up PKCE verifier and stored context from /start
   let codeVerifier: string | undefined;
+  let resolvedContext = context;
   if (stateToken) {
     prunePKCE(pendingPKCE);
-    const pkce = pendingPKCE.get(stateToken);
-    if (pkce) {
-      codeVerifier = pkce.codeVerifier;
+    const stored = pendingPKCE.get(stateToken);
+    if (stored) {
+      codeVerifier = stored.codeVerifier;
+      // Merge: stored context from /start takes priority (e.g. Shopify's {shop})
+      if (stored.context) {
+        resolvedContext = { ...stored.context, ...context };
+      }
       pendingPKCE.delete(stateToken);
     }
   }
 
   // Build redirect URI — must match what was used in /start
-  const redirectUri = `https://bot.jeriko.ai/oauth/${provider}/callback`;
+  const redirectUri = `${origin}/oauth/${provider}/callback`;
 
   try {
     const tokens = await exchangeCodeForTokens({
@@ -477,7 +491,7 @@ async function handleRelayExchange(
       clientId: credentials.clientId,
       clientSecret: credentials.clientSecret,
       codeVerifier,
-      context,
+      context: resolvedContext,
     });
 
     // Send tokens to daemon via WebSocket

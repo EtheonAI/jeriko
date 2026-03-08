@@ -1,26 +1,27 @@
 /**
  * Onboarding — First-run wizard using WizardPrompter interface.
  *
- * Flow (simple, like OpenClaw):
+ * Flow:
  *   1. Intro — "Welcome to Jeriko"
  *   2. Provider select — Claude (recommended), GPT, Local/Ollama, 22+ presets
  *   3. Auth method — OAuth (if available) or API key
  *   4. Credential acquisition — browser OAuth flow or key paste + verify
- *   5. Optional channel setup — Telegram (bot token) or WhatsApp (QR at start)
- *   6. Write config + env
- *   7. Auto-start daemon
- *   8. Outro — ready to chat
+ *   5. Persist config + env (atomic writes)
+ *   6. Outro — ready to chat
+ *
+ * Channels and connectors are added post-setup via /connect.
+ * Daemon startup is handled by createBackend() via ensureDaemon().
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateApiKey, validateUrl, getProviderOptions, BUILT_IN_PROVIDER_IDS, MIN_API_KEY_LENGTH } from "../lib/setup.js";
-import { getProviderAuth, getOAuthConfig, type AuthChoice } from "../lib/provider-auth.js";
+import { getProviderAuth, getOAuthConfig, getAvailableAuthChoices, type AuthChoice } from "../lib/provider-auth.js";
 import { runOAuthFlow } from "../lib/oauth-flow.js";
 import { getConfigDir } from "../../shared/config.js";
 import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList, verifyLMStudioRunning } from "./verify.js";
 import type { WizardPrompter } from "./prompter.js";
-import { JERIKO_DIR, spawnDaemon } from "../lib/daemon.js";
+import { JERIKO_DIR } from "../lib/daemon.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -33,11 +34,6 @@ export interface OnboardingResult {
   envKey: string;
   /** Specific local model selected (written as LOCAL_MODEL in .env). */
   localModel?: string;
-  /** Optional channel configuration from wizard. */
-  channels?: {
-    telegram?: { token: string };
-    whatsapp?: boolean;
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -101,13 +97,7 @@ export async function runOnboarding(
       if (!lmResult) return null;             // user cancelled
     }
 
-    // ── Step 3: Optional channel setup ──────────────────────────────
-    const channels = await offerChannelSetup(prompter);
-
-    const outroMsg = channels
-      ? "You're all set! Channels will connect when the daemon starts."
-      : "You're all set! Use /connect to add channels later.";
-    prompter.outro(outroMsg);
+    prompter.outro("You're all set! Use /connect to add channels later.");
 
     return {
       provider: provider.id,
@@ -115,7 +105,6 @@ export async function runOnboarding(
       apiKey,
       envKey: provider.envKey,
       localModel,
-      channels,
     };
   }
 }
@@ -139,14 +128,18 @@ async function authenticateProvider(
   providerName: string,
   envKey: string,
 ): Promise<string | "back" | null> {
-  // Check for OAuth support
-  const authDef = getProviderAuth(providerId);
-  if (authDef && authDef.choices.length > 1) {
+  // Get auth choices filtered by daemon availability.
+  // During onboarding the daemon hasn't started yet, so relay-dependent
+  // OAuth flows are excluded — the user goes straight to API key input.
+  const { isDaemonRunning } = await import("../lib/daemon.js");
+  const choices = getAvailableAuthChoices(providerId, isDaemonRunning());
+
+  if (choices && choices.length > 1) {
     // Multiple auth methods — let user choose
     const choiceId = await prompter.select({
       message: `How would you like to authenticate with ${providerName}?`,
       options: [
-        ...authDef.choices.map((c) => ({
+        ...choices.map((c) => ({
           value: c.id,
           label: c.label,
           hint: c.hint,
@@ -161,7 +154,7 @@ async function authenticateProvider(
     }
     if (choiceId === "back") return "back";
 
-    const choice = authDef.choices.find((c) => c.id === choiceId);
+    const choice = choices.find((c) => c.id === choiceId);
     if (!choice) return null;
 
     if (choice.method === "oauth-pkce") {
@@ -446,131 +439,18 @@ async function handleLMStudio(prompter: WizardPrompter): Promise<true | "back" |
 }
 
 // ---------------------------------------------------------------------------
-// Optional channel setup
-// ---------------------------------------------------------------------------
-
-/** Telegram bot token format: digits:alphanumeric (30+ chars after colon). */
-const TELEGRAM_TOKEN_RE = /^\d+:[A-Za-z0-9_-]{30,}$/;
-
-/**
- * Offer optional Telegram/WhatsApp channel setup.
- * Returns channel config if the user chose any, or undefined to skip.
- */
-async function offerChannelSetup(
-  prompter: WizardPrompter,
-): Promise<OnboardingResult["channels"] | undefined> {
-  const addChannel = await prompter.confirm({
-    message: "Would you like to connect a messaging channel? (Telegram or WhatsApp)",
-    initialValue: false,
-  });
-
-  if (isCancel(addChannel) || !addChannel) return undefined;
-
-  const channelId = await prompter.select({
-    message: "Which channel would you like to set up?",
-    options: [
-      { value: "telegram", label: "Telegram", hint: "requires a bot token from @BotFather" },
-      { value: "whatsapp", label: "WhatsApp", hint: "pairs via QR code when daemon starts" },
-      { value: "both", label: "Both", hint: "Telegram + WhatsApp" },
-      { value: "skip", label: "Skip", hint: "add channels later with /connect" },
-    ],
-  });
-
-  if (isCancel(channelId) || channelId === "skip") return undefined;
-
-  const channels: NonNullable<OnboardingResult["channels"]> = {};
-
-  // Telegram setup
-  if (channelId === "telegram" || channelId === "both") {
-    const token = await promptTelegramToken(prompter);
-    if (token) {
-      channels.telegram = { token };
-    }
-  }
-
-  // WhatsApp setup — just enable it; QR pairing happens at daemon start
-  if (channelId === "whatsapp" || channelId === "both") {
-    channels.whatsapp = true;
-    prompter.note(
-      "WhatsApp will show a QR code when the daemon starts.\nScan it with your phone to pair.",
-      "WhatsApp",
-    );
-  }
-
-  return Object.keys(channels).length > 0 ? channels : undefined;
-}
-
-/**
- * Prompt for a Telegram bot token with validation and retry.
- * Returns the token string or null if the user skips/cancels.
- */
-async function promptTelegramToken(
-  prompter: WizardPrompter,
-): Promise<string | null> {
-  while (true) {
-    const token = await prompter.text({
-      message: "Enter your Telegram bot token",
-      placeholder: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890",
-      validate: (value) => {
-        const trimmed = value.trim();
-        if (trimmed.length === 0) return "Token is required";
-        if (!TELEGRAM_TOKEN_RE.test(trimmed)) {
-          return "Invalid format — get a token from @BotFather on Telegram";
-        }
-      },
-    });
-
-    if (isCancel(token)) return null;
-    if (typeof token !== "string") return null;
-
-    const trimmed = token.trim();
-
-    // Quick verification: call getMe to confirm the token works
-    const s = prompter.spinner();
-    s.start("Verifying bot token...");
-
-    try {
-      const res = await fetch(`https://api.telegram.org/bot${trimmed}/getMe`, {
-        signal: AbortSignal.timeout(10_000),
-      });
-      const data = (await res.json()) as { ok: boolean; result?: { username?: string } };
-
-      if (data.ok && data.result?.username) {
-        s.stop(`Verified — @${data.result.username}`);
-        return trimmed;
-      }
-
-      s.stop("Token verification failed");
-    } catch {
-      s.stop("Could not reach Telegram API");
-    }
-
-    const action = await prompter.select({
-      message: "The bot token could not be verified. What would you like to do?",
-      options: [
-        { value: "retry", label: "Enter a different token" },
-        { value: "use-anyway", label: "Use this token anyway", hint: "Telegram API may be temporarily unreachable" },
-        { value: "skip", label: "Skip Telegram", hint: "add later with /connect" },
-      ],
-    });
-
-    if (isCancel(action) || action === "skip") return null;
-    if (action === "use-anyway") return trimmed;
-    // retry loops back
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Persist setup result
 // ---------------------------------------------------------------------------
 
 /**
- * Write onboarding results to config + env files, then start the daemon.
+ * Write onboarding results to config + env files.
+ *
+ * Pure persistence — no daemon lifecycle management. createBackend()
+ * owns daemon startup via ensureDaemon().
  *
  * All file writes are accumulated and performed atomically:
  * - config.json writes to a temp file then renames (POSIX atomic)
  * - .env vars are batch-merged in a single read-merge-write cycle
- * - Daemon is only spawned after ALL writes succeed
  */
 export async function persistSetup(result: OnboardingResult): Promise<void> {
   const configDir = getConfigDir();
@@ -588,18 +468,10 @@ export async function persistSetup(result: OnboardingResult): Promise<void> {
   }
 
   // ── Build config.json ──────────────────────────────────────────────────
-  // ── Build channels config ──────────────────────────────────────────────
-  const channelsConfig: Record<string, unknown> = {};
-  if (result.channels?.telegram) {
-    channelsConfig.telegram = { token: result.channels.telegram.token, adminIds: [] };
-  }
-  if (result.channels?.whatsapp) {
-    channelsConfig.whatsapp = { enabled: true };
-  }
-
+  // Channels and connectors are added later via /connect — not during onboarding.
   const config: Record<string, unknown> = {
     agent: { model: result.model },
-    channels: channelsConfig,
+    channels: {},
     connectors: {},
     logging: { level: "info" },
   };
@@ -647,12 +519,6 @@ export async function persistSetup(result: OnboardingResult): Promise<void> {
   if (process.env.LMSTUDIO_HOST && process.env.LMSTUDIO_HOST !== "http://127.0.0.1:1234") {
     envVars.LMSTUDIO_HOST = process.env.LMSTUDIO_HOST;
   }
-  if (result.channels?.telegram?.token) {
-    envVars.TELEGRAM_BOT_TOKEN = result.channels.telegram.token;
-  }
-  if (result.channels?.whatsapp) {
-    envVars.WHATSAPP_ENABLED = "true";
-  }
   if (!process.env.NODE_AUTH_SECRET) {
     const { randomBytes } = await import("node:crypto");
     envVars.NODE_AUTH_SECRET = randomBytes(32).toString("hex");
@@ -672,8 +538,10 @@ export async function persistSetup(result: OnboardingResult): Promise<void> {
     process.env[key] = value;
   }
 
-  // Start daemon only after ALL writes succeed
-  await spawnDaemon();
+  // Daemon startup is NOT handled here. createBackend() owns the daemon
+  // lifecycle via ensureDaemon() — it auto-starts, waits for socket, and
+  // provides visible feedback on failure. Separating persistence from
+  // process management keeps each concern clean.
 }
 
 // ---------------------------------------------------------------------------

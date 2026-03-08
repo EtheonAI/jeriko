@@ -1,10 +1,10 @@
 /**
  * Tests for the onboarding wizard — uses mock prompter to test flow.
  *
- * Flow (provider-first):
+ * Flow (provider-only):
  *   1. Provider selection (anthropic, openai, local, lmstudio, presets)
  *   2. API key input + verification (retry on failure)
- *   3. Persist config + start daemon
+ *   3. Persist config (daemon startup is handled by createBackend)
  *
  * Local providers (Ollama, LM Studio) block until detected or user goes back.
  * Channels are added post-setup via /connect.
@@ -103,7 +103,6 @@ describe("runOnboarding", () => {
       "anthropic",              // select provider
       "sk-test-key-1234567890", // password (API key)
       "use-anyway",             // verification fails → use anyway
-      false,                    // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -120,7 +119,6 @@ describe("runOnboarding", () => {
       "openai",                    // select provider
       "sk-openai-test-key-12345",  // password (API key)
       "use-anyway",                // verification fails → use anyway
-      false,                       // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -139,7 +137,6 @@ describe("runOnboarding", () => {
       "retry",                  // verification fails → retry
       "sk-good-key-1234567890", // second API key
       "use-anyway",             // verification fails again (mock) → use anyway
-      false,                    // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -174,7 +171,6 @@ describe("runOnboarding", () => {
       "anthropic",                // 3. re-select provider
       "sk-test-key-1234567890",   // 4. enter API key
       "use-anyway",               // 5. verification fails → use anyway
-      false,                      // 6. skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -231,7 +227,6 @@ describe("runOnboarding", () => {
       "anthropic",
       "sk-test-key-1234567890",
       "use-anyway",
-      false,                    // skip channel setup
     ]);
 
     await runOnboarding(prompter, "2.0.0");
@@ -249,7 +244,6 @@ describe("runOnboarding", () => {
       "openai",
       "sk-openai-test-key-12345",
       "use-anyway",
-      false,                    // skip channel setup
     ]);
 
     await runOnboarding(prompter, "2.0.0");
@@ -265,49 +259,130 @@ describe("runOnboarding", () => {
     expect(spinnerStop).toBeDefined();
   });
 
-  test("skipping channels returns undefined channels field", async () => {
+  test("result has no channels property (channels added post-setup)", async () => {
     const { prompter } = createMockPrompter([
       "anthropic",
       "sk-test-key-1234567890",
       "use-anyway",
-      false,                    // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).not.toBeNull();
-    expect(result!.channels).toBeUndefined();
+    expect("channels" in result!).toBe(false);
   });
 
-  // ── Channel setup ────────────────────────────────────────────────
+  // ── Go-back flows ─────────────────────────────────────────────
 
-  test("WhatsApp channel setup sets whatsapp flag", async () => {
+  test("user goes back from API key verification failure to provider picker", async () => {
     const { prompter } = createMockPrompter([
-      "anthropic",
-      "sk-test-key-1234567890",
-      "use-anyway",
-      true,                     // yes, add channel
-      "whatsapp",               // select WhatsApp
+      "anthropic",              // 1. select anthropic
+      "bad-key-1234567890",     // 2. enter bad key
+      "back",                   // 3. verification fails → go back to provider
+      "openai",                 // 4. pick different provider
+      "sk-openai-key-12345",    // 5. enter key
+      "use-anyway",             // 6. verification fails → use anyway
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).not.toBeNull();
-    expect(result!.channels).toBeDefined();
-    expect(result!.channels!.whatsapp).toBe(true);
-    expect(result!.channels!.telegram).toBeUndefined();
+    expect(result!.provider).toBe("openai");
+    expect(result!.apiKey).toBe("sk-openai-key-12345");
   });
 
-  test("channel setup skip returns undefined channels", async () => {
+  test("user goes back multiple times before selecting a provider", async () => {
     const { prompter } = createMockPrompter([
-      "anthropic",
-      "sk-test-key-1234567890",
-      "use-anyway",
-      true,                     // yes, add channel
-      "skip",                   // then skip at channel picker
+      "anthropic",              // 1. select anthropic
+      "bad-key-1234567890",     // 2. enter bad key
+      "back",                   // 3. go back
+      "openai",                 // 4. pick openai
+      "bad-key-1234567890",     // 5. enter bad key
+      "back",                   // 6. go back again
+      "anthropic",              // 7. finally pick anthropic
+      "sk-real-key-1234567890", // 8. enter key
+      "use-anyway",             // 9. use anyway
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).not.toBeNull();
-    expect(result!.channels).toBeUndefined();
+    expect(result!.provider).toBe("anthropic");
+    expect(result!.apiKey).toBe("sk-real-key-1234567890");
+  });
+
+  // ── API key retry flow ────────────────────────────────────────
+
+  test("user retries API key multiple times before use-anyway", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "bad-key-attempt-1-xxxx",   // 1st attempt
+      "retry",                     // retry
+      "bad-key-attempt-2-xxxx",   // 2nd attempt
+      "retry",                     // retry again
+      "final-key-attempt-xxxx",   // 3rd attempt
+      "use-anyway",                // give up verifying
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).not.toBeNull();
+    expect(result!.apiKey).toBe("final-key-attempt-xxxx");
+  });
+
+  // ── Cancellation at every step ────────────────────────────────
+
+  test("Ctrl+C at API key verification action prompt", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "bad-key-1234567890",
+      Symbol("cancel"),           // Ctrl+C at retry/use-anyway/back prompt
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).toBeNull();
+  });
+
+  // ── Provider not found edge case ──────────────────────────────
+
+  test("unknown provider ID returns null", async () => {
+    const { prompter } = createMockPrompter([
+      "nonexistent-provider",     // provider not in list
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).toBeNull();
+  });
+
+  // ── Result shape validation ────────────────────────────────────
+
+  test("result contains all required fields", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).not.toBeNull();
+    expect(typeof result!.provider).toBe("string");
+    expect(typeof result!.model).toBe("string");
+    expect(typeof result!.apiKey).toBe("string");
+    expect(typeof result!.envKey).toBe("string");
+    expect(result!.provider.length).toBeGreaterThan(0);
+    expect(result!.model.length).toBeGreaterThan(0);
+    expect(result!.apiKey.length).toBeGreaterThan(0);
+    expect(result!.envKey.length).toBeGreaterThan(0);
+  });
+
+  test("outro message mentions /connect for channels", async () => {
+    const { prompter, calls } = createMockPrompter([
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+    ]);
+
+    await runOnboarding(prompter, "2.0.0");
+
+    const outroCall = calls.find((c) => c.method === "outro");
+    expect(outroCall).toBeDefined();
+    expect(String(outroCall!.args[0])).toContain("/connect");
   });
 });
 

@@ -399,24 +399,24 @@ describe("Channel commands E2E", () => {
 
     afterAll(() => {
       // Clean up any saved test secrets
-      deleteSecret("ONEDRIVE_ACCESS_TOKEN");
-      if (process.env.ONEDRIVE_ACCESS_TOKEN === TEST_VAL) {
-        delete process.env.ONEDRIVE_ACCESS_TOKEN;
+      deleteSecret("GMAIL_ACCESS_TOKEN");
+      if (process.env.GMAIL_ACCESS_TOKEN === TEST_VAL) {
+        delete process.env.GMAIL_ACCESS_TOKEN;
       }
     });
 
     test("saves key, deletes message, and confirms", async () => {
       // Save original value
-      const originalValue = process.env.ONEDRIVE_ACCESS_TOKEN;
+      const originalValue = process.env.GMAIL_ACCESS_TOKEN;
 
       mock.clear();
-      mock.simulateIncoming(`/auth onedrive ${TEST_VAL}`, "test-chat-auth", {
+      mock.simulateIncoming(`/auth gmail ${TEST_VAL}`, "test-chat-auth", {
         message_id: 42,
       });
       await wait(300);
 
       // 1. Key was saved to process.env
-      expect(process.env.ONEDRIVE_ACCESS_TOKEN).toBe(TEST_VAL);
+      expect(process.env.GMAIL_ACCESS_TOKEN).toBe(TEST_VAL);
 
       // 2. Message containing the key was deleted (security)
       expect(mock.deleted.length).toBeGreaterThan(0);
@@ -426,19 +426,19 @@ describe("Channel commands E2E", () => {
 
       // 3. Confirmation message was sent
       const response = mock.lastSent();
-      expect(response).toContain("OneDrive");
+      expect(response).toContain("Gmail");
       expect(response).toContain("configured");
-      expect(response).toContain("/health onedrive");
+      expect(response).toContain("/health gmail");
 
       // 4. The confirmation does NOT contain the actual key value
       expect(response).not.toContain(TEST_VAL);
 
       // Restore original
       if (originalValue) {
-        process.env.ONEDRIVE_ACCESS_TOKEN = originalValue;
-        saveSecret("ONEDRIVE_ACCESS_TOKEN", originalValue);
+        process.env.GMAIL_ACCESS_TOKEN = originalValue;
+        saveSecret("GMAIL_ACCESS_TOKEN", originalValue);
       } else {
-        deleteSecret("ONEDRIVE_ACCESS_TOKEN");
+        deleteSecret("GMAIL_ACCESS_TOKEN");
       }
     });
 
@@ -588,7 +588,7 @@ describe("Channel commands E2E", () => {
 
       const response = mock.lastSent();
       expect(response).toContain("not configured");
-      expect(response).toContain(`/auth ${unconfigured.name}`);
+      expect(response).toContain(`auth ${unconfigured.name}`);
     });
 
     test("configured connector — attempts health check", async () => {

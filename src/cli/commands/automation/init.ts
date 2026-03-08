@@ -11,7 +11,7 @@
  *   1. Provider select — Claude, GPT, Local, or 22+ presets
  *   2. Auth method — OAuth (if available) or API key
  *   3. Write config + env + deploy agent prompt
- *   4. Auto-start daemon
+ *   4. Daemon starts on next `jeriko` via createBackend() → ensureDaemon()
  *
  * Flags:
  *   --non-interactive   Build config from env vars (CI/scripting)
@@ -63,15 +63,7 @@ function buildNonInteractiveConfig(): Record<string, unknown> {
       model: process.env.ANTHROPIC_API_KEY ? "claude" :
              process.env.OPENAI_API_KEY ? "gpt4" : "local",
     },
-    channels: {
-      telegram: {
-        token: process.env.TELEGRAM_BOT_TOKEN ?? "",
-        adminIds: process.env.ADMIN_TELEGRAM_IDS
-          ? process.env.ADMIN_TELEGRAM_IDS.split(",").map(s => s.trim())
-          : [],
-      },
-      whatsapp: { enabled: !!process.env.WHATSAPP_ENABLED },
-    },
+    channels: {},
     connectors: {},
     logging: { level: "info" },
   };

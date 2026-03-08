@@ -143,6 +143,35 @@ export function createWebhookRoutes(connections: ConnectionManager, env: Env): H
   });
 
   // -------------------------------------------------------------------------
+  // Connector-level webhooks (app-level, broadcast to all daemons)
+  //
+  // Providers like PayPal, Stripe, etc. send webhooks to a single fixed URL
+  // configured in their dashboard. These are NOT per-user — the relay
+  // broadcasts to all connected daemons and each daemon verifies the
+  // signature with its own secrets.
+  //
+  // POST /hooks/connector/:provider — forward to all connected daemons
+  // -------------------------------------------------------------------------
+
+  router.post("/connector/:provider", async (c) => {
+    const provider = c.req.param("provider");
+    const { body, headers, requestId } = await extractWebhookPayload(c);
+    const triggerId = `connector:${provider}`;
+
+    let forwarded = 0;
+    for (const userId of connections.getAllUserIds()) {
+      const message = buildWebhookMessage(requestId, triggerId, headers, body);
+      if (connections.sendTo(userId, message)) forwarded++;
+    }
+
+    if (forwarded === 0) {
+      return c.json({ ok: false, error: "No connected daemons" }, 503);
+    }
+
+    return c.json({ ok: true, data: { provider, forwarded } });
+  });
+
+  // -------------------------------------------------------------------------
   // Standard webhook routes (per-user, per-trigger)
   // -------------------------------------------------------------------------
 

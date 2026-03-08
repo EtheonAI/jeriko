@@ -185,6 +185,22 @@ connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified ga
 - `fulfillments.list` (order_id) | `.create` (order_id, fulfillment) | `locations.list` | `.get` (id)
 - `webhooks.list` | `.create` (topic, address) | `.delete` (id)
 
+**Instagram** — Posts, stories, reels, comments, insights (Meta Graph API v21.0)
+- `me` | `accounts` (discover linked IG Business Accounts)
+- `profile` (user_id, fields) | `media.list` (user_id, fields, limit) | `.get` (id, fields) | `.publish` (user_id, image_url/video_url, caption, media_type) | `.delete` (id)
+- `stories.list` (user_id, fields)
+- `comments.list` (media_id, fields, limit) | `.create` (media_id, message) | `.delete` (id)
+- `insights` (user_id, metric, period) | `insights.media` (media_id, metric)
+
+Note: `user_id` is the Instagram Business Account ID (not "me"). Discover it via `accounts`. Publishing uses a two-step flow (create container → publish).
+
+**Threads** — Posts, replies, insights (Threads API v1.0)
+- `me` | `posts.list` (user_id, fields, limit) | `.get` (id, fields) | `.create` (user_id, text, image_url/video_url, media_type) | `.delete` (id)
+- `replies.list` (thread_id, fields, limit) | `.create` (thread_id/reply_to_id, text)
+- `insights` (user_id, metric) | `insights.post` (thread_id, metric)
+
+Note: Publishing uses a two-step flow (create container → publish). `user_id` defaults to "me".
+
 **Square** — Payments, orders, customers, catalog, inventory
 - `payments.list` | `.get` (id) | `.create` (source_id, amount, currency, location_id) | `.cancel` (id) | `.refund` (payment_id, amount)
 - `orders.search` (location_ids, query) | `.get` (id) | `.create` (order)
@@ -251,6 +267,29 @@ connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified ga
 - `workers.list` (account_id) | `.get` (account_id, name) | `.delete` (account_id, name) | `.routes` (zone_id)
 - `kv.namespaces` (account_id) | `.keys` (account_id, namespace_id) | `.get` (account_id, namespace_id, key) | `.put` (account_id, namespace_id, key, value) | `.delete` (account_id, namespace_id, key)
 - `analytics.dashboard` (zone_id, since, until) | `user.me` | `.tokens`
+
+### Media — Vision, Image Generation, Voice
+
+**`generate_image` tool (agent)** — Generate images from text prompts:
+- `generate_image({ prompt: "A sunset over mountains", size: "1024x1024", style: "vivid" })`
+- Providers: `"openai"` (DALL-E 3) or `"auto"` (first available with API key)
+- Sizes: `"1024x1024"` (square) | `"1024x1792"` (portrait) | `"1792x1024"` (landscape)
+- Styles: `"vivid"` (hyper-real, dramatic) | `"natural"` (subdued, realistic)
+- Returns local file path — automatically sent as photo in channels (Telegram/WhatsApp)
+- Aliases: create_image, image_gen, dall_e, image_generation, make_image
+
+**Vision** — Image understanding from channel attachments:
+- When users send photos in Telegram/WhatsApp, they are automatically processed if the active model supports vision
+- Vision capability is dynamically detected per model (e.g. GPT-4o, Claude 3.5, LLaVA have vision; GPT-3.5, Mistral do not)
+- Non-vision models gracefully receive a text note that an image was shared instead of crashing
+- Multiple images per message are supported
+
+**Voice Messages (STT/TTS):**
+- **STT (Speech-to-Text):** Incoming voice messages in channels are auto-transcribed to text before reaching the agent
+  - Providers: `"openai"` (Whisper API) | `"local"` (auto-detects whisper.cpp or Python openai-whisper) | `"disabled"`
+- **TTS (Text-to-Speech):** Channel router automatically synthesizes voice responses when the user sent a voice message or when TTS is enabled. The agent writes text normally — voice conversion is handled by the channel layer.
+  - Providers: `"openai"` (6 voices: alloy, echo, fable, onyx, nova, shimmer) | `"native"` (macOS say + ffmpeg) | `"disabled"`
+- Configure in `~/.config/jeriko/config.json` under `media.stt` and `media.tts`
 
 ### AI & Code
 ai: [--image PROMPT] [--size WxH] [--quality hd] (DALL-E image generation)
@@ -442,7 +481,7 @@ See `references/cdk-patterns.md` for common CDK patterns.
 - `connector({ name: "stripe", method: "customers.create", params: { email: "..." } })`
 - `connector({ name: "slack", method: "messages.send", params: { channel: "C...", text: "Hello" } })`
 - `connector({ name: "notion", method: "search", params: { query: "meeting notes" } })`
-- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, slack, discord, sendgrid, square, gitlab, cloudflare, notion, linear, jira, airtable, asana, mailchimp, dropbox
+- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, instagram, threads, slack, discord, sendgrid, square, gitlab, cloudflare, notion, linear, jira, airtable, asana, mailchimp, dropbox
 - All methods for each connector are listed in the **Integrations (Connectors)** section above
 
 ### Sharing
@@ -491,9 +530,9 @@ twilio hook: [--no-notify] (format Twilio webhook events)
 
 ### Trigger Event Types (`jeriko task types`)
 stripe:<event> | paypal:<event> | github:<event> | twilio:<event> — webhook events
-gmail:new_email | outlook:new_email | email:new_email — email polling
-http:down|up|slow|any — HTTP monitoring
-file:change|create|delete — file system watching
+gmail:new_email | outlook:new_email | email:new_email — email polling (filter with --from, --subject)
+http:down|up|slow|any — HTTP monitoring (--url required, --interval optional)
+file:change|create|modify|delete — file system watching (--path required, change = any event)
 
 ### Create Tasks
 ```
@@ -518,11 +557,6 @@ jeriko task create "Launch Day" --once "2026-06-01T09:00" --action "send launch 
 
 ### Manage
 jeriko task list | info <id> | log [--limit N] | pause <id> | resume <id> | delete <id> | test <id> | types
-
-### Channel Commands (Telegram, WhatsApp)
-`/tasks` — list all tasks with status and action buttons
-`/tasks <id>` — show task details (type, config, runs, last fired)
-`/tasks pause <id>` | `/tasks resume <id>` | `/tasks delete <id>` | `/tasks test <id>`
 
 Tasks auto-disable after 5 consecutive errors.
 
@@ -563,8 +597,12 @@ run_script(name="extract_contacts", language="python", code="import json, re..."
 - Connect services: /connect <name> in Telegram (OAuth flow) or `jeriko connectors` for CLI status
 - Gmail: `jeriko gmail messages list --q "is:unread"` → `jeriko gmail messages get <id>` → `jeriko gmail messages send --raw <base64>`
 - Outlook: `jeriko outlook messages list` → `jeriko outlook messages get <id>` → `jeriko outlook messages reply <id> --body "text"` → `jeriko outlook messages forward <id> --to email`
-- Email trigger: `/watch email from:sender@email.com <action to take>`
-- Cron trigger: `/watch cron "0 9 * * *" <action to take>`
+- Webhook trigger: `jeriko task create "Payment Alert" --trigger stripe:charge.failed --action "notify team"`
+- File trigger: `jeriko task create "Log Watcher" --trigger file:change --path "/var/log" --action "alert on errors"`
+- HTTP trigger: `jeriko task create "Uptime" --trigger http:down --url "https://mysite.com" --action "alert"`
+- Email trigger: `jeriko task create "Email Alert" --trigger gmail:new_email --from "sender@email.com" --action "summarize and reply"`
+- Cron schedule: `jeriko task create "Daily Check" --schedule "0 9 * * *" --action "morning briefing"`
+- One-time: `jeriko task create "Launch" --once "2026-06-01T09:00" --action "send launch email"`
 
 ## Output Format
 All commands return: `{"ok":true,"data":{...}}` or `{"ok":false,"error":"..."}`
