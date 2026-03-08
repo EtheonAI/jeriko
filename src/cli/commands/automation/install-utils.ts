@@ -7,7 +7,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, chmodSync, cpSync, readdirSync, symlinkSync, unlinkSync, copyFileSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { homedir, platform } from "node:os";
+import { homedir, platform, userInfo } from "node:os";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
@@ -228,7 +228,23 @@ export function setupPath(): void {
     return;
   }
 
-  const shell = (process.env.SHELL ?? "").split("/").pop() ?? "";
+  // Detect the user's ACTUAL login shell — not process.env.SHELL which
+  // inherits from the parent process (e.g. "bash" when piped via `curl | bash`).
+  // On macOS, `dscl` reports the real login shell from Directory Services.
+  let shell = (process.env.SHELL ?? "").split("/").pop() ?? "";
+  if (process.platform === "darwin") {
+    try {
+      const loginShell = execSync(
+        `dscl . -read /Users/${process.env.USER || userInfo().username} UserShell`,
+        { encoding: "utf-8", timeout: 3000 },
+      ).trim().split(/\s+/).pop() ?? "";
+      const resolved = loginShell.split("/").pop() ?? "";
+      if (resolved) shell = resolved;
+    } catch {
+      // Fallback to SHELL env var
+    }
+  }
+
   let profile: string;
   let pathLine: string;
 

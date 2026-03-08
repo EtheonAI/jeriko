@@ -314,12 +314,33 @@ else
     warn "Could not download agent.md — run 'jeriko init' to configure"
 fi
 
+# ── Download project templates ────────────────────────────────────
+
+TEMPLATES_TAR="$DOWNLOAD_DIR/templates.tar.gz"
+TEMPLATES_DIR="$HOME/.local/share/jeriko/templates"
+info "Downloading project templates..."
+if download_asset "$VERSION" "templates.tar.gz" "$TEMPLATES_TAR" 2>/dev/null; then
+    mkdir -p "$TEMPLATES_DIR"
+    tar -xzf "$TEMPLATES_TAR" -C "$TEMPLATES_DIR" 2>/dev/null
+    ok "Templates → $(tildify "$TEMPLATES_DIR")"
+    rm -f "$TEMPLATES_TAR"
+else
+    warn "Could not download templates — jeriko create will work in dev mode only"
+fi
+
 # ── Self-install via binary ──────────────────────────────────────
 
 info "Running self-install..."
 "$BINARY_PATH" install "$VERSION"
 
 # Cleanup handled by trap
+
+# ── Ensure PATH is active in current shell ────────────────────
+BIN_DIR="$HOME/.local/bin"
+case ":$PATH:" in
+    *":$BIN_DIR:"*) ;;
+    *) export PATH="$BIN_DIR:$PATH" ;;
+esac
 
 echo ""
 echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
@@ -336,5 +357,5 @@ echo ""
 if [ -z "$EXISTING_VERSION" ] && [ -t 0 ]; then
     # Only run onboarding on fresh installs with an interactive terminal
     info "Starting setup wizard..."
-    "$BINARY_PATH" onboard || true
+    exec jeriko
 fi
