@@ -28,6 +28,11 @@ export interface OAuthProvider {
   /** Scopes to request. */
   scopes: string[];
   /**
+   * Separator for joining scopes. Most providers use " " (space, per RFC 6749).
+   * Meta APIs (Instagram, Threads) use "," (comma). Default: " ".
+   */
+  scopeSeparator?: string;
+  /**
    * Key into BAKED_OAUTH_CLIENT_IDS for the build-time client ID.
    * Multiple providers can share the same key (e.g. gmail + gdrive → "google").
    */
@@ -70,16 +75,15 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "stripe",
     label: "Stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
-    tokenUrl: "https://api.stripe.com/v1/oauth/token",
-    scopes: [],
+    authUrl: "https://connect.stripe.com/oauth/authorize",
+    tokenUrl: "https://connect.stripe.com/oauth/token",
+    scopes: ["read_write"],
     bakedIdKey: "stripe",
     clientIdVar: "STRIPE_OAUTH_CLIENT_ID",
     clientSecretVar: "STRIPE_SECRET_KEY",
     tokenEnvVar: "STRIPE_ACCESS_TOKEN",
     refreshTokenEnvVar: "STRIPE_REFRESH_TOKEN",
     tokenExchangeAuth: "basic",
-    skipResponseType: true,
   },
   {
     name: "github",
@@ -194,6 +198,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://www.instagram.com/oauth/authorize",
     tokenUrl: "https://api.instagram.com/oauth/access_token",
     scopes: ["instagram_business_basic", "instagram_business_manage_messages", "instagram_business_manage_comments", "instagram_business_content_publish"],
+    scopeSeparator: ",",
     bakedIdKey: "instagram",
     clientIdVar: "INSTAGRAM_OAUTH_CLIENT_ID",
     clientSecretVar: "INSTAGRAM_OAUTH_CLIENT_SECRET",
@@ -205,6 +210,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://threads.net/oauth/authorize",
     tokenUrl: "https://graph.threads.net/oauth/access_token",
     scopes: ["threads_basic", "threads_content_publish", "threads_manage_insights", "threads_manage_replies", "threads_read_replies"],
+    scopeSeparator: ",",
     bakedIdKey: "threads",
     clientIdVar: "THREADS_OAUTH_CLIENT_ID",
     clientSecretVar: "THREADS_OAUTH_CLIENT_SECRET",

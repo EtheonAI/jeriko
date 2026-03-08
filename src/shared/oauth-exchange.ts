@@ -20,8 +20,14 @@ export interface TokenExchangeProvider {
   authUrl: string;
   /** OAuth 2.0 token exchange endpoint. */
   tokenUrl: string;
-  /** Scopes to request (space-separated when sent). */
+  /** Scopes to request. Joined by scopeSeparator (default: space per RFC 6749). */
   scopes: string[];
+  /**
+   * Separator for joining scopes in the authorization URL.
+   * Most providers use " " (space, per RFC 6749). Meta APIs (Instagram, Threads)
+   * use "," (comma). Default: " ".
+   */
+  scopeSeparator?: string;
   /** Whether to use PKCE (RFC 7636). Required by X/Twitter, Vercel, Airtable. */
   usePKCE?: boolean;
   /**
@@ -77,11 +83,10 @@ export interface ExchangeOptions {
 export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider> = new Map<string, TokenExchangeProvider>([
   ["stripe", {
     name: "stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
-    tokenUrl: "https://api.stripe.com/v1/oauth/token",
-    scopes: [],
+    authUrl: "https://connect.stripe.com/oauth/authorize",
+    tokenUrl: "https://connect.stripe.com/oauth/token",
+    scopes: ["read_write"],
     tokenExchangeAuth: "basic",
-    skipResponseType: true,
   }],
   ["github", {
     name: "github",
@@ -144,6 +149,7 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     authUrl: "https://www.instagram.com/oauth/authorize",
     tokenUrl: "https://api.instagram.com/oauth/access_token",
     scopes: ["instagram_business_basic", "instagram_business_manage_messages", "instagram_business_manage_comments", "instagram_business_content_publish"],
+    scopeSeparator: ",",
     tokenExchangeAuth: "body",
   }],
   ["threads", {
@@ -151,6 +157,7 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     authUrl: "https://threads.net/oauth/authorize",
     tokenUrl: "https://graph.threads.net/oauth/access_token",
     scopes: ["threads_basic", "threads_content_publish", "threads_manage_insights", "threads_manage_replies", "threads_read_replies"],
+    scopeSeparator: ",",
     tokenExchangeAuth: "body",
   }],
   ["square", {
@@ -272,7 +279,7 @@ export async function buildAuthorizationUrl(
   }
 
   if (provider.scopes.length > 0) {
-    params.set("scope", provider.scopes.join(" "));
+    params.set("scope", provider.scopes.join(provider.scopeSeparator ?? " "));
   }
 
   // PKCE for providers that require it.
@@ -340,6 +347,12 @@ export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<Toke
 
   if (codeVerifier) {
     params.code_verifier = codeVerifier;
+  }
+
+  if (provider.extraTokenParams) {
+    for (const [key, value] of Object.entries(provider.extraTokenParams)) {
+      params[key] = value;
+    }
   }
 
   // Build request headers

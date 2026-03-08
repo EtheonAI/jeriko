@@ -579,14 +579,12 @@ describe("Command: /connect", () => {
 
       const text = lastSent();
 
-      if (isConfigured) {
-        // Already connected (connector has required env vars set)
-        expect(text).toContain("already connected");
-      } else if (provider.authUrl.includes("{")) {
+      if (provider.authUrl.includes("{")) {
         // Provider requires context (e.g. Shopify's {shop}) — shows usage without args
         expect(text).toContain("requires a");
       } else {
-        // Should generate login URL (relay handles client ID resolution)
+        // OAuth always proceeds — new tokens overwrite old ones.
+        // Router generates login URL regardless of current config state.
         expect(text).toContain(`Connect ${provider.label}`);
         expect(text).toContain(`/${provider.name}/start`);
         expect(text).toContain("state=");
@@ -799,8 +797,8 @@ describe("Connector registry", () => {
   });
 
   it("configured connectors from env are detected", () => {
-    // PayPal should be configured (both client ID and secret are in .env)
-    if (process.env.PAYPAL_CLIENT_ID && process.env.PAYPAL_CLIENT_SECRET) {
+    // PayPal requires PAYPAL_ACCESS_TOKEN (BearerConnector)
+    if (process.env.PAYPAL_ACCESS_TOKEN) {
       expect(isConnectorConfigured("paypal")).toBe(true);
     }
 

@@ -1180,38 +1180,16 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const def = getConnectorDef(name);
     if (!def) throw new Error(`Unknown connector: ${name}`);
 
-    if (isConnectorConfigured(name)) {
-      // If configured but force-reconnect requested, disconnect first
-      const forceReconnect = params.force as boolean | undefined;
-      if (!forceReconnect) {
-        // Check if the connector is actually healthy before blocking
-        const health = await connectors.health(name);
-        if (health.healthy) {
-          return { ok: true, name, status: "already_connected", label: def.label };
-        }
-        // Configured but unhealthy — auto-disconnect stale credentials and reconnect
-        const { deleteSecret } = await import("../shared/secrets.js");
-        const provider = getOAuthProvider(name);
-        if (provider) {
-          deleteSecret(provider.tokenEnvVar);
-          if (provider.refreshTokenEnvVar) deleteSecret(provider.refreshTokenEnvVar);
-        }
-        connectors.evict(name);
-        // Fall through to OAuth/connect flow below
-      }
-    }
-
-    // OAuth connector — generate state token and return relay login URL.
-    // The relay at bot.jeriko.ai owns the OAuth app credentials (client IDs + secrets).
-    // The daemon just builds the relay start URL; the relay handles everything else.
+    // OAuth connector — always return the OAuth URL.
+    // The user explicitly asked to connect; new tokens overwrite old ones on success.
+    // API-key connectors (Stripe's STRIPE_SECRET_KEY, Twilio, PayPal) remain untouched —
+    // OAuth adds/refreshes the access token alongside the permanent API key.
     const provider = getOAuthProvider(name);
     if (provider) {
       const { generateState } = await import("./services/oauth/state.js");
       const { buildOAuthStartUrl } = await import("../shared/urls.js");
       const { getUserId, reloadSecrets } = await import("../shared/config.js");
 
-      // Reload secrets from .env — the user ID may have been written after daemon boot
-      // (e.g. onboarding wizard runs after launchd starts the daemon).
       let userId = getUserId();
       if (!userId) {
         reloadSecrets();
@@ -1223,7 +1201,6 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
       const stateToken = generateState(provider.name, "cli", "cli", userId);
 
-      // Resolve provider-specific context from params or env (e.g. Shopify's {shop})
       const args = (params.args as string[]) ?? [];
       const oauthContext = resolveOAuthContext(provider, args);
       if (oauthContext instanceof Error) throw oauthContext;
@@ -1232,12 +1209,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       return { ok: true, name, status: "oauth_required", loginUrl, label: provider.label };
     }
 
-    // API-key connector — can't connect from here, needs manual key
-    if (!isOAuthCapable(name)) {
-      throw new Error(`${def.label} requires an API key — use /auth ${name} <key>`);
+    // API-key-only connector — block if already configured, otherwise guide to /auth
+    if (isConnectorConfigured(name)) {
+      return { ok: true, name, status: "already_connected", label: def.label };
     }
-
-    return { ok: true, name };
+    throw new Error(`${def.label} requires an API key — use /connectors auth ${name}`);
   });
 
   registerMethod("connector_disconnect", async (params) => {
