@@ -22,7 +22,7 @@ import {
   enforceLicenseLimits,
   effectiveTier,
 } from "../../../src/daemon/billing/license.js";
-import { TIER_LIMITS } from "../../../src/daemon/billing/config.js";
+import { TIER_LIMITS, UNLIMITED_TRIGGERS_STORED } from "../../../src/daemon/billing/config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unlinkSync, existsSync } from "node:fs";
@@ -169,8 +169,8 @@ describe("billing/enforcement", () => {
     }
     updateLicense({
       tier,
-      connector_limit: limits.connectors,
-      trigger_limit: limits.triggers === Infinity ? 999999 : limits.triggers,
+      connector_limit: limits.connectors === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.connectors,
+      trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
     });
   }
 
@@ -193,7 +193,7 @@ describe("billing/enforcement", () => {
     });
 
     it("evicts excess connectors on downgrade to free", async () => {
-      // Simulate: user had Pro (10 connectors), now free (2)
+      // Simulate: user had Pro (unlimited connectors), now free (5)
       setTier("free", "canceled");
 
       const connectors = new MockConnectorManager();
@@ -202,38 +202,48 @@ describe("billing/enforcement", () => {
       connectors.addInstance("vercel");
       connectors.addInstance("paypal");
       connectors.addInstance("twilio");
+      connectors.addInstance("gmail");
+      connectors.addInstance("gdrive");
+      connectors.addInstance("outlook");
 
       const triggers = new MockTriggerEngine();
       const result = await enforceLicenseLimits(connectors, triggers);
 
       expect(result.connectors.evicted).toHaveLength(3);
-      expect(connectors.activeCount).toBe(2);
-      expect(result.connectors.limit).toBe(2);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+      expect(result.connectors.limit).toBe(TIER_LIMITS.free.connectors);
     });
 
     it("evicts newest connectors first (LIFO)", async () => {
       setTier("free", "canceled");
 
       const connectors = new MockConnectorManager();
-      // Add in order — github is oldest, twilio is newest
+      // Add in order — github is oldest, outlook is newest
       connectors.addInstance("github");
       connectors.addInstance("stripe");
       connectors.addInstance("vercel");
       connectors.addInstance("paypal");
       connectors.addInstance("twilio");
+      connectors.addInstance("gmail");
+      connectors.addInstance("gdrive");
+      connectors.addInstance("outlook");
 
       const triggers = new MockTriggerEngine();
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      // Newest should be evicted: twilio, paypal, vercel
-      expect(result.connectors.evicted).toContain("twilio");
-      expect(result.connectors.evicted).toContain("paypal");
-      expect(result.connectors.evicted).toContain("vercel");
+      // 8 connectors, limit 5 → evict 3 newest: outlook, gdrive, gmail
+      expect(result.connectors.evicted).toContain("outlook");
+      expect(result.connectors.evicted).toContain("gdrive");
+      expect(result.connectors.evicted).toContain("gmail");
+      expect(result.connectors.evicted).toHaveLength(3);
 
-      // Oldest should survive: github, stripe
+      // Oldest 5 should survive
       const surviving = connectors.getActiveNames();
       expect(surviving).toContain("github");
       expect(surviving).toContain("stripe");
+      expect(surviving).toContain("vercel");
+      expect(surviving).toContain("paypal");
+      expect(surviving).toContain("twilio");
     });
 
     it("handles exact limit (no evictions needed)", async () => {
@@ -242,13 +252,16 @@ describe("billing/enforcement", () => {
       const connectors = new MockConnectorManager();
       connectors.addInstance("github");
       connectors.addInstance("stripe");
-      // Free tier limit is 2 — at exact limit, no evictions
+      connectors.addInstance("vercel");
+      connectors.addInstance("paypal");
+      connectors.addInstance("twilio");
+      // Free tier limit is 5 — at exact limit, no evictions
 
       const triggers = new MockTriggerEngine();
       const result = await enforceLicenseLimits(connectors, triggers);
 
       expect(result.connectors.evicted).toHaveLength(0);
-      expect(connectors.activeCount).toBe(2);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
     });
 
     it("handles zero active connectors", async () => {
@@ -287,68 +300,74 @@ describe("billing/enforcement", () => {
       const connectors = new MockConnectorManager();
       const triggers = new MockTriggerEngine();
 
-      // 7 enabled triggers — free tier allows 3
-      for (let i = 1; i <= 7; i++) {
+      // 15 enabled triggers — free tier allows 10
+      for (let i = 1; i <= 15; i++) {
         triggers.addTrigger(`t${i}`, true, new Date(Date.now() + i * 1000).toISOString());
       }
 
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      expect(result.triggers.disabled).toHaveLength(4);
-      expect(triggers.enabledCount).toBe(3);
-      expect(result.triggers.limit).toBe(3);
+      expect(result.triggers.disabled).toHaveLength(5);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
+      expect(result.triggers.limit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("disables newest triggers first", async () => {
       setTier("free", "canceled");
-      // Free tier trigger limit = 3
+      // Free tier trigger limit = 10
 
       const connectors = new MockConnectorManager();
       const triggers = new MockTriggerEngine();
 
-      // Add 5 triggers with explicit timestamps — oldest first
-      triggers.addTrigger("old-1", true, "2024-01-01T00:00:00Z");
-      triggers.addTrigger("old-2", true, "2024-02-01T00:00:00Z");
-      triggers.addTrigger("old-3", true, "2024-03-01T00:00:00Z");
+      // Add 13 triggers with explicit timestamps — oldest first
+      for (let i = 1; i <= 10; i++) {
+        triggers.addTrigger(`old-${i}`, true, `2024-${String(i).padStart(2, "0")}-01T00:00:00Z`);
+      }
       triggers.addTrigger("new-1", true, "2025-06-01T00:00:00Z");
-      triggers.addTrigger("new-2", true, "2025-12-01T00:00:00Z");
+      triggers.addTrigger("new-2", true, "2025-09-01T00:00:00Z");
+      triggers.addTrigger("new-3", true, "2025-12-01T00:00:00Z");
 
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      // 5 enabled, limit 3 → disable 2 newest
+      // 13 enabled, limit 10 → disable 3 newest
+      expect(result.triggers.disabled).toContain("new-3");
       expect(result.triggers.disabled).toContain("new-2");
       expect(result.triggers.disabled).toContain("new-1");
-      expect(result.triggers.disabled).toHaveLength(2);
+      expect(result.triggers.disabled).toHaveLength(3);
 
-      // Oldest 3 survive
-      expect(triggers.isEnabled("old-1")).toBe(true);
-      expect(triggers.isEnabled("old-2")).toBe(true);
-      expect(triggers.isEnabled("old-3")).toBe(true);
+      // Oldest 10 survive
+      for (let i = 1; i <= 10; i++) {
+        expect(triggers.isEnabled(`old-${i}`)).toBe(true);
+      }
       expect(triggers.isEnabled("new-1")).toBe(false);
       expect(triggers.isEnabled("new-2")).toBe(false);
+      expect(triggers.isEnabled("new-3")).toBe(false);
     });
 
     it("skips already-disabled triggers", async () => {
       setTier("free", "canceled");
-      // Free tier trigger limit = 3
+      // Free tier trigger limit = 10
 
       const connectors = new MockConnectorManager();
       const triggers = new MockTriggerEngine();
 
-      triggers.addTrigger("t1", true, "2024-01-01T00:00:00Z");
-      triggers.addTrigger("t2", true, "2024-02-01T00:00:00Z");
-      triggers.addTrigger("t3", false, "2024-03-01T00:00:00Z"); // Already disabled — not counted
-      triggers.addTrigger("t4", true, "2024-04-01T00:00:00Z");
-      triggers.addTrigger("t5", true, "2024-05-01T00:00:00Z");
+      // Add 10 enabled + 1 disabled + 2 more enabled = 12 enabled total
+      for (let i = 1; i <= 10; i++) {
+        triggers.addTrigger(`t${i}`, true, `2024-${String(i).padStart(2, "0")}-01T00:00:00Z`);
+      }
+      triggers.addTrigger("t-disabled", false, "2024-11-01T00:00:00Z"); // Already disabled — not counted
+      triggers.addTrigger("t11", true, "2024-12-01T00:00:00Z");
+      triggers.addTrigger("t12", true, "2025-01-01T00:00:00Z");
 
-      // 4 enabled, limit 3 → should disable 1 (newest enabled)
+      // 12 enabled, limit 10 → should disable 2 (newest enabled)
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      expect(result.triggers.disabled).toHaveLength(1);
-      expect(triggers.enabledCount).toBe(3);
-      // t3 stays disabled (was already), t5 gets disabled (newest)
-      expect(triggers.isEnabled("t5")).toBe(false);
-      expect(triggers.isEnabled("t3")).toBe(false);
+      expect(result.triggers.disabled).toHaveLength(2);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
+      // t-disabled stays disabled (was already), t12 and t11 get disabled (newest)
+      expect(triggers.isEnabled("t12")).toBe(false);
+      expect(triggers.isEnabled("t11")).toBe(false);
+      expect(triggers.isEnabled("t-disabled")).toBe(false);
     });
 
     it("handles zero enabled triggers", async () => {
@@ -372,22 +391,28 @@ describe("billing/enforcement", () => {
       setTier("free", "canceled");
 
       const connectors = new MockConnectorManager();
+      // 8 connectors, free limit = 5 → evict 3
       connectors.addInstance("github");
       connectors.addInstance("stripe");
       connectors.addInstance("vercel");
       connectors.addInstance("paypal");
+      connectors.addInstance("twilio");
+      connectors.addInstance("gmail");
+      connectors.addInstance("gdrive");
+      connectors.addInstance("outlook");
 
       const triggers = new MockTriggerEngine();
-      for (let i = 1; i <= 6; i++) {
+      // 14 triggers, free limit = 10 → disable 4
+      for (let i = 1; i <= 14; i++) {
         triggers.addTrigger(`t${i}`, true);
       }
 
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      expect(result.connectors.evicted).toHaveLength(2);
-      expect(result.triggers.disabled).toHaveLength(3);
-      expect(connectors.activeCount).toBe(2);
-      expect(triggers.enabledCount).toBe(3);
+      expect(result.connectors.evicted).toHaveLength(3);
+      expect(result.triggers.disabled).toHaveLength(4);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("Pro tier does not enforce (unlimited triggers)", async () => {
@@ -416,42 +441,43 @@ describe("billing/enforcement", () => {
     it("canActivateConnector blocks new connectors after downgrade", () => {
       setTier("free", "canceled");
 
-      // At the limit (free = 2 connectors)
-      const result = canActivateConnector(2);
+      // At the limit (free = 5 connectors)
+      const result = canActivateConnector(TIER_LIMITS.free.connectors);
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("Connector limit reached");
-      expect(result.reason).toContain("2/2");
+      expect(result.reason).toContain(`${TIER_LIMITS.free.connectors}/${TIER_LIMITS.free.connectors}`);
     });
 
     it("canActivateConnector allows when under limit", () => {
       setTier("free", "canceled");
 
-      const result = canActivateConnector(1);
+      const result = canActivateConnector(TIER_LIMITS.free.connectors - 1);
       expect(result.allowed).toBe(true);
     });
 
     it("canAddTrigger blocks new triggers after downgrade", () => {
       setTier("free", "canceled");
 
-      // Free = 3 triggers
-      const result = canAddTrigger(3);
+      // Free = 10 triggers
+      const result = canAddTrigger(TIER_LIMITS.free.triggers);
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("Trigger limit reached");
-      expect(result.reason).toContain("3/3");
+      expect(result.reason).toContain(`${TIER_LIMITS.free.triggers}/${TIER_LIMITS.free.triggers}`);
     });
 
     it("canAddTrigger allows when under limit", () => {
       setTier("free", "canceled");
 
-      const result = canAddTrigger(2);
+      const result = canAddTrigger(TIER_LIMITS.free.triggers - 1);
       expect(result.allowed).toBe(true);
     });
 
-    it("Pro tier allows up to 10 connectors", () => {
+    it("Pro tier allows unlimited connectors", () => {
       setTier("pro");
 
       expect(canActivateConnector(9).allowed).toBe(true);
-      expect(canActivateConnector(10).allowed).toBe(false);
+      expect(canActivateConnector(100).allowed).toBe(true);
+      expect(canActivateConnector(999998).allowed).toBe(true);
     });
 
     it("Pro tier allows unlimited triggers", () => {
@@ -470,17 +496,17 @@ describe("billing/enforcement", () => {
       setTier("free", "canceled");
 
       let state = getLicenseState();
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
 
       // Upgrade
       setTier("pro");
 
       state = getLicenseState();
       expect(state.tier).toBe("pro");
-      expect(state.connectorLimit).toBe(10);
-      // Stored as 999999, TIER_LIMITS.pro.triggers = Infinity → stored value used
-      expect(state.triggerLimit).toBe(999999);
+      // Stored as UNLIMITED_TRIGGERS_STORED since Infinity can't go in SQLite
+      expect(state.connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
+      expect(state.triggerLimit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
 
     it("pro → free (canceled): limits shrink", () => {
@@ -488,8 +514,8 @@ describe("billing/enforcement", () => {
 
       const state = getLicenseState();
       expect(state.tier).toBe("free");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("pro → past_due: keeps tier during grace", () => {
@@ -506,8 +532,8 @@ describe("billing/enforcement", () => {
       });
       updateLicense({
         tier: "pro",
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
         valid_until: Math.floor(Date.now() / 1000) + 86400, // 1 day
       });
 
@@ -515,7 +541,7 @@ describe("billing/enforcement", () => {
       expect(state.tier).toBe("pro");
       expect(state.pastDue).toBe(true);
       expect(state.gracePeriod).toBe(true);
-      expect(state.connectorLimit).toBe(10);
+      expect(state.connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
 
     it("effectiveTier: active → subscribed tier", () => {
@@ -556,7 +582,7 @@ describe("billing/enforcement", () => {
   // ── Full downgrade scenario ──────────────────────────────────
 
   describe("full downgrade scenario", () => {
-    it("user with 8 connectors + 10 triggers downgrades: enforcement preserves oldest", async () => {
+    it("user with 8 connectors + 15 triggers downgrades: enforcement preserves oldest", async () => {
       // Setup: Pro tier with lots of connectors and triggers
       setTier("pro");
 
@@ -568,13 +594,13 @@ describe("billing/enforcement", () => {
 
       const triggers = new MockTriggerEngine();
       const baseTime = new Date("2025-01-01T00:00:00Z").getTime();
-      for (let i = 1; i <= 10; i++) {
+      for (let i = 1; i <= 15; i++) {
         triggers.addTrigger(`trigger-${i}`, true, new Date(baseTime + i * 86400000).toISOString());
       }
 
       // Verify Pro state
       expect(connectors.activeCount).toBe(8);
-      expect(triggers.enabledCount).toBe(10);
+      expect(triggers.enabledCount).toBe(15);
 
       // Downgrade to free
       setTier("free", "canceled");
@@ -582,41 +608,44 @@ describe("billing/enforcement", () => {
       // Enforce
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      // Connectors: 8 → 2 (evict 6 newest)
-      expect(result.connectors.evicted).toHaveLength(6);
-      expect(connectors.activeCount).toBe(2);
+      // Connectors: 8 → 5 (evict 3 newest)
+      expect(result.connectors.evicted).toHaveLength(3);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
       expect(connectors.getActiveNames()).toContain("github");
       expect(connectors.getActiveNames()).toContain("stripe");
+      expect(connectors.getActiveNames()).toContain("vercel");
+      expect(connectors.getActiveNames()).toContain("paypal");
+      expect(connectors.getActiveNames()).toContain("twilio");
 
-      // Triggers: 10 → 3 (disable 7 newest)
-      expect(result.triggers.disabled).toHaveLength(7);
-      expect(triggers.enabledCount).toBe(3);
+      // Triggers: 15 → 10 (disable 5 newest)
+      expect(result.triggers.disabled).toHaveLength(5);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
       // Oldest triggers survive
-      expect(triggers.isEnabled("trigger-1")).toBe(true);
-      expect(triggers.isEnabled("trigger-2")).toBe(true);
-      expect(triggers.isEnabled("trigger-3")).toBe(true);
+      for (let i = 1; i <= 10; i++) {
+        expect(triggers.isEnabled(`trigger-${i}`)).toBe(true);
+      }
       // Newest triggers disabled
-      expect(triggers.isEnabled("trigger-10")).toBe(false);
-      expect(triggers.isEnabled("trigger-9")).toBe(false);
+      expect(triggers.isEnabled("trigger-15")).toBe(false);
+      expect(triggers.isEnabled("trigger-14")).toBe(false);
 
       // Verify gates block new activations
-      expect(canActivateConnector(2).allowed).toBe(false);
-      expect(canAddTrigger(3).allowed).toBe(false);
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(false);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(false);
     });
 
     it("re-upgrade lifts gates", async () => {
       // Start as free
       setTier("free", "canceled");
 
-      expect(canActivateConnector(2).allowed).toBe(false);
-      expect(canAddTrigger(3).allowed).toBe(false);
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(false);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(false);
 
       // Re-upgrade to Pro
       setTier("pro");
 
-      expect(canActivateConnector(2).allowed).toBe(true);
-      expect(canActivateConnector(9).allowed).toBe(true);
-      expect(canAddTrigger(3).allowed).toBe(true);
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(true);
+      expect(canActivateConnector(100).allowed).toBe(true);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(true);
       expect(canAddTrigger(100).allowed).toBe(true);
     });
 
@@ -624,27 +653,33 @@ describe("billing/enforcement", () => {
       setTier("free", "canceled");
 
       const connectors = new MockConnectorManager();
+      // 8 connectors > free limit of 5
       connectors.addInstance("github");
       connectors.addInstance("stripe");
       connectors.addInstance("vercel");
       connectors.addInstance("paypal");
+      connectors.addInstance("twilio");
+      connectors.addInstance("gmail");
+      connectors.addInstance("gdrive");
+      connectors.addInstance("outlook");
 
       const triggers = new MockTriggerEngine();
-      for (let i = 1; i <= 5; i++) {
+      // 14 triggers > free limit of 10
+      for (let i = 1; i <= 14; i++) {
         triggers.addTrigger(`t${i}`, true);
       }
 
       // First enforcement
       await enforceLicenseLimits(connectors, triggers);
-      expect(connectors.activeCount).toBe(2);
-      expect(triggers.enabledCount).toBe(3);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
 
       // Second enforcement — should be a no-op
       const result = await enforceLicenseLimits(connectors, triggers);
       expect(result.connectors.evicted).toHaveLength(0);
       expect(result.triggers.disabled).toHaveLength(0);
-      expect(connectors.activeCount).toBe(2);
-      expect(triggers.enabledCount).toBe(3);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
     });
   });
 
@@ -676,7 +711,7 @@ describe("billing/enforcement", () => {
     it("uses getConfiguredConnectorCount when no currentCount provided", () => {
       setTier("free", "canceled");
 
-      // All connector env vars cleared → configured count is 0 → under limit (2)
+      // All connector env vars cleared → configured count is 0 → under limit (5)
       const result = canActivateConnector();
       expect(result.allowed).toBe(true);
     });
@@ -684,10 +719,10 @@ describe("billing/enforcement", () => {
     it("explicit currentCount overrides configured count", () => {
       setTier("free", "canceled");
 
-      // Explicitly pass 5 — should be over the free limit of 2
-      const result = canActivateConnector(5);
+      // Explicitly pass 7 — should be over the free limit of 5
+      const result = canActivateConnector(7);
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("5/2");
+      expect(result.reason).toContain(`7/${TIER_LIMITS.free.connectors}`);
     });
 
     it("explicit currentCount of 0 always allows", () => {
@@ -700,22 +735,26 @@ describe("billing/enforcement", () => {
     it("with env vars set, configured count reflects reality", () => {
       setTier("free", "canceled");
 
-      // Set exactly 3 connectors
-      process.env.STRIPE_SECRET_KEY = "sk_test_fake";
-      process.env.PAYPAL_CLIENT_ID = "fake_id";
+      // Set 6 connectors (> free limit of 5)
+      process.env.STRIPE_SECRET_KEY = "sk_test_fake";           // stripe
+      process.env.PAYPAL_CLIENT_ID = "fake_id";                 // paypal (requires both)
       process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
-      process.env.GITHUB_TOKEN = "ghp_fake";
+      process.env.GITHUB_TOKEN = "ghp_fake";                    // github
+      process.env.TWILIO_ACCOUNT_SID = "AC_fake";               // twilio (requires both)
+      process.env.TWILIO_AUTH_TOKEN = "fake_auth";
+      process.env.VERCEL_TOKEN = "fake_vercel";                 // vercel
+      process.env.GMAIL_ACCESS_TOKEN = "fake_gmail";            // gmail
 
-      // 3 configured > free limit of 2 → blocked
+      // 6 configured > free limit of 5 → blocked
       const result = canActivateConnector();
       expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("3/2");
+      expect(result.reason).toContain(`/${TIER_LIMITS.free.connectors}`);
     });
 
-    it("Pro tier allows configured count up to 10", () => {
+    it("Pro tier allows unlimited configured connectors", () => {
       setTier("pro");
 
-      // Set 4 connectors
+      // Set several connectors
       process.env.STRIPE_SECRET_KEY = "sk_test_fake";
       process.env.PAYPAL_CLIENT_ID = "fake_id";
       process.env.PAYPAL_CLIENT_SECRET = "fake_secret";
@@ -723,7 +762,7 @@ describe("billing/enforcement", () => {
       process.env.TWILIO_ACCOUNT_SID = "AC_fake";
       process.env.TWILIO_AUTH_TOKEN = "fake_auth";
 
-      // 4 configured < pro limit of 10 → allowed
+      // Pro tier is unlimited → always allowed
       const result = canActivateConnector();
       expect(result.allowed).toBe(true);
     });
@@ -733,13 +772,13 @@ describe("billing/enforcement", () => {
 
   describe("TIER_LIMITS consistency", () => {
     it("free tier has correct limits", () => {
-      expect(TIER_LIMITS.free.connectors).toBe(2);
-      expect(TIER_LIMITS.free.triggers).toBe(3);
+      expect(TIER_LIMITS.free.connectors).toBe(5);
+      expect(TIER_LIMITS.free.triggers).toBe(10);
       expect(TIER_LIMITS.free.label).toBe("Community");
     });
 
     it("pro tier has correct limits", () => {
-      expect(TIER_LIMITS.pro.connectors).toBe(10);
+      expect(TIER_LIMITS.pro.connectors).toBe(Infinity);
       expect(TIER_LIMITS.pro.triggers).toBe(Infinity);
       expect(TIER_LIMITS.pro.label).toBe("Pro");
     });

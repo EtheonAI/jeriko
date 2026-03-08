@@ -27,11 +27,9 @@ import {
   verifyInstallation,
   info,
   success,
-  warn,
   VERSION_TARGET_RE,
 } from "./install-utils.js";
 import { execSync } from "node:child_process";
-import { spawnDaemon } from "../../lib/daemon.js";
 
 /**
  * Detect the version of the currently running binary.
@@ -97,16 +95,10 @@ export async function runSelfInstall(target: string): Promise<void> {
   // 7. Verify
   verifyInstallation();
 
-  // 8. Auto-start daemon
-  info("Starting daemon...");
-  const daemonPid = await spawnDaemon();
-  if (daemonPid) {
-    success(`Daemon started (PID ${daemonPid})`);
-  } else {
-    warn("Could not auto-start daemon — run: jeriko server start");
-  }
-
-  // Done
+  // Done — daemon is NOT started here. The onboarding wizard (jeriko onboard
+  // or jeriko's first-run flow) writes config first, then starts the daemon
+  // via persistSetup() → spawnDaemon(). Starting here would create a daemon
+  // with no config that can't be reloaded when the wizard finishes.
   console.log();
   success("Installation complete!");
   console.log();

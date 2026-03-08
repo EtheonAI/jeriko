@@ -63,6 +63,51 @@ export const CHANNEL_OPTIONS: readonly ChannelOption[] = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/** Minimum length for API key validation. */
+export const MIN_API_KEY_LENGTH = 10;
+
+/**
+ * Environment variable keys for all known providers.
+ * Used by needsSetup() to detect whether any provider is already configured.
+ * Derived from built-in drivers + preset registry env vars.
+ */
+export const PROVIDER_ENV_KEYS: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+  "OPENAI_API_KEY",
+  "GROQ_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "OPENROUTER_API_KEY",
+  "XAI_API_KEY",
+  "GOOGLE_API_KEY",
+  "MISTRAL_API_KEY",
+  "TOGETHER_API_KEY",
+  "FIREWORKS_API_KEY",
+  "DEEPINFRA_API_KEY",
+  "CEREBRAS_API_KEY",
+  "PERPLEXITY_API_KEY",
+  "COHERE_API_KEY",
+  "GITHUB_TOKEN",
+  "NVIDIA_API_KEY",
+  "NEBIUS_API_KEY",
+  "HF_TOKEN",
+  "SAMBANOVA_API_KEY",
+] as const;
+
+/** Provider IDs with native drivers — these don't need a providers[] config entry. */
+export const BUILT_IN_PROVIDER_IDS = new Set(["anthropic", "openai", "local"]);
+
+/**
+ * Returns true if the base URL points to a local server (no API key needed).
+ * Used by both the setup wizard and verification logic.
+ */
+export function isLocalServerUrl(baseUrl: string): boolean {
+  return baseUrl.includes("127.0.0.1") || baseUrl.includes("localhost");
+}
+
+// ---------------------------------------------------------------------------
 // Provider options — built from preset registry + built-in drivers
 // ---------------------------------------------------------------------------
 
@@ -111,6 +156,8 @@ export function getProviderOptions(): ProviderOption[] {
     for (const preset of PROVIDER_PRESETS) {
       if (builtInIds.has(preset.id)) continue;
 
+      const isLocalServer = isLocalServerUrl(preset.baseUrl);
+
       options.push({
         id: preset.id,
         name: preset.name,
@@ -118,7 +165,7 @@ export function getProviderOptions(): ProviderOption[] {
         model: preset.defaultModel
           ? `${preset.id}:${preset.defaultModel}`
           : preset.id,
-        needsApiKey: true,
+        needsApiKey: !isLocalServer,
       });
     }
   } catch {
@@ -153,9 +200,10 @@ export function needsSetup(): boolean {
   const configPath = join(getConfigDir(), "config.json");
   if (existsSync(configPath)) return false;
 
-  // If any API key is present in env, user knows what they're doing
-  if (process.env.ANTHROPIC_API_KEY) return false;
-  if (process.env.OPENAI_API_KEY) return false;
+  // If any known provider API key is present in env, user knows what they're doing
+  for (const key of PROVIDER_ENV_KEYS) {
+    if (process.env[key]) return false;
+  }
 
   return true;
 }
@@ -165,12 +213,35 @@ export function needsSetup(): boolean {
 // ---------------------------------------------------------------------------
 
 /**
+ * Validate a URL string for use as a provider base URL.
+ *
+ * @returns Error message string if invalid, `undefined` if valid.
+ */
+export function validateUrl(input: string): string | undefined {
+  const trimmed = input.trim();
+  if (!trimmed) return "URL is required";
+
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "URL must use http:// or https://";
+    }
+    if (!parsed.hostname) {
+      return "URL must have a valid hostname";
+    }
+  } catch {
+    return "Invalid URL format";
+  }
+  return undefined;
+}
+
+/**
  * Basic validation for an API key string.
  * Checks: non-empty, minimum length, no whitespace.
  */
 export function validateApiKey(key: string): boolean {
   const trimmed = key.trim();
-  if (trimmed.length < 10) return false;
+  if (trimmed.length < MIN_API_KEY_LENGTH) return false;
   if (/\s/.test(trimmed)) return false;
   return true;
 }

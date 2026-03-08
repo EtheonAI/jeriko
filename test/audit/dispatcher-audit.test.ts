@@ -355,8 +355,8 @@ describe("command registry", () => {
     "stripe", "github", "paypal", "vercel", "twilio", "x",
     "gdrive", "onedrive", "gmail", "outlook", "hubspot", "shopify",
     "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
-    "digitalocean", "notion", "linear", "jira", "airtable", "asana",
-    "mailchimp", "dropbox", "salesforce", "connectors",
+    "notion", "linear", "jira", "airtable", "asana",
+    "mailchimp", "dropbox", "connectors",
     // dev
     "code", "create", "dev", "parallel",
     // agent
@@ -380,7 +380,7 @@ describe("command registry", () => {
   it("total command count matches expected", async () => {
     const { getCommands } = await import("../../src/cli/dispatcher.js");
     const commands = await getCommands();
-    // 4 + 2 + 3 + 4 + 10 + 28 + 4 + 7 + 6 + 3 + 3 = 74
+    // 4 + 2 + 3 + 4 + 10 + 26 + 4 + 7 + 6 + 3 + 3 = 72
     expect(commands.size).toBe(expectedCommands.length);
   });
 });
@@ -400,8 +400,8 @@ describe("category assignment", () => {
       "stripe", "github", "paypal", "vercel", "twilio", "x",
       "gdrive", "onedrive", "gmail", "outlook", "hubspot", "shopify",
       "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
-      "digitalocean", "notion", "linear", "jira", "airtable", "asana",
-      "mailchimp", "dropbox", "salesforce", "connectors",
+      "notion", "linear", "jira", "airtable", "asana",
+      "mailchimp", "dropbox", "connectors",
     ],
     dev: ["code", "create", "dev", "parallel"],
     agent: ["ask", "memory", "discover", "prompt", "skill", "share", "provider"],

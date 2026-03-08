@@ -14,6 +14,7 @@ import type {
   StreamChunk,
   DriverConfig,
   DriverMessage,
+  ContentBlock,
 } from "./index.js";
 import type { ProviderConfig } from "../../../shared/config.js";
 import { resolveEnvRef } from "../../../shared/env-ref.js";
@@ -24,9 +25,14 @@ import { withTimeout } from "./signal.js";
 // Internal types (OpenAI API shapes)
 // ---------------------------------------------------------------------------
 
+/** OpenAI content part — text or image_url (for vision). */
+type OpenAIContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string; detail?: string } };
+
 interface OpenAIMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
+  content: string | null | OpenAIContentPart[];
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -79,8 +85,29 @@ export class OpenAICompatibleDriver implements LLMDriver {
     return messages.map((msg) => {
       const base: OpenAIMessage = {
         role: msg.role,
-        content: msg.content,
+        content: null,
       };
+
+      // Multi-modal content blocks (vision) — convert to OpenAI content parts.
+      if (Array.isArray(msg.content)) {
+        const parts: OpenAIContentPart[] = [];
+        for (const block of msg.content as ContentBlock[]) {
+          if (block.type === "text") {
+            parts.push({ type: "text", text: block.text });
+          } else if (block.type === "image") {
+            parts.push({
+              type: "image_url",
+              image_url: {
+                url: `data:${block.mediaType};base64,${block.data}`,
+                detail: "auto",
+              },
+            });
+          }
+        }
+        base.content = parts;
+      } else {
+        base.content = msg.content;
+      }
 
       if (msg.tool_calls?.length) {
         base.tool_calls = msg.tool_calls.map((tc) => ({

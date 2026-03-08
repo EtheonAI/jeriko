@@ -21,6 +21,7 @@ import {
   formatError,
 } from "../format.js";
 import { t } from "../theme.js";
+import { openInBrowser } from "../lib/open-browser.js";
 
 // ---------------------------------------------------------------------------
 // Types for handler context
@@ -134,9 +135,34 @@ export function createSessionHandlers(ctx: SlashCommandContext) {
     },
 
     async clear(): Promise<void> {
-      await backend.clearHistory();
-      dispatch({ type: "CLEAR_MESSAGES" });
-      addSystemMessage(t.muted("Session history cleared."));
+      ctx.wizardConfigRef.current = {
+        title: "Clear History",
+        steps: [
+          {
+            type: "select",
+            message: "Clear all message history? This cannot be undone.",
+            options: [
+              { value: "yes", label: "Yes, clear history" },
+              { value: "no", label: "Cancel" },
+            ],
+          },
+        ],
+        onComplete: async ([answer]) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          if (answer !== "yes") {
+            addSystemMessage(t.muted("Clear cancelled."));
+            return;
+          }
+          try {
+            await backend.clearHistory();
+            dispatch({ type: "CLEAR_MESSAGES" });
+            addSystemMessage(t.muted("Session history cleared."));
+          } catch (err) {
+            addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+          }
+        },
+      };
+      dispatch({ type: "SET_PHASE", phase: "wizard" });
     },
 
     async compact(): Promise<void> {
@@ -181,6 +207,7 @@ export function createSessionHandlers(ctx: SlashCommandContext) {
       // Default: create a share
       try {
         const share = await backend.createShare();
+        openInBrowser(share.url);
         addSystemMessage(formatShareCreated(share));
       } catch (err) {
         addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
@@ -210,6 +237,26 @@ export function createSessionHandlers(ctx: SlashCommandContext) {
         dispatch({ type: "CLEAR_MESSAGES" });
         dispatch({ type: "SET_SESSION_SLUG", slug: newSession.slug });
         addSystemMessage(t.green(`Session archived. New session: ${newSession.slug}`));
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+    },
+
+    async delete(args: string): Promise<void> {
+      const target = args.trim();
+      if (!target) {
+        addSystemMessage(t.yellow("Usage: /delete <slug>"));
+        return;
+      }
+      try {
+        const deleted = await backend.deleteSessionById(target);
+        if (deleted) {
+          addSystemMessage(t.green(`Session "${target}" deleted.`));
+        } else {
+          addSystemMessage(formatError(
+            `Cannot delete "${target}". Session not found or is the current session.`,
+          ));
+        }
       } catch (err) {
         addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
       }

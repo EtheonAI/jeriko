@@ -200,7 +200,7 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
   return (
     <Box flexDirection="column" marginTop={0}>
       <Box>
-        <Text color={PALETTE.dim}>{parts.join(sep)}</Text>
+        <Text color={PALETTE.dim} wrap="truncate-end">{parts.join(sep)}</Text>
       </Box>
       {modeLabel && (
         <Box>

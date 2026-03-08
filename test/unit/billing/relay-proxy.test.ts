@@ -28,7 +28,7 @@ describe("billing/relay-proxy", () => {
       savedEnv[key] = process.env[key];
     }
     // Set up default relay context for most tests
-    process.env.JERIKO_USER_ID = "usr_test_123";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
     process.env.RELAY_AUTH_SECRET = "test-relay-secret";
     delete process.env.JERIKO_PUBLIC_URL;
     delete process.env.JERIKO_RELAY_URL;
@@ -79,14 +79,12 @@ describe("billing/relay-proxy", () => {
       expect(result).toBeNull();
     });
 
-    it("falls back to NODE_AUTH_SECRET when RELAY_AUTH_SECRET not set", async () => {
-      delete process.env.RELAY_AUTH_SECRET;
-      process.env.NODE_AUTH_SECRET = "test-node-secret";
+    it("uses RELAY_AUTH_SECRET env var for authentication", async () => {
+      process.env.RELAY_AUTH_SECRET = "test-explicit-secret";
 
-      // Mock fetch to capture the auth header
       let capturedHeaders: Record<string, string> = {};
       const originalFetch = globalThis.fetch;
-      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      globalThis.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = init?.headers as Record<string, string> | undefined;
         capturedHeaders = headers ?? {};
         return new Response(
@@ -100,7 +98,7 @@ describe("billing/relay-proxy", () => {
           "../../../src/daemon/billing/relay-proxy.js"
         );
         await createCheckoutViaRelay("test@example.com", true);
-        expect(capturedHeaders["Authorization"]).toBe("Bearer test-node-secret");
+        expect(capturedHeaders["Authorization"]).toBe("Bearer test-explicit-secret");
       } finally {
         globalThis.fetch = originalFetch;
       }
@@ -190,7 +188,7 @@ describe("billing/relay-proxy", () => {
           userAgent: "Jeriko/2.0",
         });
 
-        expect(capturedBody.userId).toBe("usr_test_123");
+        expect(capturedBody.userId).toBe("abcdef0123456789abcdef0123456789");
         expect(capturedBody.email).toBe("user@example.com");
         expect(capturedBody.clientIp).toBe("203.0.113.42");
         expect(capturedBody.userAgent).toBe("Jeriko/2.0");

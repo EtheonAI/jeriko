@@ -24,13 +24,39 @@ const PHASE_ORDER: Record<SubAgentState["phase"], number> = {
   error: 2,
 };
 
-/** Agent type badge metadata — color name from PALETTE. */
+/**
+ * Agent type badge metadata — maps agent type to PALETTE color key.
+ *
+ * Covers all agent types used by the delegate tool:
+ *   - Core types: general, research, task, explore, plan
+ *   - Code types: code, review, debug, write, edit
+ *   - Search types: search, browse, analyze
+ *   - Infra types: execute, deploy, test
+ */
 export const AGENT_TYPE_COLORS: Record<string, string> = {
-  general: "text",
+  // Core
+  general:  "text",
   research: "cyan",
-  task: "green",
-  explore: "blue",
-  plan: "purple",
+  task:     "green",
+  explore:  "blue",
+  plan:     "purple",
+
+  // Code
+  code:     "teal",
+  review:   "orange",
+  debug:    "red",
+  write:    "green",
+  edit:     "teal",
+
+  // Search & analysis
+  search:   "cyan",
+  browse:   "blue",
+  analyze:  "purple",
+
+  // Infra
+  execute:  "orange",
+  deploy:   "pink",
+  test:     "green",
 };
 
 /** Derived sub-agent state for rendering. */

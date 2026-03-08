@@ -20,25 +20,25 @@ describe("billing/config", () => {
 
   describe("TIER_LIMITS", () => {
     it("defines free tier with correct limits", () => {
-      expect(TIER_LIMITS.free.connectors).toBe(2);
-      expect(TIER_LIMITS.free.triggers).toBe(3);
+      expect(TIER_LIMITS.free.connectors).toBe(5);
+      expect(TIER_LIMITS.free.triggers).toBe(10);
       expect(TIER_LIMITS.free.label).toBe("Community");
     });
 
     it("defines pro tier with correct limits", () => {
-      expect(TIER_LIMITS.pro.connectors).toBe(10);
+      expect(TIER_LIMITS.pro.connectors).toBe(Infinity);
       expect(TIER_LIMITS.pro.triggers).toBe(Infinity);
       expect(TIER_LIMITS.pro.label).toBe("Pro");
     });
 
     it("defines team tier with correct limits", () => {
-      expect(TIER_LIMITS.team.connectors).toBe(10);
+      expect(TIER_LIMITS.team.connectors).toBe(Infinity);
       expect(TIER_LIMITS.team.triggers).toBe(Infinity);
       expect(TIER_LIMITS.team.label).toBe("Team");
     });
 
     it("defines enterprise tier with correct limits", () => {
-      expect(TIER_LIMITS.enterprise.connectors).toBe(10);
+      expect(TIER_LIMITS.enterprise.connectors).toBe(Infinity);
       expect(TIER_LIMITS.enterprise.triggers).toBe(Infinity);
       expect(TIER_LIMITS.enterprise.label).toBe("Enterprise");
     });

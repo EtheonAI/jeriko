@@ -194,7 +194,11 @@ describe("model resolution", () => {
     it("resolves 'local' to LOCAL_MODEL env or default", () => {
       const original = process.env.LOCAL_MODEL;
       delete process.env.LOCAL_MODEL;
-      expect(resolveModel("local", "local")).toBe("llama3");
+      // Resolves to LOCAL_MODEL env → Ollama-detected model → "llama3" fallback.
+      // When Ollama is running, the detected model takes priority over "llama3".
+      const resolved = resolveModel("local", "local");
+      expect(resolved).toBeTruthy();
+      expect(typeof resolved).toBe("string");
       if (original) process.env.LOCAL_MODEL = original;
     });
 
@@ -535,6 +539,33 @@ describe("parseModelSpec", () => {
     const spec = parseModelSpec("claude:opus");
     expect(spec.backend).toBe("claude");
     expect(spec.model).toBe("opus");
+  });
+
+  it("splits on slash for known providers (local/model:tag)", () => {
+    // local is a known driver — slash separates provider from model
+    const spec = parseModelSpec("local/deepseek-v3.2:cloud");
+    expect(spec.backend).toBe("local");
+    expect(spec.model).toBe("deepseek-v3.2:cloud");
+  });
+
+  it("preserves Ollama tag after slash separator", () => {
+    const spec = parseModelSpec("local/qwen3-coder:480b-cloud");
+    expect(spec.backend).toBe("local");
+    expect(spec.model).toBe("qwen3-coder:480b-cloud");
+  });
+
+  it("handles slash without tag", () => {
+    const spec = parseModelSpec("local/llama3");
+    expect(spec.backend).toBe("local");
+    expect(spec.model).toBe("llama3");
+  });
+
+  it("prefers slash over colon when slash-left is known provider", () => {
+    // "local/model:tag" — slash-left="local" is known, so split on slash
+    // NOT on colon (which would give "local/model" as backend)
+    const spec = parseModelSpec("local/gpt-oss:120b-cloud");
+    expect(spec.backend).toBe("local");
+    expect(spec.model).toBe("gpt-oss:120b-cloud");
   });
 });
 

@@ -27,6 +27,7 @@ import {
 import { webhookRoutes } from "./routes/webhook.js";
 import { oauthRoutes } from "./routes/oauth.js";
 import { resolveOAuthCallback } from "./routes/oauth.js";
+import { providerAuthRoutes } from "./routes/provider-auth.js";
 import { shareRoutes } from "./routes/share.js";
 import { resolveShareRequest } from "./routes/share.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -56,6 +57,7 @@ export function createRelayApp(): Hono {
   app.route("/health", healthRoutes());
   app.route("/hooks", webhookRoutes());
   app.route("/oauth", oauthRoutes());
+  app.route("/provider", providerAuthRoutes());
   app.route("/s", shareRoutes());
   app.route("/billing", billingRoutes());
 

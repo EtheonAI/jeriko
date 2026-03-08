@@ -81,6 +81,48 @@ export interface ProviderConfig {
   defaultModel?: string;
 }
 
+/** Speech-to-text configuration for voice message transcription. */
+export interface STTConfig {
+  /** Provider: "openai" (Whisper API), "local" (whisper.cpp), "disabled". */
+  provider: "openai" | "local" | "disabled";
+  /** Language hint for transcription (ISO 639-1, e.g. "en"). Auto-detect if omitted. */
+  language?: string;
+  /** Path to whisper.cpp model file (for provider: "local"). */
+  modelPath?: string;
+}
+
+/** Text-to-speech configuration for voice responses in channels. */
+export interface TTSConfig {
+  /** Provider: "openai" (tts-1), "native" (macOS say), "disabled". */
+  provider: "openai" | "native" | "disabled";
+  /** Voice name. OpenAI: "alloy"|"echo"|"fable"|"onyx"|"nova"|"shimmer". */
+  voice?: string;
+  /** OpenAI model: "tts-1" (fast) or "tts-1-hd" (quality). Default: "tts-1". */
+  model?: string;
+  /** Max text length to convert (chars). Default: 4096. */
+  maxLength?: number;
+}
+
+/** Image generation configuration. */
+export interface ImageGenConfig {
+  /** Provider: "openai" (DALL-E 3), "auto" (first available). Default: "auto". */
+  provider?: "openai" | "auto";
+  /** Default size: "1024x1024", "1024x1792", "1792x1024". */
+  defaultSize?: string;
+  /** Default style: "vivid" or "natural" (DALL-E 3 only). */
+  defaultStyle?: string;
+}
+
+/** Unified media configuration — STT, TTS, and image generation. */
+export interface MediaConfig {
+  /** Voice message transcription. Default: disabled. */
+  stt?: STTConfig;
+  /** Voice response synthesis. Default: disabled. */
+  tts?: TTSConfig;
+  /** Image generation. Default: auto-detect. */
+  imageGen?: ImageGenConfig;
+}
+
 export interface BillingPlanConfig {
   /** Stripe billing secret key (separate from user's Stripe connector). */
   stripeSecretKey?: string;
@@ -101,6 +143,8 @@ export interface JerikoConfig {
   logging: LoggingConfig;
   /** Custom LLM providers (OpenRouter, DeepInfra, Together, Groq, etc.). */
   providers?: ProviderConfig[];
+  /** Media capabilities: voice transcription, TTS, image generation. */
+  media?: MediaConfig;
   /** Stripe billing configuration for subscription management. */
   billing?: BillingPlanConfig;
 }
@@ -162,6 +206,28 @@ const DEFAULTS: JerikoConfig = {
 };
 
 // ---------------------------------------------------------------------------
+// Daemon port
+// ---------------------------------------------------------------------------
+
+/**
+ * Default port for the Jeriko daemon HTTP server.
+ * Port 7741 chosen to avoid conflicts with common dev servers
+ * (3000: React/Next/Rails, 5173: Vite, 8080: Tomcat/generic).
+ * Override with JERIKO_PORT env var or --port flag.
+ */
+export const JERIKO_DEFAULT_PORT = 7741;
+
+/** Resolve the daemon port: JERIKO_PORT env → default 7741. */
+export function getDaemonPort(): number {
+  const env = process.env.JERIKO_PORT;
+  if (env) {
+    const parsed = Number(env);
+    if (!Number.isNaN(parsed) && parsed > 0 && parsed < 65536) return parsed;
+  }
+  return JERIKO_DEFAULT_PORT;
+}
+
+// ---------------------------------------------------------------------------
 // User identity
 // ---------------------------------------------------------------------------
 
@@ -174,8 +240,14 @@ const DEFAULTS: JerikoConfig = {
  * Returns undefined when no user ID has been generated yet (fresh install
  * that hasn't run `jeriko install` or `jeriko init`).
  */
+/** Matches hex strings (32-64 chars) or standard UUIDs. */
+const USER_ID_PATTERN = /^(?:[0-9a-f]{32,64}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
 export function getUserId(): string | undefined {
-  return process.env.JERIKO_USER_ID || undefined;
+  const raw = process.env.JERIKO_USER_ID;
+  if (!raw) return undefined;
+  // Reject invalid formats to prevent path traversal in relay URLs
+  return USER_ID_PATTERN.test(raw) ? raw : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -243,21 +315,37 @@ export function loadConfig(): JerikoConfig {
  * Silently returns if the file does not exist or is malformed.
  */
 function mergeFromFile(target: JerikoConfig, filePath: string): void {
+  if (!fs.existsSync(filePath)) return;
+
+  let raw: string;
   try {
-    if (!fs.existsSync(filePath)) return;
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const parsed = JSON.parse(raw);
-    deepMerge(target as unknown as Record<string, unknown>, parsed);
+    raw = fs.readFileSync(filePath, "utf-8");
   } catch {
-    // Silently skip unreadable / malformed config files
+    // Unreadable file (permissions, etc.) — skip silently
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      deepMerge(target as unknown as Record<string, unknown>, parsed);
+    } else {
+      console.warn(`Warning: ${filePath} does not contain a JSON object — using defaults`);
+    }
+  } catch {
+    console.warn(`Warning: ${filePath} is malformed JSON — using defaults`);
   }
 }
 
 /**
  * Recursively merge `source` into `target`, overwriting leaf values.
  */
+/** Keys that must never be merged — prevents prototype pollution attacks. */
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 function deepMerge(target: Record<string, unknown>, source: Record<string, unknown>): void {
   for (const key of Object.keys(source)) {
+    if (UNSAFE_KEYS.has(key)) continue;
     const sv = source[key];
     const tv = target[key];
     if (

@@ -27,6 +27,43 @@ export interface StreamChunk {
   tool_call?: ToolCall;
 }
 
+// ---------------------------------------------------------------------------
+// Multi-modal content blocks (vision, audio, etc.)
+// ---------------------------------------------------------------------------
+
+/** A text content block within a multi-modal message. */
+export interface TextBlock {
+  type: "text";
+  text: string;
+}
+
+/** An image content block for vision-capable models. */
+export interface ImageBlock {
+  type: "image";
+  /** Base64-encoded image data (without data URI prefix). */
+  data: string;
+  /** MIME type: "image/jpeg", "image/png", "image/gif", "image/webp". */
+  mediaType: string;
+}
+
+/** A content block in a multi-modal message. */
+export type ContentBlock = TextBlock | ImageBlock;
+
+/**
+ * Extract the text content from a DriverMessage, regardless of whether
+ * content is a plain string or an array of ContentBlocks.
+ *
+ * Used for token estimation, logging, and persistence where only the
+ * text representation is needed.
+ */
+export function messageText(msg: DriverMessage): string {
+  if (typeof msg.content === "string") return msg.content;
+  return msg.content
+    .filter((b): b is TextBlock => b.type === "text")
+    .map((b) => b.text)
+    .join("\n");
+}
+
 /** Configuration forwarded to every driver's chat method. */
 export interface DriverConfig {
   model: string;
@@ -52,7 +89,14 @@ export interface DriverTool {
 /** A message in the driver-agnostic format. */
 export interface DriverMessage {
   role: "user" | "assistant" | "system" | "tool";
-  content: string;
+  /**
+   * Message content — plain string (most messages) or an array of content
+   * blocks for multi-modal messages (e.g. user sends text + image).
+   *
+   * ContentBlock[] is only used for user messages with attached images
+   * when the model supports vision. All other roles use plain strings.
+   */
+  content: string | ContentBlock[];
   tool_calls?: ToolCall[];
   tool_call_id?: string;
 }

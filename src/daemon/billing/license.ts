@@ -84,7 +84,9 @@ export function getLicenseState(): LicenseState {
   // which is the source of truth. Fall back to TIER_LIMITS for the computed tier
   // when stored limits would be MORE permissive than the effective tier allows
   // (e.g., license says "pro" but subscription was canceled → free tier applies).
-  const connectorLimit = Math.min(license.connector_limit, tierLimits.connectors);
+  const connectorLimit = tierLimits.connectors === Infinity
+    ? license.connector_limit
+    : Math.min(license.connector_limit, tierLimits.connectors);
   const triggerLimit = tierLimits.triggers === Infinity
     ? license.trigger_limit
     : Math.min(license.trigger_limit, tierLimits.triggers);
@@ -131,10 +133,12 @@ export function canActivateConnector(currentCount?: number): GateResult {
   }
 
   const tierLabel = TIER_LIMITS[state.tier].label;
+  const proLimit = TIER_LIMITS.pro.connectors;
+  const proDesc = proLimit === Infinity ? "unlimited" : `${proLimit}`;
   return {
     allowed: false,
     reason: `Connector limit reached (${count}/${state.connectorLimit} on ${tierLabel} plan). `
-      + `Upgrade to Pro for ${TIER_LIMITS.pro.connectors} connectors: run \`jeriko upgrade\``,
+      + `Upgrade to Pro for ${proDesc} connectors: run \`jeriko upgrade\``,
   };
 }
 
@@ -340,7 +344,7 @@ export async function refreshFromStripe(): Promise<void> {
 
     updateLicense({
       tier,
-      connector_limit: limits.connectors,
+      connector_limit: limits.connectors === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.connectors,
       trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
       verified_at: now,
       valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),
@@ -409,7 +413,7 @@ async function refreshFromRelay(license: BillingLicense): Promise<boolean> {
 
     updateLicense({
       tier,
-      connector_limit: limits.connectors,
+      connector_limit: limits.connectors === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.connectors,
       trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
       verified_at: now,
       valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),

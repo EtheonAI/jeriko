@@ -87,7 +87,7 @@ const ToolResult: React.FC<ToolResultProps> = ({ result, isError }) => {
   return (
     <Box marginLeft={2}>
       <Text color={connectorColor}>{ICONS.result}  </Text>
-      <Text color={textColor}>{truncateResult(result)}</Text>
+      <Text color={textColor} wrap="truncate-end">{truncateResult(result)}</Text>
     </Box>
   );
 };

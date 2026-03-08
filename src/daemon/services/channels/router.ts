@@ -24,7 +24,7 @@ import {
   getSessionBySlug,
 } from "../../agent/session/session.js";
 import { addMessage, getMessages, clearMessages } from "../../agent/session/message.js";
-import type { DriverMessage } from "../../agent/drivers/index.js";
+import type { DriverMessage, ContentBlock } from "../../agent/drivers/index.js";
 import { listDrivers, getDriver } from "../../agent/drivers/index.js";
 import { resolveModel, getCapabilities, parseModelSpec, listModels } from "../../agent/drivers/models.js";
 import {
@@ -35,6 +35,7 @@ import {
   restoreBindings,
 } from "./binding.js";
 import { kvGet, kvSet } from "../../storage/kv.js";
+import type { STTConfig, TTSConfig } from "../../../shared/config.js";
 import { existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -74,6 +75,10 @@ export interface ChannelRouterOptions {
   getTriggerEngine?: () => import("../triggers/engine.js").TriggerEngine | null;
   /** Lazy accessor for connector manager (created after router in kernel boot). */
   getConnectors?: () => import("../connectors/manager.js").ConnectorManager | null;
+  /** Speech-to-text config — auto-transcribe incoming voice messages. */
+  sttConfig?: STTConfig;
+  /** Text-to-speech config — optionally send voice responses. */
+  ttsConfig?: TTSConfig;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,10 +222,15 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     activeRuns.set(chatId, run);
 
     try {
-      // Download any file attachments and prepend to prompt
+      // Download attachments, transcribe voice, and build vision content blocks.
       let augmentedText = text;
+      let visionBlocks: ContentBlock[] | null = null;
+      let hadVoiceInput = false;
+
       if (metadata.attachments?.length) {
         const fileParts: string[] = [];
+        const imageBlocks: ContentBlock[] = [];
+
         for (const att of metadata.attachments) {
           try {
             const localPath = await opts.channels.downloadFile(
@@ -228,6 +238,38 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               att.fileId,
               att.filename,
             );
+
+            // Voice messages: auto-transcribe via STT if configured and not disabled
+            if ((att.type === "voice" || att.type === "audio") && opts.sttConfig && opts.sttConfig.provider !== "disabled") {
+              const transcription = await transcribeAttachment(localPath, opts.sttConfig);
+              if (transcription) {
+                hadVoiceInput = true;
+                fileParts.push(`[Transcribed ${att.type}]: ${transcription}`);
+                continue;
+              }
+            }
+
+            // Photos: collect for vision (base64 + content blocks)
+            if (att.type === "photo") {
+              try {
+                const imageData = readFileSync(localPath);
+                const base64 = imageData.toString("base64");
+                const ext = localPath.split(".").pop()?.toLowerCase() ?? "jpg";
+                const mediaType = ext === "png" ? "image/png"
+                  : ext === "webp" ? "image/webp"
+                  : ext === "gif" ? "image/gif"
+                  : "image/jpeg";
+
+                imageBlocks.push({
+                  type: "image",
+                  data: base64,
+                  mediaType,
+                });
+              } catch (err) {
+                log.debug(`Vision: failed to read image ${localPath}: ${err}`);
+              }
+            }
+
             const desc = att.caption
               ? `User sent a ${att.type} (saved to ${localPath}). Caption: ${att.caption}`
               : `User sent a ${att.type} (saved to ${localPath}).`;
@@ -237,21 +279,42 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
             fileParts.push(`User sent a ${att.type} (download failed).`);
           }
         }
-        augmentedText = fileParts.join("\n") + "\n\n" + text;
+
+        augmentedText = fileParts.length > 0
+          ? fileParts.join("\n") + "\n\n" + text
+          : text;
+
+        // Build vision content blocks if we have images
+        if (imageBlocks.length > 0) {
+          visionBlocks = [
+            ...imageBlocks,
+            { type: "text" as const, text: augmentedText },
+          ];
+        }
       }
 
       const state = getOrCreateState(chatId, metadata.channel);
+      // Persist the text representation in DB (images are transient — too large for SQLite)
       addMessage(state.sessionId, "user", augmentedText);
 
+      // Build driver message history from DB
       const history = getMessages(state.sessionId).map<DriverMessage>((m) => ({
         role: m.role as DriverMessage["role"],
         content: m.content,
       }));
 
+      // Resolve model capabilities once — used for vision gating and agent config
       const { backend: modelBackend, model: modelId } = parseModelSpec(state.model);
       const provider = getProviderName(modelBackend);
       const resolvedId = resolveModel(provider, modelId);
       const caps = getCapabilities(provider, resolvedId);
+
+      // Replace the last user message's content with vision blocks if available
+      // AND the model supports vision. Otherwise keep text-only (graceful fallback).
+      if (visionBlocks && caps.vision && history.length > 0) {
+        history[history.length - 1]!.content = visionBlocks;
+        log.debug(`Vision: passing ${visionBlocks.filter((b) => b.type === "image").length} image(s) to ${resolvedId}`);
+      }
 
       const runConfig: AgentRunConfig = {
         sessionId: state.sessionId,
@@ -328,6 +391,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
       // Send any files referenced in the response text or tool results
       await sendResponseFiles(metadata, response, toolResults);
+
+      // TTS: optionally convert response to voice message.
+      // Auto-enable when user sent voice (conversational mode) OR when TTS is configured.
+      if (response) {
+        await sendVoiceResponse(metadata, response, hadVoiceInput);
+      }
     } catch (err) {
       if (controller.signal.aborted) return;
       const msg = err instanceof Error ? err.message : String(err);
@@ -372,6 +441,50 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       } catch (err) {
         log.warn(`Failed to send file ${filePath}: ${err}`);
       }
+    }
+  }
+
+  // ── Voice transcription (STT) ───────────────────────────────────────
+
+  async function transcribeAttachment(
+    localPath: string,
+    sttConfig?: STTConfig,
+  ): Promise<string | null> {
+    if (!sttConfig || sttConfig.provider === "disabled") return null;
+    try {
+      const { transcribe } = await import("../media/stt.js");
+      return await transcribe(localPath, sttConfig);
+    } catch (err) {
+      log.debug(`STT import/call failed: ${err}`);
+      return null;
+    }
+  }
+
+  // ── Voice response (TTS) ──────────────────────────────────────────
+
+  async function sendVoiceResponse(
+    metadata: MessageMetadata,
+    response: string,
+    hadVoiceInput: boolean,
+  ): Promise<void> {
+    const ttsConfig = opts.ttsConfig;
+    if (!ttsConfig || ttsConfig.provider === "disabled") {
+      // If no TTS configured but user sent voice, skip silently.
+      // The text response was already sent above.
+      return;
+    }
+
+    // TTS is enabled — synthesize and send voice
+    try {
+      const { synthesize } = await import("../media/tts.js");
+      const audioPath = await synthesize(response, ttsConfig);
+      if (audioPath) {
+        await opts.channels.sendVoice(metadata.channel, metadata.chat_id, audioPath);
+        // Clean up temp file
+        try { unlinkSync(audioPath); } catch { /* non-fatal */ }
+      }
+    } catch (err) {
+      log.debug(`TTS failed: ${err}`);
     }
   }
 
@@ -668,6 +781,26 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         return;
       }
 
+      case "delete":
+      case "del": {
+        if (!arg) {
+          await safeSend(metadata, "Usage: /delete <session-slug>");
+          return;
+        }
+        const delTarget = getSessionBySlug(arg) ?? getSession(arg);
+        if (!delTarget) {
+          await safeSend(metadata, `Session not found: ${arg}`);
+          return;
+        }
+        if (delTarget.id === state.sessionId) {
+          await safeSend(metadata, "Cannot delete the active session. Use /kill to destroy and start fresh.");
+          return;
+        }
+        deleteSession(delTarget.id);
+        await safeSend(metadata, `Session deleted: ${delTarget.slug}`);
+        return;
+      }
+
       case "switch": {
         if (!arg) {
           await safeSend(metadata, "Usage: /switch <session-slug-or-id>");
@@ -926,16 +1059,13 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
 
           for (const p of OAUTH_PROVIDERS) {
             const ready = isConnectorConfigured(p.name);
-            const hasCredentials = !!process.env[p.clientIdVar];
             const label = ready ? `${p.label} ✓` : p.label;
             const data = ready ? `/disconnect ${p.name}` : `/connect ${p.name}`;
 
-            if (hasCredentials || ready) {
-              row.push({ label, data });
-              if (row.length === 3) {
-                buttons.push(row);
-                row = [];
-              }
+            row.push({ label, data });
+            if (row.length === 3) {
+              buttons.push(row);
+              row = [];
             }
           }
           if (row.length > 0) buttons.push(row);
@@ -967,15 +1097,6 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           await safeSend(
             metadata,
             `${connectorName} doesn't support OAuth.\nUse /auth ${connectorName} <key> instead.\n\nOAuth connectors: ${oauthNames}`,
-          );
-          return;
-        }
-
-        // Check OAuth client credentials are configured on the server
-        if (!process.env[provider.clientIdVar]) {
-          await safeSend(
-            metadata,
-            `${provider.label} OAuth is not configured.\nSet ${provider.clientIdVar} and ${provider.clientSecretVar} in the daemon .env.`,
           );
           return;
         }
@@ -1136,18 +1257,16 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
               buttons,
             );
           } else if (oauth && provider) {
-            // Not connected — OAuth
-            const hasCredentials = !!process.env[provider.clientIdVar];
-            const buttons: KeyboardLayout = hasCredentials
-              ? [
-                  [{ label: `Connect ${def.label}`, data: `/connect ${def.name}` }],
-                  [{ label: "← Connectors", data: "/connectors" }],
-                ]
-              : [[{ label: "← Connectors", data: "/connectors" }]];
-            const status = hasCredentials
-              ? `${def.label} — Not connected\n${def.description}\n\nTap to start OAuth:`
-              : `${def.label} — Not configured\n${def.description}\n\nSet ${provider.clientIdVar} and ${provider.clientSecretVar} first.`;
-            await safeKeyboard(metadata, status, buttons);
+            // Not connected — OAuth (relay handles credentials)
+            const buttons: KeyboardLayout = [
+              [{ label: `Connect ${def.label}`, data: `/connect ${def.name}` }],
+              [{ label: "← Connectors", data: "/connectors" }],
+            ];
+            await safeKeyboard(
+              metadata,
+              `${def.label} — Not connected\n${def.description}\n\nTap to start OAuth:`,
+              buttons,
+            );
           } else {
             // Not connected — API key
             const buttons: KeyboardLayout = [
@@ -1733,7 +1852,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                         metadata.channel,
                         metadata.chat_id,
                         tmpPath,
-                        "Scan this QR with WhatsApp → Linked Devices → Link a Device",
+                        "Use a second phone/SIM for the bot.\nOpen WhatsApp on that phone → Linked Devices → Scan this QR.\nThen message that number from your main WhatsApp.",
                       );
                     } finally {
                       try { unlinkSync(tmpPath); } catch { /* cleanup */ }
@@ -1741,7 +1860,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
                   } else {
                     const text = await renderQRText(latestQrData);
                     if (text) {
-                      await safeSend(metadata, `Scan this QR code with WhatsApp:\n\n${text}`);
+                      await safeSend(metadata, `Use a second phone/SIM for the bot.\nScan this QR from that phone's WhatsApp → Linked Devices.\n\n${text}`);
                     }
                   }
                 }
@@ -2751,12 +2870,6 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       }
 
       case "upgrade": {
-        const { isBillingConfigured, createCheckoutSession } = await import("../../billing/stripe.js");
-        if (!isBillingConfigured()) {
-          await safeSend(metadata, "Billing is not configured on this instance.");
-          return;
-        }
-
         const { getLicenseState } = await import("../../billing/license.js");
         const { TIER_LIMITS, PRO_PRICE_DISPLAY } = await import("../../billing/config.js");
         const licState = getLicenseState();
@@ -2799,11 +2912,16 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         try {
-          const { url } = await createCheckoutSession(email);
+          const { createCheckoutViaRelay } = await import("../../billing/relay-proxy.js");
+          const result = await createCheckoutViaRelay(email);
+          if (!result) {
+            await safeSend(metadata, "Unable to create checkout. Please check your connection and try again.");
+            return;
+          }
           await safeKeyboard(
             metadata,
             `Checkout ready for ${email}.\nComplete your upgrade:`,
-            [[{ label: "Open Checkout", url }]],
+            [[{ label: "Open Checkout", url: result.url }]],
           );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -2813,12 +2931,6 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       }
 
       case "billing": {
-        const { isBillingConfigured, createPortalSession } = await import("../../billing/stripe.js");
-        if (!isBillingConfigured()) {
-          await safeSend(metadata, "Billing is not configured on this instance.");
-          return;
-        }
-
         const subCommand = rest[0]?.toLowerCase();
 
         // /billing events — show recent billing event log
@@ -2851,12 +2963,12 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
-        // /billing portal — open Stripe Customer Portal
+        // /billing portal — open Stripe Customer Portal via relay
         if (subCommand === "portal") {
           const { getSubscription } = await import("../../billing/store.js");
           const subscription = getSubscription();
 
-          if (!subscription) {
+          if (!subscription?.customer_id) {
             await safeKeyboard(
               metadata,
               "No active subscription.\nUpgrade to Pro to access the billing portal.",
@@ -2869,12 +2981,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           }
 
           try {
-            const { url } = await createPortalSession(subscription.customer_id);
+            const { createPortalViaRelay } = await import("../../billing/relay-proxy.js");
+            const result = await createPortalViaRelay(subscription.customer_id);
+            if (!result) {
+              await safeSend(metadata, "Unable to open billing portal. Please check your connection and try again.");
+              return;
+            }
             await safeKeyboard(
               metadata,
               "Manage your subscription, payment method, and invoices:",
               [
-                [{ label: "Open Billing Portal", url }],
+                [{ label: "Open Billing Portal", url: result.url }],
                 [{ label: "« Billing", data: "/billing" }],
               ],
             );
@@ -2928,67 +3045,31 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       }
 
       case "cancel": {
-        const { isBillingConfigured, cancelSubscription } = await import("../../billing/stripe.js");
-        if (!isBillingConfigured()) {
-          await safeSend(metadata, "Billing is not configured on this instance.");
-          return;
-        }
-
-        const { getLicenseState } = await import("../../billing/license.js");
+        // Redirect to billing portal — handles cancellation, downgrades,
+        // and payment method changes via Stripe's hosted UI.
         const { getSubscription } = await import("../../billing/store.js");
-
-        const licState = getLicenseState();
         const subscription = getSubscription();
 
-        if (!subscription || licState.tier === "free") {
-          await safeSend(metadata, "No active subscription to cancel.");
-          return;
-        }
-
-        const periodEnd = subscription.current_period_end
-          ? new Date(toMs(subscription.current_period_end)).toLocaleDateString()
-          : "end of billing period";
-
-        if (subscription.cancel_at_period_end) {
-          await safeSend(metadata, `Subscription is already set to cancel on ${periodEnd}.`);
-          return;
-        }
-
-        const confirmArg = rest[0]?.toLowerCase();
-        if (confirmArg !== "confirm") {
-
-          await safeKeyboard(
-            metadata,
-            [
-              `Cancel your ${licState.label} subscription?`,
-              "",
-              `You'll keep access until ${periodEnd}.`,
-              "After that, your plan reverts to Community (free).",
-            ].join("\n"),
-            [
-              [
-                { label: "Yes, Cancel", data: "/cancel confirm" },
-                { label: "Keep Subscription", data: "/billing" },
-              ],
-            ],
-          );
+        if (!subscription?.customer_id) {
+          await safeSend(metadata, "No active subscription. Use /upgrade to subscribe.");
           return;
         }
 
         try {
-          const { cancelAt } = await cancelSubscription(subscription.id);
-          const endDisplay = cancelAt
-            ? new Date(toMs(cancelAt)).toLocaleDateString()
-            : "end of billing period";
-
+          const { createPortalViaRelay } = await import("../../billing/relay-proxy.js");
+          const result = await createPortalViaRelay(subscription.customer_id);
+          if (!result) {
+            await safeSend(metadata, "Unable to open billing portal. Please check your connection and try again.");
+            return;
+          }
           await safeKeyboard(
             metadata,
-            `Subscription canceled. You keep ${licState.label} access until ${endDisplay}.`,
-            [[{ label: "« Billing", data: "/billing" }]],
+            "Manage or cancel your subscription in the billing portal:",
+            [[{ label: "Open Billing Portal", url: result.url }]],
           );
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          await safeSend(metadata, `Cancel failed: ${msg}`);
+          await safeSend(metadata, `Portal failed: ${msg}`);
         }
         return;
       }

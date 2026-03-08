@@ -2,7 +2,7 @@
 // Cross-platform OS service management for the Jeriko daemon.
 
 import { getLogger } from "../../shared/logger.js";
-import { getDataDir } from "../../shared/config.js";
+import { getDataDir, getDaemonPort } from "../../shared/config.js";
 import type { Platform } from "../../shared/types.js";
 import * as path from "node:path";
 import * as os from "node:os";
@@ -117,7 +117,7 @@ export function getDefaultServiceConfig(): ServiceConfig {
 
   return {
     binaryPath: process.argv[0] ?? "jeriko",
-    port: Number(process.env.JERIKO_PORT) || 3000,
+    port: getDaemonPort(),
     envFilePath: path.join(dataDir, "daemon.env"),
     label: "ai.jeriko.daemon",
     workDir: os.homedir(),

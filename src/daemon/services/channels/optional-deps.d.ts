@@ -10,3 +10,14 @@ declare module "qrcode-terminal" {
   ): void;
   export function setErrorLevel(level: string): void;
 }
+
+declare module "qrcode" {
+  export function toBuffer(
+    data: string,
+    opts?: { type?: string; width?: number; margin?: number },
+  ): Promise<Buffer>;
+  export function toString(
+    data: string,
+    opts?: { type?: string; width?: number; margin?: number },
+  ): Promise<string>;
+}

@@ -17,6 +17,7 @@ import {
   formatError,
 } from "../format.js";
 import { t } from "../theme.js";
+import { openInBrowser } from "../lib/open-browser.js";
 import { renderQRText } from "../../daemon/services/channels/lifecycle.js";
 
 export interface ConnectorCommandContext {
@@ -51,6 +52,26 @@ function launchWizard(ctx: ConnectorCommandContext, config: WizardConfig): void 
   ctx.dispatch({ type: "SET_PHASE", phase: "wizard" });
 }
 
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+/** Telegram bot token: numeric bot ID + colon + 30+ alphanumeric chars. */
+const TELEGRAM_TOKEN_PATTERN = /^\d+:[A-Za-z0-9_-]{30,}$/;
+
+/**
+ * Validate a Telegram bot token format.
+ * @returns Error message if invalid, `undefined` if valid.
+ */
+function validateTelegramToken(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.length < 10) return "Token too short";
+  if (!TELEGRAM_TOKEN_PATTERN.test(trimmed)) {
+    return "Invalid Telegram token format. Expected: 123456789:ABCDefgh...";
+  }
+  return undefined;
+}
+
 // Available channels for the picker
 const CHANNEL_OPTIONS = [
   { value: "telegram", label: "Telegram", hint: "Bot via BotFather" },
@@ -71,9 +92,15 @@ function buildQRCallbacks(addSystemMessage: (content: string) => void): ChannelA
       qrSent = true;
       const rendered = await renderQRText(qr);
       if (rendered) {
-        addSystemMessage(
-          `${t.bold("Scan this QR code with WhatsApp → Linked Devices → Link a Device:")}\n\n${rendered}`,
-        );
+        addSystemMessage([
+          t.bold("Scan this QR code to link a WhatsApp account as your AI agent:"),
+          "",
+          t.muted("  Use a second phone/SIM — this number becomes the bot."),
+          t.muted("  Open WhatsApp on that phone → Linked Devices → Link a Device"),
+          t.muted("  Then message that number from your main WhatsApp."),
+          "",
+          rendered,
+        ].join("\n"));
       } else {
         addSystemMessage(t.muted("QR code received but could not render. Check daemon terminal."));
       }
@@ -163,6 +190,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
               if (!result.ok) {
                 addSystemMessage(formatError(result.error ?? `Failed to connect "${selected}"`));
               } else if (result.status === "oauth_required" && result.loginUrl) {
+                openInBrowser(result.loginUrl);
                 addSystemMessage(
                   t.blue(`Connect ${result.label ?? selected}:\n`) +
                   t.underline(result.loginUrl) + "\n" +
@@ -186,6 +214,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
       } else if (result.status === "already_connected") {
         addSystemMessage(t.muted(`${svcName} is already connected. Use /disconnect ${svcName} to remove it first.`));
       } else if (result.status === "oauth_required" && result.loginUrl) {
+        openInBrowser(result.loginUrl);
         addSystemMessage(
           t.blue(`Connect ${result.label ?? svcName}:\n`) +
           t.underline(result.loginUrl) + "\n" +
@@ -199,6 +228,32 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
     async disconnect(args: string): Promise<void> {
       if (!requireDaemon(ctx, "Connectors")) return;
       const svcName = args.trim();
+
+      // With a direct name → validate it exists before calling backend
+      if (svcName) {
+        try {
+          const connectors = await backend.listConnectors();
+          const channels = await backend.listChannels();
+          const knownNames = new Set([
+            ...connectors.map((c) => c.name),
+            ...channels.map((ch) => ch.name),
+          ]);
+          if (!knownNames.has(svcName)) {
+            addSystemMessage(formatError(`Unknown service "${svcName}". Use /connectors to see available services.`));
+            return;
+          }
+        } catch {
+          // Can't validate — proceed anyway, backend will report error
+        }
+
+        const result = await backend.disconnectService(svcName);
+        if (!result.ok) {
+          addSystemMessage(formatError(result.error ?? `Failed to disconnect "${svcName}"`));
+        } else {
+          addSystemMessage(t.green(`\u2713 ${result.label ?? svcName} disconnected`));
+        }
+        return;
+      }
 
       // No arg → interactive picker of connected services
       if (!svcName) {
@@ -236,13 +291,6 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
           addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
         }
         return;
-      }
-
-      const result = await backend.disconnectService(svcName);
-      if (!result.ok) {
-        addSystemMessage(formatError(result.error ?? `Failed to disconnect "${svcName}"`));
-      } else {
-        addSystemMessage(t.green(`\u2713 ${result.label ?? svcName} disconnected`));
       }
     },
 
@@ -348,7 +396,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
           return;
         }
         if (channelName === "whatsapp") {
-          addSystemMessage(t.muted("Connecting WhatsApp — QR code will appear shortly..."));
+          addSystemMessage(t.muted("Connecting WhatsApp — a QR code will appear shortly..."));
           const result = await backend.addChannel(channelName, { enabled: true }, buildQRCallbacks(addSystemMessage));
           if (result.ok) {
             addSystemMessage(t.green(`\u2713 Channel "whatsapp" added and connected`));
@@ -366,7 +414,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
                 type: "text",
                 message: "Enter your Telegram bot token (from @BotFather):",
                 placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-                validate: (v) => v.length < 10 ? "Token too short" : undefined,
+                validate: validateTelegramToken,
               },
             ],
             onComplete: async ([token]) => {
@@ -501,7 +549,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
       onComplete: async ([channelName]) => {
         dispatch({ type: "SET_PHASE", phase: "idle" });
         if (channelName === "whatsapp") {
-          addSystemMessage(t.muted("Connecting WhatsApp — QR code will appear shortly..."));
+          addSystemMessage(t.muted("Connecting WhatsApp — a QR code will appear shortly..."));
           const result = await backend.addChannel("whatsapp", { enabled: true }, buildQRCallbacks(addSystemMessage));
           if (result.ok) {
             addSystemMessage(t.green(`\u2713 Channel "whatsapp" added and connected`));
@@ -517,7 +565,7 @@ export function createConnectorHandlers(ctx: ConnectorCommandContext) {
                 type: "text",
                 message: "Enter your Telegram bot token (from @BotFather):",
                 placeholder: "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
-                validate: (v) => v.length < 10 ? "Token too short" : undefined,
+                validate: validateTelegramToken,
               },
             ],
             onComplete: async ([token]) => {

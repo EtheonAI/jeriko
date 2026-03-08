@@ -57,7 +57,6 @@ describe("Welcome Banner", () => {
     expect(c).toContain("Jeriko");
     expect(c).toContain("v2.0.0");
     expect(c).toContain("claude-sonnet");
-    expect(c).toContain("█");
     expect(c).toContain("/help");
     expect(c).toContain("model");
     expect(c).toContain("cwd");

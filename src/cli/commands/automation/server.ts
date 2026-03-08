@@ -12,6 +12,7 @@ import {
   cleanupPidFile,
   spawnDaemon,
 } from "../../lib/daemon.js";
+import { JERIKO_DEFAULT_PORT } from "../../../shared/config.js";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
@@ -30,7 +31,7 @@ export const command: CommandHandler = {
       console.log("  status            Show daemon status");
       console.log("  logs              Tail daemon logs");
       console.log("\nFlags:");
-      console.log("  --port <n>        HTTP port (default: 3000)");
+      console.log(`  --port <n>        HTTP port (default: ${JERIKO_DEFAULT_PORT})`);
       console.log("  --foreground      Run in foreground (don't daemonize)");
       console.log("  --log-level <l>   Log level (debug|info|warn|error)");
       process.exit(0);
@@ -46,7 +47,7 @@ export const command: CommandHandler = {
           return;
         }
 
-        const port = flagStr(parsed, "port", "3000");
+        const port = flagStr(parsed, "port", String(JERIKO_DEFAULT_PORT));
         const foreground = flagBool(parsed, "foreground");
         const logLevel = flagStr(parsed, "log-level", "info");
 

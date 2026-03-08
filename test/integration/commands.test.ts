@@ -275,7 +275,7 @@ describe("HTTP: /oauth", () => {
     expect(location).toContain("gmail");
   });
 
-  it("GET /oauth/vercel/start includes PKCE", async () => {
+  it("GET /oauth/vercel/start uses PKCE but no scopes", async () => {
     if (!process.env.VERCEL_OAUTH_CLIENT_ID) {
       console.log("  [skip] VERCEL_OAUTH_CLIENT_ID not set");
       return;
@@ -288,6 +288,7 @@ describe("HTTP: /oauth", () => {
     const location = res.headers.get("Location")!;
     expect(location).toContain("vercel.com/oauth/authorize");
     expect(location).toContain("code_challenge=");
+    expect(location).not.toContain("scope=");
   });
 
   it("callback with invalid state returns 400", async () => {

@@ -95,7 +95,7 @@ jeriko server --start
 node server/index.js
 ```
 
-The server listens on port 3000 by default. Set `PROXY_PORT` in `.env` to change it.
+The server listens on port 7741 by default. Set `JERIKO_PORT` in `.env` to change it.
 
 ### Required Environment Variables
 
@@ -106,7 +106,7 @@ Create a `.env` file in the project root:
 NODE_AUTH_SECRET=your-random-secret-here   # HMAC key for token generation (REQUIRED)
 
 # Optional
-PROXY_PORT=3000                            # default: 3000
+JERIKO_PORT=7741                           # default: 7741
 DEFAULT_NODE=local                         # default target when no @prefix used
 AI_BACKEND=claude-code                     # local AI backend: claude-code, claude, openai, local
 
@@ -127,16 +127,16 @@ Remote nodes need to reach the hub over the network. Options:
 
 | Method | Command/Config | When to Use |
 |--------|---------------|-------------|
-| Direct | Open port 3000 on firewall | VPS with public IP |
-| Reverse proxy | nginx/caddy in front of port 3000 | Production, TLS termination |
+| Direct | Open port 7741 on firewall | VPS with public IP |
+| Reverse proxy | nginx/caddy in front of port 7741 | Production, TLS termination |
 | Tunnel | `cloudflared tunnel`, `ngrok`, `bore` | Development, behind NAT |
-| SSH tunnel | `ssh -R 3000:localhost:3000 vps` | Quick ad-hoc access |
+| SSH tunnel | `ssh -R 7741:localhost:7741 vps` | Quick ad-hoc access |
 
 For WebSocket support, ensure your reverse proxy passes the `Upgrade` header. Example nginx config:
 
 ```nginx
 location /ws {
-    proxy_pass http://127.0.0.1:3000;
+    proxy_pass http://127.0.0.1:7741;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -145,7 +145,7 @@ location /ws {
 }
 
 location / {
-    proxy_pass http://127.0.0.1:3000;
+    proxy_pass http://127.0.0.1:7741;
     proxy_set_header Host $host;
     proxy_set_header X-Real-IP $remote_addr;
 }
@@ -628,7 +628,7 @@ openssl rand -hex 32
 # Create .env
 cat > .env <<'EOF'
 NODE_AUTH_SECRET=a7f3e2d1c4b5...
-PROXY_PORT=3000
+JERIKO_PORT=7741
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...
 ADMIN_TELEGRAM_IDS=12345678
 AI_BACKEND=claude
@@ -637,7 +637,7 @@ EOF
 
 # Start the hub
 npm start
-# [server] Jeriko proxy running on port 3000
+# [server] Jeriko daemon running on port 7741
 ```
 
 Set up a reverse proxy (nginx/caddy) with TLS for `Jeriko.yourdomain.com`.

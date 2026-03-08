@@ -1,7 +1,7 @@
 // Storage — SQLite database lifecycle (init, migrate, close).
 
 import { Database } from "bun:sqlite";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { MIGRATIONS } from "./migrations.js";
@@ -14,6 +14,9 @@ const DATA_DIR = join(homedir(), ".jeriko", "data");
 /** Database file path. */
 const DB_PATH = join(DATA_DIR, "jeriko.db");
 
+/** SQLite WAL-mode companion file extensions. */
+const JOURNAL_EXTENSIONS = ["-wal", "-shm"] as const;
+
 // ─── Singleton ──────────────────────────────────────────────────────────────
 
 let _db: Database | null = null;
@@ -22,6 +25,7 @@ let _db: Database | null = null;
  * Create and configure a new SQLite database connection.
  *
  * - Creates the data directory if it does not exist.
+ * - Cleans up orphaned WAL/SHM journals (prevents "disk I/O error").
  * - Opens (or creates) the database file.
  * - Applies PRAGMA settings for performance and safety.
  * - Runs any pending migrations.
@@ -34,6 +38,11 @@ export function initDatabase(dbPath: string = DB_PATH): Database {
   if (!existsSync(dir)) {
     mkdirSync(dir, { recursive: true });
   }
+
+  // Proactively clean up orphaned journal files before opening.
+  // When a WAL-mode DB file is deleted but -wal/-shm remain,
+  // SQLite cannot reconcile them and throws "disk I/O error".
+  cleanOrphanedJournals(dbPath);
 
   const db = new Database(dbPath, { create: true });
 
@@ -51,6 +60,33 @@ export function initDatabase(dbPath: string = DB_PATH): Database {
   _db = db;
 
   return db;
+}
+
+/**
+ * Remove orphaned SQLite WAL/SHM journal files before opening.
+ *
+ * Journals are orphaned when the main DB file is completely missing
+ * but companion `-wal` and `-shm` files remain from a previous session.
+ * This causes "disk I/O error" (SQLITE_IOERR_SHORT_READ) because SQLite
+ * cannot reconcile WAL entries against a non-existent database.
+ *
+ * We ONLY clean when the DB file does not exist. If the DB file exists
+ * (any size, including header-only), the WAL may contain valid uncommitted
+ * data that hasn't been checkpointed yet. SQLite in WAL mode keeps the
+ * main file small and stores active data in the WAL — deleting it
+ * would destroy data.
+ */
+function cleanOrphanedJournals(dbPath: string): void {
+  // If the DB file exists, the WAL/SHM may contain valid data — leave them
+  if (existsSync(dbPath)) return;
+
+  // DB file is missing — any remaining journals are orphaned
+  for (const ext of JOURNAL_EXTENSIONS) {
+    const journalPath = dbPath + ext;
+    if (existsSync(journalPath)) {
+      try { unlinkSync(journalPath); } catch { /* race — non-fatal */ }
+    }
+  }
 }
 
 /**
@@ -107,11 +143,19 @@ export function runMigrations(db: Database): void {
 /**
  * Close the shared database connection and release the singleton.
  *
+ * Forces a TRUNCATE checkpoint before closing to ensure all WAL data
+ * is merged into the main DB file. This prevents stale WAL/SHM files
+ * from causing "disk I/O error" on the next open.
+ *
  * Safe to call multiple times — subsequent calls are no-ops.
  * After closing, the next `getDatabase()` call will re-open a fresh connection.
  */
 export function closeDatabase(): void {
   if (_db !== null) {
+    // Merge all WAL data into the main DB and truncate the WAL file.
+    // Without this, stale WAL/SHM files may remain after close and
+    // cause SQLITE_IOERR_SHORT_READ on the next connection.
+    try { _db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* DB may not be in WAL mode */ }
     _db.close();
     _db = null;
   }

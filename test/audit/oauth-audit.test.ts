@@ -99,10 +99,10 @@ describe("Audit: Provider config completeness", () => {
     expect(names).toEqual(["notion", "stripe"]);
   });
 
-  it("providers without refresh tokens are GitHub, Shopify, Slack, Notion, Linear", () => {
+  it("providers without refresh tokens are GitHub, Instagram, Threads, Shopify, Notion, Linear", () => {
     const noRefresh = OAUTH_PROVIDERS.filter((p) => !p.refreshTokenEnvVar);
     const names = noRefresh.map((p) => p.name).sort();
-    expect(names).toEqual(["github", "linear", "notion", "shopify", "slack"]);
+    expect(names).toEqual(["github", "instagram", "linear", "notion", "shopify", "threads"]);
   });
 
   it("provider names are unique", () => {
@@ -627,11 +627,11 @@ describe("Audit: State parameter security", () => {
   });
 
   it("composite state embeds userId and token", () => {
-    const token = generateState("github", "chat1", "cli", "user-abc-123");
+    const token = generateState("github", "chat1", "cli", "abcdef0123456789abcdef0123456789");
     expect(token).toContain(".");
     const parsed = parseCompositeState(token);
     expect(parsed).not.toBeNull();
-    expect(parsed!.userId).toBe("user-abc-123");
+    expect(parsed!.userId).toBe("abcdef0123456789abcdef0123456789");
     expect(parsed!.token).toMatch(/^[0-9a-f]{64}$/);
     // consumeState handles composite tokens
     const entry = consumeState(token);
@@ -640,7 +640,7 @@ describe("Audit: State parameter security", () => {
   });
 
   it("composite state consumed correctly prevents replay", () => {
-    const token = generateState("github", "chat1", "cli", "user-xyz");
+    const token = generateState("github", "chat1", "cli", "abcdef0123456789abcdef0123456780");
     expect(consumeState(token)).not.toBeNull();
     expect(consumeState(token)).toBeNull();
   });
@@ -661,7 +661,7 @@ describe("Audit: State parameter security", () => {
     expect(plainEntry!.codeVerifier).toBe("verifier_plain");
 
     // Composite
-    const compositeToken = generateState("vercel", "c2", "telegram", "user-1");
+    const compositeToken = generateState("vercel", "c2", "telegram", "abcdef0123456789abcdef0123456781");
     setCodeVerifier(compositeToken, "verifier_composite");
     const compositeEntry = consumeState(compositeToken);
     expect(compositeEntry!.codeVerifier).toBe("verifier_composite");
@@ -931,14 +931,14 @@ describe("Audit: hasLocalSecret", () => {
 
 describe("Audit: Composite state helpers", () => {
   it("buildCompositeState creates userId.token format", () => {
-    const result = buildCompositeState("user-123", "abcdef");
-    expect(result).toBe("user-123.abcdef");
+    const result = buildCompositeState("abcdef0123456789abcdef0123456789", "abcdef");
+    expect(result).toBe("abcdef0123456789abcdef0123456789.abcdef");
   });
 
   it("parseCompositeState parses correctly", () => {
-    const parsed = parseCompositeState("user-abc.token123");
+    const parsed = parseCompositeState("abcdef0123456789abcdef0123456789.token123");
     expect(parsed).not.toBeNull();
-    expect(parsed!.userId).toBe("user-abc");
+    expect(parsed!.userId).toBe("abcdef0123456789abcdef0123456789");
     expect(parsed!.token).toBe("token123");
   });
 
@@ -974,9 +974,10 @@ describe("Audit: Relay PROVIDER_CREDENTIAL_MAP coverage", () => {
     // We verify by listing expected entries from our reading of the file.
     const expectedRelayProviders = [
       "stripe", "github", "x", "gdrive", "gmail", "onedrive", "outlook",
-      "vercel", "hubspot", "shopify", "slack", "discord", "square", "gitlab",
-      "digitalocean", "notion", "linear", "jira", "airtable", "asana",
-      "mailchimp", "dropbox", "salesforce",
+      "vercel", "hubspot", "shopify", "instagram", "threads",
+      "square", "gitlab",
+      "notion", "linear", "jira", "airtable", "asana",
+      "mailchimp", "dropbox", "discord",
     ];
     const oauthProviderNames = OAUTH_PROVIDERS.map((p) => p.name).sort();
     expect(expectedRelayProviders.sort()).toEqual(oauthProviderNames);

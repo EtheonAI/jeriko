@@ -22,6 +22,8 @@ import {
   TOKEN_EXCHANGE_PROVIDERS,
   exchangeCodeForTokens,
   refreshAccessToken,
+  buildAuthorizationUrl,
+  type TokenExchangeProvider,
 } from "../../../../src/shared/oauth-exchange.js";
 import type {
   RelayOAuthCallbackMessage,
@@ -164,24 +166,54 @@ export function createOAuthRoutes(
   });
 
   /**
-   * GET /oauth/:provider/start?state=userId.token — Forward to daemon.
+   * GET /oauth/:provider/start?state=userId.token — Build auth URL and redirect.
    *
-   * The daemon has the OAuth client_id and builds the authorization URL
-   * locally. We forward the request via WebSocket and redirect the browser
-   * to the provider's consent page. userId is extracted from composite state.
+   * Two modes:
+   *   1. Relay-side (default): Relay has client_id → builds auth URL directly,
+   *      stores PKCE verifier if needed, redirects browser to provider's consent page.
+   *   2. Daemon-side (fallback): Relay doesn't have credentials → forwards to daemon
+   *      via WebSocket, daemon builds auth URL and returns redirect URL.
    *
-   * When the daemon responds with a codeVerifier (PKCE), we store it in
-   * pendingPKCE keyed by the state token for use in /callback.
+   * Relay-side is preferred because it works even when baked client IDs in the
+   * binary are empty (common in dev builds).
    */
   router.get("/:provider/start", async (c) => {
     const provider = c.req.param("provider");
     const userId = extractUserId(c);
     const stateToken = extractStateToken(c);
+    const compositeState = new URL(c.req.url).searchParams.get("state") ?? "";
 
     if (!userId) {
       return c.html(errorHtml("Missing or invalid state parameter."), 400);
     }
 
+    // Attempt relay-side auth URL building (relay owns the client credentials)
+    const credentials = getRelayOAuthCredentials(provider, env);
+    const providerConfig = TOKEN_EXCHANGE_PROVIDERS.get(provider);
+
+    if (credentials && providerConfig) {
+      // Relay has credentials — build the auth URL directly
+      const redirectUri = `https://bot.jeriko.ai/oauth/${provider}/callback`;
+      // Build provider-specific context from query params (e.g. ?shop=mystore for Shopify)
+      const urlParams = new URL(c.req.url).searchParams;
+      const context: Record<string, string> = {};
+      for (const [key, value] of urlParams) {
+        if (key !== "state") context[key] = value;
+      }
+      const result = await buildAuthorizationUrl(providerConfig, credentials.clientId, redirectUri, compositeState, Object.keys(context).length > 0 ? context : undefined);
+
+      // Store PKCE verifier for use in /callback
+      if (result.codeVerifier && stateToken) {
+        pendingPKCE.set(stateToken, {
+          codeVerifier: result.codeVerifier,
+          createdAt: Date.now(),
+        });
+      }
+
+      return c.redirect(result.url, 302);
+    }
+
+    // Fallback: forward to daemon (daemon builds auth URL with its own client ID)
     const conn = connections.getConnection(userId);
     if (!conn) {
       return c.html(
@@ -190,7 +222,6 @@ export function createOAuthRoutes(
       );
     }
 
-    // Guard against flooding
     if (pendingCallbacks.size >= RELAY_MAX_PENDING_OAUTH) {
       return c.html(
         errorHtml(ERROR_MESSAGES.too_many_requests),
@@ -198,7 +229,6 @@ export function createOAuthRoutes(
       );
     }
 
-    // Collect all query parameters
     const params: Record<string, string> = {};
     for (const [key, value] of new URL(c.req.url).searchParams) {
       params[key] = value;
@@ -213,7 +243,6 @@ export function createOAuthRoutes(
       params,
     };
 
-    // Create a promise that resolves when daemon responds or times out
     const resultPromise = new Promise<RelayOAuthResultMessage>((resolve) => {
       const timer = setTimeout(() => {
         pendingCallbacks.delete(requestId);
@@ -243,19 +272,14 @@ export function createOAuthRoutes(
 
     const result = await resultPromise;
 
-    // Store PKCE verifier keyed by state token (for /callback lookup).
-    // resolveOAuthCallback already stored it by requestId; we also store
-    // by state token since /callback only has the state, not the requestId.
     if (result.codeVerifier && stateToken) {
       pendingPKCE.set(stateToken, {
         codeVerifier: result.codeVerifier,
         createdAt: Date.now(),
       });
-      // Clean up the requestId-keyed entry
       pendingPKCE.delete(requestId);
     }
 
-    // Daemon returned a redirect URL — issue a 302 to the provider
     if (result.redirectUrl) {
       return c.redirect(result.redirectUrl, 302);
     }
@@ -307,6 +331,14 @@ export function createOAuthRoutes(
     const exchangeProvider = TOKEN_EXCHANGE_PROVIDERS.get(provider);
 
     if (credentials && exchangeProvider) {
+      // Build provider-specific context from query params (e.g. ?shop=mystore for Shopify)
+      const callbackContext: Record<string, string> = {};
+      for (const [key, value] of url.searchParams) {
+        if (key !== "state" && key !== "code" && key !== "error" && key !== "error_description") {
+          callbackContext[key] = value;
+        }
+      }
+
       // Relay has credentials — do the exchange here
       return handleRelayExchange(c, {
         provider,
@@ -317,6 +349,7 @@ export function createOAuthRoutes(
         exchangeProvider,
         connections,
         pendingPKCE,
+        context: Object.keys(callbackContext).length > 0 ? callbackContext : undefined,
       });
     }
 
@@ -409,16 +442,18 @@ interface RelayExchangeContext {
   code: string;
   stateToken: string | null;
   credentials: { clientId: string; clientSecret: string };
-  exchangeProvider: { name: string; tokenUrl: string; tokenExchangeAuth: "body" | "basic"; extraTokenParams?: Record<string, string> };
+  exchangeProvider: TokenExchangeProvider;
   connections: ConnectionManager;
   pendingPKCE: Map<string, PendingPKCE>;
+  /** Provider-specific context for URL placeholder resolution (e.g. {shop} for Shopify). */
+  context?: Record<string, string>;
 }
 
 async function handleRelayExchange(
   c: { html: (html: string, status: ContentfulStatusCode) => Response | Promise<Response> },
   ctx: RelayExchangeContext,
 ): Promise<Response | Promise<Response>> {
-  const { provider, userId, code, stateToken, credentials, exchangeProvider, connections, pendingPKCE } = ctx;
+  const { provider, userId, code, stateToken, credentials, exchangeProvider, connections, pendingPKCE, context } = ctx;
 
   // Look up PKCE verifier if stored during /start
   let codeVerifier: string | undefined;
@@ -442,6 +477,7 @@ async function handleRelayExchange(
       clientId: credentials.clientId,
       clientSecret: credentials.clientSecret,
       codeVerifier,
+      context,
     });
 
     // Send tokens to daemon via WebSocket

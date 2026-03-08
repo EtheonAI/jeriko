@@ -19,6 +19,10 @@ import {
   formatError,
 } from "../format.js";
 import { t } from "../theme.js";
+import { validateApiKey, BUILT_IN_PROVIDER_IDS, MIN_API_KEY_LENGTH } from "../lib/setup.js";
+import { getProviderAuth, getOAuthConfig, hasOAuth } from "../lib/provider-auth.js";
+import { runOAuthFlow } from "../lib/oauth-flow.js";
+import { verifyApiKey } from "../wizard/verify.js";
 
 export interface ModelCommandContext {
   backend: Backend;
@@ -71,7 +75,7 @@ function buildPickerOptions(
   }
 
   const options: Array<{ value: string; label: string; hint: string }> = [];
-  const builtIn = new Set(["anthropic", "openai", "local"]);
+  const builtIn = BUILT_IN_PROVIDER_IDS;
 
   // Section 1: Models from configured providers
   for (const [provider, providerModels] of byProvider) {
@@ -85,7 +89,9 @@ function buildPickerOptions(
     });
 
     for (const m of sorted.slice(0, 5)) {
-      const modelSpec = builtIn.has(provider) ? m.id : `${provider}:${m.id}`;
+      // Always use provider:model format so parseModelSpec() can resolve the driver.
+      // Bare model IDs like "gpt-5.3-codex" cause "Unknown LLM backend" errors.
+      const modelSpec = `${provider}:${m.id}`;
       const hints: string[] = [provider];
       if (m.contextWindow) hints.push(`${Math.round(m.contextWindow / 1000)}k`);
       if (m.supportsReasoning) hints.push("reasoning");
@@ -93,7 +99,7 @@ function buildPickerOptions(
 
       options.push({
         value: modelSpec,
-        label: modelSpec,
+        label: m.id,
         hint: hints.join(" \u00B7 "),
       });
     }
@@ -102,12 +108,13 @@ function buildPickerOptions(
   // Section 2: Unconfigured providers (available to connect)
   const available = providers.filter((p) => p.type === "available");
   for (const p of available.slice(0, 8)) {
+    const connectHint = hasOAuth(p.id) ? "sign in or API key" : "add API key";
     options.push({
       value: `__add__:${p.id}`,
       label: `+ ${p.name}`,
       hint: p.defaultModel
-        ? `add API key \u00B7 ${p.defaultModel}`
-        : "add API key",
+        ? `${connectHint} \u00B7 ${p.defaultModel}`
+        : connectHint,
     });
   }
 
@@ -122,50 +129,191 @@ function buildPickerOptions(
   return options;
 }
 
-/** Launch API key wizard for a provider, then auto-switch to its default model. */
+// ---------------------------------------------------------------------------
+// Connect + switch — OAuth-aware auth chain
+//
+// Flow: Auth method picker (if OAuth available) → OAuth or API key → connect
+// Follows the same composable chain pattern as system.ts onboarding.
+// ---------------------------------------------------------------------------
+
+/** Accumulated state for the connect flow. */
+interface ConnectState {
+  provider: ProviderInfo;
+  targetModel?: string;
+  apiKey?: string;
+}
+
+/**
+ * Connect a provider and switch to its model.
+ * Shows OAuth picker for providers that support it, otherwise straight to API key.
+ */
 function connectAndSwitch(
   ctx: ModelCommandContext,
   provider: ProviderInfo,
   targetModel?: string,
 ): void {
+  const state: ConnectState = { provider, targetModel };
+  const authDef = getProviderAuth(provider.id);
+
+  // Provider has multiple auth methods (e.g. OpenRouter: OAuth + API key)
+  if (authDef && authDef.choices.length > 1) {
+    launchWizard(ctx, {
+      title: `Connect ${provider.name}`,
+      steps: [
+        {
+          type: "select",
+          message: "How would you like to authenticate?",
+          options: authDef.choices.map((c) => ({
+            value: c.id,
+            label: c.label,
+            hint: c.hint,
+          })),
+        },
+      ],
+      onComplete: async ([choiceId]) => {
+        ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
+        const choice = authDef.choices.find((c) => c.id === choiceId);
+        if (!choice) return;
+
+        if (choice.method === "oauth-pkce") {
+          await connectOAuth(ctx, state);
+        } else {
+          connectApiKey(ctx, state);
+        }
+      },
+    });
+    return;
+  }
+
+  // No OAuth — straight to API key
+  connectApiKey(ctx, state);
+}
+
+/**
+ * OAuth flow — opens browser, waits for callback, then finalizes.
+ * Falls back to API key on failure.
+ */
+async function connectOAuth(ctx: ModelCommandContext, state: ConnectState): Promise<void> {
+  const oauthConfig = getOAuthConfig(state.provider.id);
+  if (!oauthConfig) {
+    ctx.addSystemMessage(formatError("OAuth not configured for this provider"));
+    connectApiKey(ctx, state);
+    return;
+  }
+
+  ctx.addSystemMessage(t.muted("Opening browser for authentication..."));
+
+  try {
+    const result = await runOAuthFlow({
+      authUrl: oauthConfig.authUrl,
+      tokenUrl: oauthConfig.tokenUrl,
+      clientId: oauthConfig.clientId,
+      pkce: oauthConfig.pkce,
+      scopes: oauthConfig.scopes,
+      extraAuthParams: oauthConfig.extraAuthParams,
+      responseKeyField: oauthConfig.responseKeyField,
+      callbackPort: oauthConfig.callbackPort,
+      useRelay: oauthConfig.useRelay,
+      relayProvider: oauthConfig.relayProvider,
+    });
+
+    state.apiKey = result.key;
+    ctx.addSystemMessage(t.green("\u2713 Authenticated successfully"));
+    await connectFinalize(ctx, state);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.addSystemMessage(formatError(`OAuth failed: ${msg}`));
+    ctx.addSystemMessage(t.muted("Falling back to API key input..."));
+    connectApiKey(ctx, state);
+  }
+}
+
+/**
+ * API key input with validation and verification.
+ */
+function connectApiKey(ctx: ModelCommandContext, state: ConnectState): void {
   launchWizard(ctx, {
-    title: `Connect ${provider.name}`,
+    title: `Connect ${state.provider.name}`,
     steps: [
       {
         type: "password",
-        message: `Enter your ${provider.name} API key:`,
-        validate: (v) => v.length < 5 ? "API key too short" : undefined,
+        message: `Enter your ${state.provider.name} API key`,
+        validate: (value) => {
+          if (!validateApiKey(value)) {
+            return value.trim().length < MIN_API_KEY_LENGTH
+              ? `API key must be at least ${MIN_API_KEY_LENGTH} characters`
+              : "API key must not contain whitespace";
+          }
+        },
       },
     ],
-    onComplete: async ([key]) => {
+    onComplete: async ([apiKey]) => {
       ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-      try {
-        const result = await ctx.backend.addProvider({
-          id: provider.id,
-          name: provider.name,
-          baseUrl: provider.baseUrl ?? "",
-          apiKey: key!,
-          defaultModel: provider.defaultModel,
-        });
+      const key = (apiKey ?? "").trim();
+      state.apiKey = key;
 
-        const modelSpec = targetModel ?? (
-          provider.defaultModel
-            ? `${provider.id}:${provider.defaultModel}`
-            : provider.id
-        );
-        ctx.dispatch({ type: "SET_MODEL", model: modelSpec });
-        await ctx.backend.updateSessionModel(modelSpec);
-
-        ctx.addSystemMessage(
-          `${t.green("\u2713")} ${t.blue(result.name)} connected \u2014 switched to ${t.blue(modelSpec)}`,
-        );
-      } catch (err) {
-        ctx.addSystemMessage(
-          formatError(err instanceof Error ? err.message : String(err)),
-        );
+      ctx.addSystemMessage(t.muted("Verifying API key..."));
+      const valid = await verifyApiKey(state.provider.id, key);
+      if (valid) {
+        ctx.addSystemMessage(t.green("\u2713 API key verified"));
+      } else {
+        ctx.addSystemMessage(t.warning("Could not verify key (continuing anyway)"));
       }
+
+      await connectFinalize(ctx, state);
     },
   });
+}
+
+/**
+ * Finalize connection — save API key, add provider config if needed, switch model.
+ *
+ * Built-in providers (anthropic, openai) already have native drivers. They only
+ * need their API key written to .env — no providers[] config entry. Custom/preset
+ * providers need a config entry so the daemon registers a driver for them at boot.
+ */
+async function connectFinalize(ctx: ModelCommandContext, state: ConnectState): Promise<void> {
+  const { provider, targetModel, apiKey } = state;
+
+  try {
+    const isBuiltIn = BUILT_IN_PROVIDER_IDS.has(provider.id);
+
+    if (isBuiltIn && apiKey && provider.envKey) {
+      // Built-in provider — just save the API key to .env and process.env.
+      // No config entry needed; the native driver is always registered.
+      const { writeEnvBatch } = await import("../wizard/onboarding.js");
+      const { join } = await import("node:path");
+      const { getConfigDir } = await import("../../shared/config.js");
+      const envPath = join(getConfigDir(), ".env");
+      writeEnvBatch(envPath, { [provider.envKey]: apiKey });
+      process.env[provider.envKey] = apiKey;
+    } else {
+      // Custom/preset provider — add a config entry so the daemon registers it.
+      await ctx.backend.addProvider({
+        id: provider.id,
+        name: provider.name,
+        baseUrl: provider.baseUrl ?? "",
+        apiKey: apiKey ?? "",
+        defaultModel: provider.defaultModel,
+      });
+    }
+
+    const modelSpec = targetModel ?? (
+      provider.defaultModel
+        ? `${provider.id}:${provider.defaultModel}`
+        : provider.id
+    );
+    ctx.dispatch({ type: "SET_MODEL", model: modelSpec });
+    await ctx.backend.updateSessionModel(modelSpec);
+
+    ctx.addSystemMessage(
+      `${t.green("\u2713")} ${t.blue(provider.name)} connected \u2014 switched to ${t.blue(modelSpec)}`,
+    );
+  } catch (err) {
+    ctx.addSystemMessage(
+      formatError(err instanceof Error ? err.message : String(err)),
+    );
+  }
 }
 
 /** Auto-connect a discovered provider (env var already set). */
@@ -213,13 +361,18 @@ async function handleAdd(ctx: ModelCommandContext, providerId?: string): Promise
         {
           type: "select",
           message: "Choose a provider to add:",
-          options: addable.map((p) => ({
-            value: p.id,
-            label: p.name,
-            hint: p.defaultModel
-              ? `${p.type === "discovered" ? "env detected" : "needs API key"} \u00B7 ${p.defaultModel}`
-              : p.type === "discovered" ? "env detected" : "needs API key",
-          })),
+          options: addable.map((p) => {
+            const authHint = p.type === "discovered"
+              ? "env detected"
+              : hasOAuth(p.id) ? "sign in or API key" : "needs API key";
+            return {
+              value: p.id,
+              label: p.name,
+              hint: p.defaultModel
+                ? `${authHint} \u00B7 ${p.defaultModel}`
+                : authHint,
+            };
+          }),
         },
       ],
       onComplete: async ([selected]) => {
@@ -280,7 +433,13 @@ async function handleAdd(ctx: ModelCommandContext, providerId?: string): Promise
       {
         type: "password",
         message: "Enter the API key:",
-        validate: (v) => v.length < 5 ? "API key too short" : undefined,
+        validate: (value) => {
+          if (!validateApiKey(value)) {
+            return value.trim().length < MIN_API_KEY_LENGTH
+              ? `API key must be at least ${MIN_API_KEY_LENGTH} characters`
+              : "API key must not contain whitespace";
+          }
+        },
       },
     ],
     onComplete: async ([url, key]) => {
@@ -306,8 +465,39 @@ async function handleAdd(ctx: ModelCommandContext, providerId?: string): Promise
 async function handleRemove(ctx: ModelCommandContext, removeId?: string): Promise<void> {
   const { backend, dispatch, addSystemMessage } = ctx;
 
+  const allProviders = await backend.listProviders();
+  const configured = allProviders.filter(
+    (p) => p.type === "built-in" || p.type === "custom" || p.type === "discovered",
+  );
+
+  /** Confirm before removing the last provider. Returns false if user aborts. */
+  async function confirmLastProvider(providerId: string): Promise<boolean> {
+    // Count active providers (built-in + custom + discovered), excluding the one being removed
+    const remaining = configured.filter((p) => p.id !== providerId);
+    if (remaining.length > 0) return true;
+
+    return new Promise((resolve) => {
+      launchWizard(ctx, {
+        title: "Remove Last Provider",
+        steps: [
+          {
+            type: "select",
+            message: "This is your only configured provider. Removing it means you can't chat. Continue?",
+            options: [
+              { value: "yes", label: "Yes, remove it" },
+              { value: "no", label: "Cancel" },
+            ],
+          },
+        ],
+        onComplete: async ([answer]) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          resolve(answer === "yes");
+        },
+      });
+    });
+  }
+
   if (!removeId) {
-    const allProviders = await backend.listProviders();
     const removable = allProviders.filter(
       (p) => p.type === "custom" || p.type === "discovered",
     );
@@ -330,14 +520,28 @@ async function handleRemove(ctx: ModelCommandContext, removeId?: string): Promis
       ],
       onComplete: async ([selected]) => {
         dispatch({ type: "SET_PHASE", phase: "idle" });
+        if (!selected) return;
+
+        const confirmed = await confirmLastProvider(selected);
+        if (!confirmed) {
+          addSystemMessage(t.muted("Removal cancelled."));
+          return;
+        }
+
         try {
-          await backend.removeProvider(selected!);
-          addSystemMessage(formatProviderRemoved(selected!));
+          await backend.removeProvider(selected);
+          addSystemMessage(formatProviderRemoved(selected));
         } catch (err) {
           addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
         }
       },
     });
+    return;
+  }
+
+  const confirmed = await confirmLastProvider(removeId);
+  if (!confirmed) {
+    addSystemMessage(t.muted("Removal cancelled."));
     return;
   }
 

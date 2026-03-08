@@ -6,7 +6,7 @@
 //   2. Relay (default): URLs include userId so bot.jeriko.ai can route
 //   3. Local dev (no userId, no public URL): URLs use localhost
 
-import { getUserId } from "./config.js";
+import { getUserId, JERIKO_DEFAULT_PORT } from "./config.js";
 import { DEFAULT_RELAY_URL, RELAY_URL_ENV } from "./relay-protocol.js";
 
 /** Default public base URL (relay server). */
@@ -97,7 +97,7 @@ export function buildWebhookUrl(triggerId: string, localBaseUrl?: string): strin
   }
 
   // Local dev fallback — use request-derived URL
-  const base = localBaseUrl ?? `http://127.0.0.1:${process.env.JERIKO_PORT ?? "3000"}`;
+  const base = localBaseUrl ?? `http://127.0.0.1:${process.env.JERIKO_PORT ?? JERIKO_DEFAULT_PORT}`;
   return `${base}/hooks/${triggerId}`;
 }
 

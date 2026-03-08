@@ -8,9 +8,11 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
 import {
   PROVIDER_OPTIONS,
+  PROVIDER_ENV_KEYS,
   getProviderOptions,
   needsSetup,
   validateApiKey,
+  validateUrl,
   type ProviderOption,
 } from "../../../src/cli/lib/setup.js";
 
@@ -118,10 +120,15 @@ describe("getProviderOptions()", () => {
     }
   });
 
-  test("preset providers all require API keys", () => {
+  test("preset providers have correct needsApiKey based on baseUrl", () => {
     const options = getProviderOptions();
     for (const p of options.slice(3)) {
-      expect(p.needsApiKey).toBe(true);
+      // Local servers (127.0.0.1/localhost) don't need API keys
+      if (p.id === "lmstudio") {
+        expect(p.needsApiKey).toBe(false);
+      } else {
+        expect(p.needsApiKey).toBe(true);
+      }
       expect(p.envKey.length).toBeGreaterThan(0);
     }
   });
@@ -181,49 +188,109 @@ describe("validateApiKey", () => {
 });
 
 // ---------------------------------------------------------------------------
+// validateUrl
+// ---------------------------------------------------------------------------
+
+describe("validateUrl", () => {
+  test("accepts valid http URL", () => {
+    expect(validateUrl("http://127.0.0.1:11434")).toBeUndefined();
+  });
+
+  test("accepts valid https URL", () => {
+    expect(validateUrl("https://api.example.com/v1")).toBeUndefined();
+  });
+
+  test("rejects empty string", () => {
+    expect(validateUrl("")).toBeDefined();
+    expect(validateUrl("   ")).toBeDefined();
+  });
+
+  test("rejects non-http protocol", () => {
+    expect(validateUrl("ftp://example.com")).toBeDefined();
+    expect(validateUrl("file:///etc/passwd")).toBeDefined();
+  });
+
+  test("rejects unparseable URL", () => {
+    expect(validateUrl("not a url")).toBeDefined();
+  });
+
+  test("trims whitespace", () => {
+    expect(validateUrl("  http://localhost:8080  ")).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PROVIDER_ENV_KEYS
+// ---------------------------------------------------------------------------
+
+describe("PROVIDER_ENV_KEYS", () => {
+  test("includes all built-in provider keys", () => {
+    expect(PROVIDER_ENV_KEYS).toContain("ANTHROPIC_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("OPENAI_API_KEY");
+  });
+
+  test("includes major preset provider keys", () => {
+    expect(PROVIDER_ENV_KEYS).toContain("GROQ_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("DEEPSEEK_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("OPENROUTER_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("GOOGLE_API_KEY");
+    expect(PROVIDER_ENV_KEYS).toContain("MISTRAL_API_KEY");
+  });
+
+  test("has no duplicates", () => {
+    const set = new Set(PROVIDER_ENV_KEYS);
+    expect(set.size).toBe(PROVIDER_ENV_KEYS.length);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // needsSetup
 // ---------------------------------------------------------------------------
 
 describe("needsSetup", () => {
-  // Save original env vars to restore after tests
-  let origAnthropic: string | undefined;
-  let origOpenAI: string | undefined;
+  // Save and restore ALL provider env vars to avoid test pollution
+  const savedEnvVars: Record<string, string | undefined> = {};
 
   beforeEach(() => {
-    origAnthropic = process.env.ANTHROPIC_API_KEY;
-    origOpenAI = process.env.OPENAI_API_KEY;
+    for (const key of PROVIDER_ENV_KEYS) {
+      savedEnvVars[key] = process.env[key];
+      delete process.env[key];
+    }
   });
 
   afterEach(() => {
-    // Restore original values
-    if (origAnthropic !== undefined) {
-      process.env.ANTHROPIC_API_KEY = origAnthropic;
-    } else {
-      delete process.env.ANTHROPIC_API_KEY;
-    }
-    if (origOpenAI !== undefined) {
-      process.env.OPENAI_API_KEY = origOpenAI;
-    } else {
-      delete process.env.OPENAI_API_KEY;
+    for (const key of PROVIDER_ENV_KEYS) {
+      if (savedEnvVars[key] !== undefined) {
+        process.env[key] = savedEnvVars[key];
+      } else {
+        delete process.env[key];
+      }
     }
   });
 
   test("returns false when ANTHROPIC_API_KEY is set", () => {
     process.env.ANTHROPIC_API_KEY = "sk-test-key-1234567890";
-    delete process.env.OPENAI_API_KEY;
     expect(needsSetup()).toBe(false);
   });
 
   test("returns false when OPENAI_API_KEY is set", () => {
-    delete process.env.ANTHROPIC_API_KEY;
     process.env.OPENAI_API_KEY = "sk-test-key-1234567890";
     expect(needsSetup()).toBe(false);
   });
 
-  test("returns false when both API keys are set", () => {
-    process.env.ANTHROPIC_API_KEY = "sk-test-key-1234567890";
-    process.env.OPENAI_API_KEY = "sk-test-key-1234567890";
+  test("returns false when GROQ_API_KEY is set", () => {
+    process.env.GROQ_API_KEY = "gsk-test-key-1234567890";
     expect(needsSetup()).toBe(false);
+  });
+
+  test("returns false when any provider key is set", () => {
+    // Test a sample of keys beyond the original two
+    for (const key of ["DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "XAI_API_KEY", "GOOGLE_API_KEY"]) {
+      // Clear all first
+      for (const k of PROVIDER_ENV_KEYS) delete process.env[k];
+      process.env[key] = "test-value";
+      expect(needsSetup()).toBe(false);
+    }
   });
 
   // Note: We can't easily test the "config file exists" path without

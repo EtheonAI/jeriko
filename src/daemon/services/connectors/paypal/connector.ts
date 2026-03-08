@@ -43,7 +43,7 @@ export class PayPalConnector extends ConnectorBase {
     this.clientSecret = clientSecret;
     this.webhookId = process.env.PAYPAL_WEBHOOK_ID ?? "";
 
-    if (process.env.PAYPAL_SANDBOX === "true") {
+    if (process.env.PAYPAL_SANDBOX === "true" || process.env.PAYPAL_MODE === "sandbox") {
       this._baseUrl = "https://api-m.sandbox.paypal.com";
     }
 

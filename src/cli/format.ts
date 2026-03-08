@@ -8,7 +8,7 @@
  */
 
 import { t, PALETTE, ICONS, BOX, sectionHeader, treeItem, kvPair, hint, statusDot, badge, subSection } from "./theme.js";
-import { buildMascot } from "./lib/mascot.js";
+import { buildMascotCompact } from "./lib/mascot.js";
 import { estimateModelCost, formatModelCost } from "./lib/cost.js";
 import type { ConnectorInfo, TriggerInfo, SkillInfo, ModelInfo, HistoryEntry, ProviderInfo, PlanInfo, SessionStats, SessionInfo, ShareInfo, TaskDef, NotificationPref, AuthStatus } from "./types.js";
 
@@ -249,60 +249,118 @@ export function formatError(message: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// Welcome banner — Claude Code-style bordered box with mascot
+// Welcome banner — Claude-Code-style bordered two-column box
 // ---------------------------------------------------------------------------
 
 /**
- * Render welcome banner: bordered box with centered mascot and info below.
- * Uses box-drawing characters (╭╮╰╯│─) for clean presentation.
+ * Render welcome banner: full-width bordered box with mascot (left)
+ * and info panel (right), separated by a vertical divider.
+ *
+ * Layout:
+ *   ╭─── Jeriko v2.1.0 ──────────────────────────────────────╮
+ *   │                          │                               │
+ *   │   (cat mascot)           │  model   claude-sonnet-4      │
+ *   │                          │  cwd     ~/projects/myapp     │
+ *   │                          │  ───────────────────────────  │
+ *   │                          │  /help commands · /new ...    │
+ *   │                          │                               │
+ *   ╰─────────────────────────────────────────────────────────╯
  */
 export function formatWelcome(version: string, model: string, cwd: string): string {
   const displayCwd = shortenHome(cwd);
-  const cat = buildMascot();
+  const mascot = buildMascotCompact();
+  const infoLines = buildInfoContent(model, displayCwd);
 
-  // Box width = mascot width + padding (4 each side)
-  const mascotWidth = Math.max(...cat.map((l) => stripAnsi(l).length));
-  const innerWidth = Math.max(mascotWidth + 8, 78);
+  return renderHeaderBox(version, mascot, infoLines);
+}
 
-  // ── Build rows ──
-  const titleText = ` Jeriko v${version} `;
-  const topAfter = BOX.h.repeat(Math.max(0, innerWidth - titleText.length - 3));
-  const topLine = t.dim(`${BOX.tl}${BOX.h}${BOX.h}${BOX.h}`) + t.brandBold(titleText) + t.dim(topAfter + BOX.tr);
-  const bottomLine = t.dim(`${BOX.bl}${BOX.h.repeat(innerWidth)}${BOX.br}`);
+// ---------------------------------------------------------------------------
+// Welcome banner — right column content
+// ---------------------------------------------------------------------------
 
-  const rows: string[] = [topLine];
+/** Build the right-column info lines (model, cwd, help hints). */
+function buildInfoContent(model: string, cwd: string): string[] {
+  return [
+    `${t.dim("model")}   ${t.text(model)}`,
+    `${t.dim("cwd")}     ${t.muted(cwd)}`,
+    "sep",
+    `${t.muted("/help")} ${t.dim("commands")}  ${t.dim(ICONS.dot)}  ${t.muted("/new")} ${t.dim("session")}`,
+    `${t.muted("/model")} ${t.dim("switch")}   ${t.dim(ICONS.dot)}  ${t.dim("esc")} ${t.dim("interrupt")}`,
+  ];
+}
 
-  /** Wrap a content line in box borders, centered or left-padded. */
-  const boxLine = (content: string, pad: number = 0): string => {
-    const vis = stripAnsi(content).length;
-    const left = pad > 0 ? pad : Math.max(0, Math.floor((innerWidth - vis) / 2));
-    const right = Math.max(0, innerWidth - vis - left);
-    return `${t.dim(BOX.v)}${" ".repeat(left)}${content}${" ".repeat(right)}${t.dim(BOX.v)}`;
-  };
+// ---------------------------------------------------------------------------
+// Welcome banner — two-column bordered box renderer
+// ---------------------------------------------------------------------------
 
-  // Empty line
-  rows.push(boxLine(""));
+/**
+ * Render a full-width bordered box with two columns and a title in the
+ * top border. Adapts to terminal width. Left column is sized to fit
+ * the mascot; right column fills the remaining space.
+ */
+function renderHeaderBox(
+  version: string,
+  leftLines: string[],
+  rightLines: string[],
+): string {
+  // Measure content
+  const leftWidth = Math.max(...leftLines.map((l) => stripAnsi(l).length));
+  const rightContentWidth = Math.max(
+    ...rightLines.filter((l) => l !== "sep").map((l) => stripAnsi(l).length),
+  );
 
-  // Mascot — centered
-  for (const line of cat) {
-    rows.push(boxLine(line));
+  // Column layout: padding + content + padding
+  const leftPad = 2;
+  const rightPad = 2;
+  const leftColWidth = leftWidth + leftPad * 2;
+  const rightColWidth = Math.max(rightContentWidth + rightPad * 2, 36);
+
+  // Total inner width (between outer borders): left + divider + right
+  const innerWidth = leftColWidth + 1 + rightColWidth;
+
+  // Determine content height (whichever column is taller, + vertical padding)
+  const contentHeight = Math.max(leftLines.length, rightLines.length) + 2;
+  const leftOffset = Math.floor((contentHeight - leftLines.length) / 2);
+  const rightOffset = Math.floor((contentHeight - rightLines.length) / 2);
+
+  // --- Top border with embedded title ---
+  const titleDecorated = `${t.brandBold("Jeriko")} ${t.dim(`v${version}`)}`;
+  const titlePlainLen = `Jeriko v${version}`.length;
+  const dashesAfterTitle = Math.max(0, innerWidth - 5 - titlePlainLen);
+  const topBorder =
+    t.dim(`${BOX.tl}${BOX.h.repeat(3)} `) +
+    titleDecorated +
+    t.dim(` ${BOX.h.repeat(dashesAfterTitle)}${BOX.tr}`);
+
+  // --- Content rows ---
+  const rows: string[] = [topBorder];
+
+  for (let i = 0; i < contentHeight; i++) {
+    // Left cell
+    const leftIdx = i - leftOffset;
+    const leftLine = leftIdx >= 0 && leftIdx < leftLines.length ? leftLines[leftIdx]! : "";
+    const leftVisual = stripAnsi(leftLine).length;
+    const leftCell =
+      " ".repeat(leftPad) + leftLine + " ".repeat(Math.max(0, leftColWidth - leftPad - leftVisual));
+
+    // Right cell
+    const rightIdx = i - rightOffset;
+    const rightLine = rightIdx >= 0 && rightIdx < rightLines.length ? rightLines[rightIdx]! : "";
+
+    if (rightLine === "sep") {
+      // Horizontal separator spanning right column
+      const sepRule = t.faint(BOX.h.repeat(rightColWidth));
+      rows.push(`${t.dim(BOX.v)}${leftCell}${t.dim(BOX.v)}${sepRule}${t.dim(BOX.v)}`);
+    } else {
+      const rightVisual = stripAnsi(rightLine).length;
+      const rightCell =
+        " ".repeat(rightPad) + rightLine + " ".repeat(Math.max(0, rightColWidth - rightPad - rightVisual));
+      rows.push(`${t.dim(BOX.v)}${leftCell}${t.dim(BOX.v)}${rightCell}${t.dim(BOX.v)}`);
+    }
   }
 
-  // Empty line
-  rows.push(boxLine(""));
-
-  // Info line: model · cwd
-  const infoLine = `${t.muted("model:")} ${t.text(model)}  ${t.muted(BOX.v)}  ${t.muted("cwd:")} ${t.muted(displayCwd)}`;
-  rows.push(boxLine(infoLine, 3));
-
-  // Hints line
-  const hintsLine = `${t.muted("/help commands")}  ${t.dim("·")}  ${t.muted("/new session")}  ${t.dim("·")}  ${t.muted("/model switch")}`;
-  rows.push(boxLine(hintsLine, 3));
-
-  // Empty line
-  rows.push(boxLine(""));
-
-  rows.push(bottomLine);
+  // --- Bottom border ---
+  rows.push(t.dim(`${BOX.bl}${BOX.h.repeat(innerWidth)}${BOX.br}`));
 
   return rows.join("\n");
 }

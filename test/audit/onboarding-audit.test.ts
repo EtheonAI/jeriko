@@ -21,6 +21,24 @@ mock.module("../../src/cli/lib/daemon.js", () => ({
   spawnDaemon: async () => null,
 }));
 
+// Mock local provider detection — tests control flow via prompter responses,
+// not via actual network calls to Ollama/LM Studio.
+mock.module("../../src/cli/wizard/verify.js", () => ({
+  verifyApiKey: async (_provider: string, _key: string) => {
+    // Unknown providers return true (same as real behavior)
+    const KNOWN = ["anthropic", "openai", "openrouter", "groq", "deepseek", "google",
+      "xai", "mistral", "together", "fireworks", "deepinfra", "cerebras", "perplexity",
+      "cohere", "github-models", "nvidia", "nebius", "huggingface", "requesty",
+      "helicone", "alibaba", "siliconflow", "novita", "sambanova"];
+    if (!KNOWN.includes(_provider)) return true;
+    // Known providers with fake keys → verification fails (no real API call)
+    return false;
+  },
+  verifyOllamaRunning: async () => false,
+  fetchOllamaModelList: async () => [],
+  verifyLMStudioRunning: async () => false,
+}));
+
 // ---------------------------------------------------------------------------
 // Test fixtures — temp directory for isolated file operations
 // ---------------------------------------------------------------------------
@@ -194,16 +212,24 @@ describe("validateApiKey()", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Wizard flow — Anthropic path
+// Wizard flow — Provider-first (current architecture)
+//
+// The onboarding wizard is now provider-first:
+//   1. Provider selection (anthropic, openai, local)
+//   2. API key input (or Ollama model selection)
+//   3. Persist config + start daemon
+//
+// Channels are added post-setup via /connect in the REPL.
 // ---------------------------------------------------------------------------
 
 describe("runOnboarding() — Anthropic path", () => {
   it("returns correct OnboardingResult for Claude provider", async () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
     const prompter = createMockPrompter([
-      "skip",                           // channel selection
-      "anthropic",                       // provider selection
-      "sk-ant-test-1234567890abcdef",    // API key
+      "anthropic",                       // provider selection (step 1)
+      "sk-ant-test-1234567890abcdef",    // API key (step 2)
+      "use-anyway",                      // verification fails (mock key) → use anyway
+      false,                             // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -212,15 +238,15 @@ describe("runOnboarding() — Anthropic path", () => {
     expect(result!.model).toBe("claude");
     expect(result!.apiKey).toBe("sk-ant-test-1234567890abcdef");
     expect(result!.envKey).toBe("ANTHROPIC_API_KEY");
-    expect(result!.channel).toBe("skip");
   });
 
   it("shows intro with version", async () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
     const prompter = createMockPrompter([
-      "skip",
       "anthropic",
       "sk-ant-test-1234567890abcdef",
+      "use-anyway",                      // verification fails (mock key) → use anyway
+      false,                             // skip channel setup
     ]);
 
     await runOnboarding(prompter, "3.5.0");
@@ -238,9 +264,10 @@ describe("runOnboarding() — OpenAI path", () => {
   it("returns correct OnboardingResult for GPT provider", async () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
     const prompter = createMockPrompter([
-      "skip",                           // channel selection
       "openai",                         // provider selection
       "sk-openai-test-1234567890abc",   // API key
+      "use-anyway",                     // verification fails (mock key) → use anyway
+      false,                            // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -257,76 +284,23 @@ describe("runOnboarding() — OpenAI path", () => {
 // ---------------------------------------------------------------------------
 
 describe("runOnboarding() — Local/Ollama path", () => {
-  it("returns correct OnboardingResult with no API key", async () => {
+  it("local not running — user goes back and picks Anthropic", async () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
+    // Ollama won't be running in CI, so wizard hits "not detected" prompt.
+    // User selects "back" → re-picks Anthropic → enters API key.
     const prompter = createMockPrompter([
-      "skip",                           // channel selection
-      "local",                          // provider selection
-      // No API key prompt for local
+      "local",                          // 1. select local provider
+      "back",                           // 2. Ollama not detected → go back
+      "anthropic",                      // 3. re-select provider
+      "sk-ant-test-1234567890abcdef",   // 4. enter API key
+      "use-anyway",                     // 5. verification fails → use anyway
+      false,                            // 6. skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).not.toBeNull();
-    expect(result!.provider).toBe("local");
-    expect(result!.model).toBe("local");
-    expect(result!.apiKey).toBe("");
-    expect(result!.envKey).toBe("");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Wizard flow — Telegram channel
-// ---------------------------------------------------------------------------
-
-describe("runOnboarding() — Telegram channel", () => {
-  it("captures telegram token from user input", async () => {
-    const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
-    const prompter = createMockPrompter([
-      "telegram",                                // channel selection
-      "123456789:ABCdefGHIjklMNOpqrSTU-xyz",     // telegram token
-      "anthropic",                               // provider selection
-      "sk-ant-test-1234567890abcdef",            // API key
-    ]);
-
-    const result = await runOnboarding(prompter, "2.0.0");
-    expect(result).not.toBeNull();
-    expect(result!.channel).toBe("telegram");
-    expect(result!.telegramToken).toBe("123456789:ABCdefGHIjklMNOpqrSTU-xyz");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Wizard flow — WhatsApp channel
-// ---------------------------------------------------------------------------
-
-describe("runOnboarding() — WhatsApp channel", () => {
-  it("sets whatsappEnabled flag", async () => {
-    const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
-    const prompter = createMockPrompter([
-      "whatsapp",                       // channel selection
-      "anthropic",                      // provider selection
-      "sk-ant-test-1234567890abcdef",   // API key
-    ]);
-
-    const result = await runOnboarding(prompter, "2.0.0");
-    expect(result).not.toBeNull();
-    expect(result!.channel).toBe("whatsapp");
-    expect(result!.whatsappEnabled).toBe(true);
-  });
-
-  it("shows WhatsApp QR note", async () => {
-    const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
-    const prompter = createMockPrompter([
-      "whatsapp",
-      "anthropic",
-      "sk-ant-test-1234567890abcdef",
-    ]);
-
-    await runOnboarding(prompter, "2.0.0");
-    const noteCall = prompter.calls.find(
-      (c) => c.method === "note" && String(c.args[0]).includes("QR"),
-    );
-    expect(noteCall).toBeDefined();
+    expect(result!.provider).toBe("anthropic");
+    expect(result!.apiKey).toBe("sk-ant-test-1234567890abcdef");
   });
 });
 
@@ -335,22 +309,10 @@ describe("runOnboarding() — WhatsApp channel", () => {
 // ---------------------------------------------------------------------------
 
 describe("runOnboarding() — cancellation", () => {
-  it("returns null when user cancels at channel select", async () => {
-    const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
-    const cancelSymbol = Symbol("cancel");
-    const prompter = createMockPrompter([cancelSymbol]);
-
-    const result = await runOnboarding(prompter, "2.0.0");
-    expect(result).toBeNull();
-  });
-
   it("returns null when user cancels at provider select", async () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
     const cancelSymbol = Symbol("cancel");
-    const prompter = createMockPrompter([
-      "skip",         // channel
-      cancelSymbol,   // cancel at provider
-    ]);
+    const prompter = createMockPrompter([cancelSymbol]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).toBeNull();
@@ -360,21 +322,8 @@ describe("runOnboarding() — cancellation", () => {
     const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
     const cancelSymbol = Symbol("cancel");
     const prompter = createMockPrompter([
-      "skip",         // channel
       "anthropic",    // provider
       cancelSymbol,   // cancel at API key
-    ]);
-
-    const result = await runOnboarding(prompter, "2.0.0");
-    expect(result).toBeNull();
-  });
-
-  it("returns null when user cancels at telegram token", async () => {
-    const { runOnboarding } = await import("../../src/cli/wizard/onboarding.js");
-    const cancelSymbol = Symbol("cancel");
-    const prompter = createMockPrompter([
-      "telegram",     // channel
-      cancelSymbol,   // cancel at telegram token
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -395,7 +344,6 @@ describe("persistSetup() — config writing", () => {
       model: "claude",
       apiKey: "sk-ant-test-1234567890abcdef",
       envKey: "ANTHROPIC_API_KEY",
-      channel: "skip",
     };
 
     await persistSetup(result);
@@ -406,13 +354,13 @@ describe("persistSetup() — config writing", () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(config.agent).toEqual({ model: "claude" });
-    expect(config.channels.telegram).toEqual({ token: "", adminIds: [] });
-    expect(config.channels.whatsapp).toEqual({ enabled: false });
+    // Channels start empty — configured post-setup via /connect
+    expect(config.channels).toEqual({});
     expect(config.connectors).toEqual({});
     expect(config.logging).toEqual({ level: "info" });
   });
 
-  it("writes telegram token when provided", async () => {
+  it("channels empty when skipped during setup", async () => {
     const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
 
     const result: OnboardingResult = {
@@ -420,8 +368,6 @@ describe("persistSetup() — config writing", () => {
       model: "claude",
       apiKey: "sk-ant-test-1234567890abcdef",
       envKey: "ANTHROPIC_API_KEY",
-      channel: "telegram",
-      telegramToken: "123456789:ABCdef",
     };
 
     await persistSetup(result);
@@ -430,10 +376,11 @@ describe("persistSetup() — config writing", () => {
     const config = JSON.parse(
       fs.readFileSync(path.join(configDir, "config.json"), "utf-8"),
     );
-    expect(config.channels.telegram.token).toBe("123456789:ABCdef");
+    // No channels configured when skipped
+    expect(config.channels).toEqual({});
   });
 
-  it("sets whatsapp enabled when chosen", async () => {
+  it("writes WhatsApp channel config when provided", async () => {
     const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
 
     const result: OnboardingResult = {
@@ -441,8 +388,7 @@ describe("persistSetup() — config writing", () => {
       model: "claude",
       apiKey: "sk-ant-test-1234567890abcdef",
       envKey: "ANTHROPIC_API_KEY",
-      channel: "whatsapp",
-      whatsappEnabled: true,
+      channels: { whatsapp: true },
     };
 
     await persistSetup(result);
@@ -451,7 +397,34 @@ describe("persistSetup() — config writing", () => {
     const config = JSON.parse(
       fs.readFileSync(path.join(configDir, "config.json"), "utf-8"),
     );
-    expect(config.channels.whatsapp.enabled).toBe(true);
+    expect(config.channels.whatsapp).toEqual({ enabled: true });
+
+    const envContent = fs.readFileSync(path.join(configDir, ".env"), "utf-8");
+    expect(envContent).toContain("WHATSAPP_ENABLED=true");
+  });
+
+  it("writes Telegram channel config when provided", async () => {
+    const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
+
+    const result: OnboardingResult = {
+      provider: "anthropic",
+      model: "claude",
+      apiKey: "sk-ant-test-1234567890abcdef",
+      envKey: "ANTHROPIC_API_KEY",
+      channels: { telegram: { token: "123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890" } },
+    };
+
+    await persistSetup(result);
+
+    const configDir = path.join(testDir, ".config", "jeriko");
+    const config = JSON.parse(
+      fs.readFileSync(path.join(configDir, "config.json"), "utf-8"),
+    );
+    expect(config.channels.telegram.token).toBe("123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890");
+    expect(config.channels.telegram.adminIds).toEqual([]);
+
+    const envContent = fs.readFileSync(path.join(configDir, ".env"), "utf-8");
+    expect(envContent).toContain("TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ1234567890");
   });
 });
 
@@ -505,7 +478,7 @@ describe("persistSetup() — .env writing", () => {
     expect(matches).toHaveLength(1);
   });
 
-  it("does not write .env when no API key (local provider)", async () => {
+  it("does not write API key to .env for local provider", async () => {
     const { persistSetup } = await import("../../src/cli/wizard/onboarding.js");
 
     const result: OnboardingResult = {
@@ -518,8 +491,13 @@ describe("persistSetup() — .env writing", () => {
     await persistSetup(result);
 
     const envPath = path.join(testDir, ".config", "jeriko", ".env");
-    // .env should not be created when there's no API key
-    expect(fs.existsSync(envPath)).toBe(false);
+    // .env may still be created for NODE_AUTH_SECRET, but should NOT contain
+    // any provider API key when apiKey is empty
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf-8");
+      expect(content).not.toContain("ANTHROPIC_API_KEY=");
+      expect(content).not.toContain("OPENAI_API_KEY=");
+    }
   });
 
   it("sets API key in process.env for current session", async () => {
@@ -670,7 +648,7 @@ describe("backend.ts — persistSetup()", () => {
     const { persistSetup } = await import("../../src/cli/backend.js");
 
     await persistSetup(
-      { envKey: "ANTHROPIC_API_KEY", model: "claude" },
+      { id: "anthropic", envKey: "ANTHROPIC_API_KEY", model: "claude" },
       "sk-ant-backend-test-key-12345",
     );
 
@@ -680,8 +658,8 @@ describe("backend.ts — persistSetup()", () => {
 
     const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     expect(config.agent.model).toBe("claude");
-    expect(config.channels.telegram).toEqual({ token: "", adminIds: [] });
-    expect(config.channels.whatsapp).toEqual({ enabled: false });
+    // Channels start empty — configured post-setup via /connect
+    expect(config.channels).toEqual({});
     expect(config.connectors).toEqual({});
     expect(config.logging).toEqual({ level: "info" });
   });
@@ -690,7 +668,7 @@ describe("backend.ts — persistSetup()", () => {
     const { persistSetup } = await import("../../src/cli/backend.js");
 
     await persistSetup(
-      { envKey: "OPENAI_API_KEY", model: "gpt4" },
+      { id: "openai", envKey: "OPENAI_API_KEY", model: "gpt4" },
       "sk-openai-backend-test-12345",
     );
 
@@ -739,5 +717,46 @@ describe("persistSetup() — directory creation", () => {
     const configDir = path.join(testDir, ".config", "jeriko");
     expect(fs.existsSync(configDir)).toBe(true);
     expect(fs.existsSync(path.join(configDir, "config.json"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OnboardingResult interface contract
+// ---------------------------------------------------------------------------
+
+describe("OnboardingResult — interface contract", () => {
+  it("has required fields: provider, model, apiKey, envKey", () => {
+    const result: OnboardingResult = {
+      provider: "anthropic",
+      model: "claude",
+      apiKey: "test-key",
+      envKey: "ANTHROPIC_API_KEY",
+    };
+    expect(result.provider).toBe("anthropic");
+    expect(result.model).toBe("claude");
+    expect(result.apiKey).toBe("test-key");
+    expect(result.envKey).toBe("ANTHROPIC_API_KEY");
+  });
+
+  it("supports optional channels field", () => {
+    const result: OnboardingResult = {
+      provider: "anthropic",
+      model: "claude",
+      apiKey: "test-key",
+      envKey: "ANTHROPIC_API_KEY",
+      channels: { telegram: { token: "123:abc" }, whatsapp: true },
+    };
+    expect(result.channels!.telegram!.token).toBe("123:abc");
+    expect(result.channels!.whatsapp).toBe(true);
+  });
+
+  it("channels is undefined when not configured", () => {
+    const result: OnboardingResult = {
+      provider: "anthropic",
+      model: "claude",
+      apiKey: "test-key",
+      envKey: "ANTHROPIC_API_KEY",
+    };
+    expect(result.channels).toBeUndefined();
   });
 });

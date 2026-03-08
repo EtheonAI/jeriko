@@ -20,6 +20,7 @@ import { createOAuthRoutes, resolveOAuthCallback } from "./routes/oauth.js";
 import type { PendingOAuth, PendingPKCE } from "./routes/oauth.js";
 import { createShareRoutes, resolveShareRequest } from "./routes/share.js";
 import type { PendingShare } from "./routes/share.js";
+import { createProviderAuthRoutes } from "./routes/provider-auth.js";
 import { createBillingRoutes, LicenseStore } from "./routes/billing.js";
 import { createHealthRoutes } from "./routes/health.js";
 import type { Env, WebSocketAttachment } from "./lib/types.js";
@@ -233,8 +234,9 @@ export class RelayDO {
 
     // Mount routes with their dependencies
     app.route("/health", createHealthRoutes(this.connections, this.env, this.startTime));
-    app.route("/hooks", createWebhookRoutes(this.connections));
+    app.route("/hooks", createWebhookRoutes(this.connections, this.env));
     app.route("/oauth", createOAuthRoutes(this.connections, this.pendingOAuth, this.env, this.pendingPKCE));
+    app.route("/provider", createProviderAuthRoutes(this.connections));
     app.route("/billing", createBillingRoutes(this.connections, this.env, this.licenseStore));
     app.route("/s", createShareRoutes(this.connections, this.pendingShares));
 

@@ -39,7 +39,6 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; cli
   ["shopify",      { clientIdKey: "SHOPIFY_OAUTH_CLIENT_ID",      clientSecretKey: "SHOPIFY_OAUTH_CLIENT_SECRET" }],
   ["square",       { clientIdKey: "SQUARE_OAUTH_CLIENT_ID",       clientSecretKey: "SQUARE_OAUTH_CLIENT_SECRET" }],
   ["gitlab",       { clientIdKey: "GITLAB_OAUTH_CLIENT_ID",       clientSecretKey: "GITLAB_OAUTH_CLIENT_SECRET" }],
-  ["digitalocean", { clientIdKey: "DIGITALOCEAN_OAUTH_CLIENT_ID", clientSecretKey: "DIGITALOCEAN_OAUTH_CLIENT_SECRET" }],
   ["notion",       { clientIdKey: "NOTION_OAUTH_CLIENT_ID",       clientSecretKey: "NOTION_OAUTH_CLIENT_SECRET" }],
   ["linear",       { clientIdKey: "LINEAR_OAUTH_CLIENT_ID",       clientSecretKey: "LINEAR_OAUTH_CLIENT_SECRET" }],
   ["jira",         { clientIdKey: "ATLASSIAN_OAUTH_CLIENT_ID",    clientSecretKey: "ATLASSIAN_OAUTH_CLIENT_SECRET" }],
@@ -47,7 +46,9 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; cli
   ["asana",        { clientIdKey: "ASANA_OAUTH_CLIENT_ID",        clientSecretKey: "ASANA_OAUTH_CLIENT_SECRET" }],
   ["mailchimp",    { clientIdKey: "MAILCHIMP_OAUTH_CLIENT_ID",    clientSecretKey: "MAILCHIMP_OAUTH_CLIENT_SECRET" }],
   ["dropbox",      { clientIdKey: "DROPBOX_OAUTH_CLIENT_ID",      clientSecretKey: "DROPBOX_OAUTH_CLIENT_SECRET" }],
-  ["salesforce",   { clientIdKey: "SALESFORCE_OAUTH_CLIENT_ID",   clientSecretKey: "SALESFORCE_OAUTH_CLIENT_SECRET" }],
+  ["discord",      { clientIdKey: "DISCORD_OAUTH_CLIENT_ID",      clientSecretKey: "DISCORD_OAUTH_CLIENT_SECRET" }],
+  ["instagram",    { clientIdKey: "INSTAGRAM_OAUTH_CLIENT_ID",    clientSecretKey: "INSTAGRAM_OAUTH_CLIENT_SECRET" }],
+  ["threads",      { clientIdKey: "THREADS_OAUTH_CLIENT_ID",      clientSecretKey: "THREADS_OAUTH_CLIENT_SECRET" }],
 ]);
 
 // ---------------------------------------------------------------------------

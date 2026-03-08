@@ -48,8 +48,8 @@ describe("CONNECTOR_DEFS", () => {
   test("connector names match CLI command names", () => {
     const expected = [
       "stripe", "paypal", "github", "twilio", "vercel", "x", "gdrive", "onedrive", "gmail", "outlook",
-      "hubspot", "shopify", "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare", "digitalocean",
-      "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox", "salesforce",
+      "hubspot", "shopify", "instagram", "threads", "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
+      "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
     ];
     const actual = CONNECTOR_DEFS.map((d) => d.name);
     expect(actual).toEqual(expected);

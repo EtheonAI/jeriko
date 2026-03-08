@@ -73,6 +73,12 @@ export type OAuthTokensHandler = (
   requestId: string,
 ) => Promise<void>;
 
+/** Handler called when the relay forwards a provider auth callback (e.g. OpenRouter PKCE). */
+export type ProviderAuthCallbackHandler = (
+  provider: string,
+  params: Record<string, string>,
+) => void;
+
 /** Handler called when the relay forwards a share page request. */
 export type ShareRequestHandler = (
   shareId: string,
@@ -106,6 +112,7 @@ export class RelayClient {
   private oauthHandler: OAuthCallbackHandler | null = null;
   private oauthStartHandler: OAuthStartHandler | null = null;
   private oauthTokensHandler: OAuthTokensHandler | null = null;
+  private providerAuthHandler: ProviderAuthCallbackHandler | null = null;
   private shareHandler: ShareRequestHandler | null = null;
 
   constructor(opts: { userId: string; token: string; version?: string }) {
@@ -150,6 +157,14 @@ export class RelayClient {
    */
   onOAuthTokens(handler: OAuthTokensHandler): void {
     this.oauthTokensHandler = handler;
+  }
+
+  /**
+   * Set the handler for provider auth callbacks (e.g. OpenRouter PKCE).
+   * Separate from connector OAuth — this is for AI provider API key auth.
+   */
+  onProviderAuthCallback(handler: ProviderAuthCallbackHandler): void {
+    this.providerAuthHandler = handler;
   }
 
   /**
@@ -299,6 +314,14 @@ export class RelayClient {
 
       case "oauth_tokens":
         this.handleOAuthTokens(parsed);
+        break;
+
+      case "provider_auth_callback":
+        if (this.providerAuthHandler) {
+          this.providerAuthHandler(parsed.provider, parsed.params);
+        } else {
+          log.warn(`Relay client: provider auth callback received but no handler (provider: ${parsed.provider})`);
+        }
         break;
 
       case "share_request":

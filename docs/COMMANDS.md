@@ -1649,7 +1649,7 @@ jeriko server --status              # check if running (PID, port)
 ```json
 {
   "ok": true,
-  "data": { "running": true, "pid": 12345, "port": 3000 }
+  "data": { "running": true, "pid": 12345, "port": 7741 }
 }
 ```
 

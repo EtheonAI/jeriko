@@ -39,6 +39,7 @@ export function isPhase(value: unknown): value is Phase {
 /** A single step in an interactive wizard. */
 export type WizardStep =
   | { type: "select"; message: string; options: WizardOption[] }
+  | { type: "multi-select"; message: string; options: WizardOption[]; min?: number; max?: number }
   | { type: "text"; message: string; placeholder?: string; validate?: (v: string) => string | undefined }
   | { type: "password"; message: string; validate?: (v: string) => string | undefined };
 
@@ -53,7 +54,7 @@ export interface WizardOption {
 export interface WizardConfig {
   title: string;
   steps: WizardStep[];
-  onComplete: (results: string[]) => void;
+  onComplete: (results: string[]) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

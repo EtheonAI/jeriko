@@ -9,7 +9,7 @@
  */
 
 import React from "react";
-import { Text } from "ink";
+import { Text, Box } from "ink";
 import { renderMarkdown } from "../lib/markdown.js";
 
 // ---------------------------------------------------------------------------
@@ -25,5 +25,9 @@ export const Markdown: React.FC<MarkdownProps> = ({ text }) => {
   if (!text) return null;
 
   const rendered = renderMarkdown(text);
-  return <Text>{rendered}</Text>;
+  return (
+    <Box overflowX="hidden">
+      <Text>{rendered}</Text>
+    </Box>
+  );
 };

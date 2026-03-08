@@ -37,10 +37,11 @@ import { ConnectorManager } from "../../src/daemon/services/connectors/manager.j
 const ALL_CONNECTORS = [
   "stripe", "paypal", "github", "twilio", "vercel", "x",
   "gdrive", "onedrive", "gmail", "outlook",
-  "hubspot", "shopify", "slack", "discord", "sendgrid",
-  "square", "gitlab", "cloudflare", "digitalocean",
+  "hubspot", "shopify", "instagram", "threads",
+  "slack", "discord", "sendgrid",
+  "square", "gitlab", "cloudflare",
   "notion", "linear", "jira", "airtable", "asana",
-  "mailchimp", "dropbox", "salesforce",
+  "mailchimp", "dropbox",
 ] as const;
 
 /** Connectors that extend ConnectorBase directly (not BearerConnector). */
@@ -51,14 +52,15 @@ const CONNECTOR_BASE_DIRECT = [
 /** Connectors that extend BearerConnector. */
 const BEARER_CONNECTORS = [
   "gdrive", "onedrive", "gmail", "outlook",
-  "hubspot", "shopify", "slack", "discord",
-  "square", "gitlab", "digitalocean",
+  "hubspot", "shopify", "instagram", "threads",
+  "slack", "discord",
+  "square", "gitlab",
   "notion", "linear", "jira", "airtable", "asana",
-  "mailchimp", "dropbox", "salesforce",
+  "mailchimp", "dropbox",
 ] as const;
 
 /** Connectors with no OAuth support (API key / credentials only). */
-const NON_OAUTH_CONNECTORS = ["twilio", "paypal", "sendgrid", "cloudflare"] as const;
+const NON_OAUTH_CONNECTORS = ["twilio", "paypal", "sendgrid", "cloudflare", "slack"] as const;
 
 /** Connectors that support OAuth (have oauth config in CONNECTOR_DEFS). */
 const OAUTH_CONNECTORS = ALL_CONNECTORS.filter(
@@ -76,7 +78,7 @@ describe("CONNECTOR_FACTORIES registry", () => {
     expect(registryNames).toEqual(expected);
   });
 
-  test("has exactly 27 entries", () => {
+  test("has exactly 25 entries", () => {
     expect(Object.keys(CONNECTOR_FACTORIES)).toHaveLength(27);
   });
 
@@ -107,7 +109,7 @@ describe("CONNECTOR_DEFS", () => {
     expect(defNames).toEqual(expected);
   });
 
-  test("has exactly 27 entries", () => {
+  test("has exactly 25 entries", () => {
     expect(CONNECTOR_DEFS).toHaveLength(27);
   });
 

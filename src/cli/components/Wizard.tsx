@@ -45,6 +45,7 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
   const [stepIndex, setStepIndex] = useState(0);
   const [results, setResults] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [checkedSet, setCheckedSet] = useState<Set<string>>(new Set());
   const [textBuffer, setTextBuffer] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -65,6 +66,7 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
       setResults(newResults);
       setStepIndex(stepIndex + 1);
       setSelectedIndex(0);
+      setCheckedSet(new Set());
       setTextBuffer("");
       setError(null);
     }
@@ -78,6 +80,7 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
       setResults(results.slice(0, -1));
       setStepIndex(stepIndex - 1);
       setSelectedIndex(0);
+      setCheckedSet(new Set());
       setTextBuffer("");
       setError(null);
     }
@@ -114,6 +117,65 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
             setSelectedIndex(idx);
             advance(opts[idx]!.value);
           }
+        }
+        return;
+      }
+
+      // ── Multi-select step ───────────────────────────────────────
+      if (step.type === "multi-select") {
+        const opts = step.options;
+        if (key.upArrow) {
+          setSelectedIndex((i) => (i > 0 ? i - 1 : opts.length - 1));
+          return;
+        }
+        if (key.downArrow) {
+          setSelectedIndex((i) => (i < opts.length - 1 ? i + 1 : 0));
+          return;
+        }
+        // Space toggles the current item
+        if (input === " ") {
+          const opt = opts[selectedIndex];
+          if (opt) {
+            setCheckedSet((prev) => {
+              const next = new Set(prev);
+              if (next.has(opt.value)) {
+                next.delete(opt.value);
+              } else {
+                // Enforce max constraint
+                if (step.max !== undefined && next.size >= step.max) {
+                  setError(`Maximum ${step.max} selections allowed`);
+                  return prev;
+                }
+                next.add(opt.value);
+              }
+              setError(null);
+              return next;
+            });
+          }
+          return;
+        }
+        // Enter confirms selection
+        if (key.return) {
+          const min = step.min ?? 0;
+          if (checkedSet.size < min) {
+            setError(`Select at least ${min} item${min !== 1 ? "s" : ""}`);
+            return;
+          }
+          setError(null);
+          // Encode multi-select as comma-separated values
+          const value = Array.from(checkedSet).join(",");
+          advance(value);
+          return;
+        }
+        // "a" toggles all
+        if (input === "a") {
+          setCheckedSet((prev) => {
+            if (prev.size === opts.length) return new Set();
+            const max = step.max ?? opts.length;
+            return new Set(opts.slice(0, max).map((o) => o.value));
+          });
+          setError(null);
+          return;
         }
         return;
       }
@@ -159,20 +221,24 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
 
   // ── Render ────────────────────────────────────────────────────────
 
-  const ruleWidth = 52;
-  const rule = "─".repeat(ruleWidth);
-
   return (
-    <Box flexDirection="column">
-      <Text color={PALETTE.faint}>{rule}</Text>
-
-      {/* Title */}
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={PALETTE.dim}
+      paddingX={1}
+      paddingY={1}
+    >
+      {/* Title + step indicator */}
       <Box marginBottom={1}>
-        <Text color={PALETTE.brand} bold>{"  "}{config.title}</Text>
+        <Text color={PALETTE.brand} bold>{config.title}</Text>
+        {config.steps.length > 1 && (
+          <Text color={PALETTE.dim}>{"  "}Step {stepIndex + 1}/{config.steps.length}</Text>
+        )}
       </Box>
 
       {/* Step message */}
-      <Text color={PALETTE.text}>{"  "}{step.message}</Text>
+      <Text color={PALETTE.text}>{step.message}</Text>
       <Text>{""}</Text>
 
       {/* Step content */}
@@ -180,6 +246,14 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
         <SelectView
           options={step.options}
           selectedIndex={selectedIndex}
+        />
+      )}
+
+      {step.type === "multi-select" && (
+        <MultiSelectView
+          options={step.options}
+          selectedIndex={selectedIndex}
+          checkedSet={checkedSet}
         />
       )}
 
@@ -201,24 +275,29 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
 
       {/* Error */}
       {error && (
-        <Text color={PALETTE.error}>{"  "}{error}</Text>
+        <Text color={PALETTE.error}>{error}</Text>
       )}
 
       {/* Hint line */}
       <Text>{""}</Text>
-      {step.type === "select" ? (
+      {step.type === "select" && (
         <Text color={PALETTE.dim}>
-          {"  "}{"↑↓ navigate · Enter select · Esc "}
-          {isFirstStep ? "cancel" : "back"}
-        </Text>
-      ) : (
-        <Text color={PALETTE.dim}>
-          {"  "}{"Enter to confirm · Esc "}
+          {"↑↓ navigate · Enter select · Esc "}
           {isFirstStep ? "cancel" : "back"}
         </Text>
       )}
-
-      <Text color={PALETTE.faint}>{rule}</Text>
+      {step.type === "multi-select" && (
+        <Text color={PALETTE.dim}>
+          {"↑↓ navigate · Space toggle · a all · Enter confirm · Esc "}
+          {isFirstStep ? "cancel" : "back"}
+        </Text>
+      )}
+      {(step.type === "text" || step.type === "password") && (
+        <Text color={PALETTE.dim}>
+          {"Enter to confirm · Esc "}
+          {isFirstStep ? "cancel" : "back"}
+        </Text>
+      )}
     </Box>
   );
 };
@@ -243,6 +322,44 @@ const SelectView: React.FC<{
             <Text color={PALETTE.dim}>{`  ${num}`}</Text>
             <Text color={isSelected ? PALETTE.brand : PALETTE.dim}>{marker}</Text>
             <Text color={isSelected ? PALETTE.brand : PALETTE.text} bold={isSelected}>
+              {opt.label}
+            </Text>
+            {opt.hint && (
+              <Text color={PALETTE.dim}>{"  "}{opt.hint}</Text>
+            )}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Multi-select list view — checkboxes with arrow-key navigation
+// ---------------------------------------------------------------------------
+
+const MultiSelectView: React.FC<{
+  options: Array<{ value: string; label: string; hint?: string }>;
+  selectedIndex: number;
+  checkedSet: Set<string>;
+}> = ({ options, selectedIndex, checkedSet }) => {
+  return (
+    <Box flexDirection="column">
+      {options.map((opt, i) => {
+        const isFocused = i === selectedIndex;
+        const isChecked = checkedSet.has(opt.value);
+        const num = `${i + 1}`.padStart(2);
+        const checkbox = isChecked ? "◼" : "◻";
+        const checkColor = isChecked ? PALETTE.brand : PALETTE.dim;
+
+        return (
+          <Text key={opt.value}>
+            <Text color={PALETTE.dim}>{`  ${num}`}</Text>
+            <Text color={isFocused ? PALETTE.brand : PALETTE.dim}>
+              {isFocused ? " \u276F " : "   "}
+            </Text>
+            <Text color={checkColor}>{checkbox} </Text>
+            <Text color={isFocused ? PALETTE.brand : PALETTE.text} bold={isFocused}>
               {opt.label}
             </Text>
             {opt.hint && (

@@ -123,7 +123,7 @@ export class WhatsAppChannel implements ChannelAdapter {
     // Falls back to the bundled version if the fetch fails (offline use).
     let waVersion: [number, number, number] | undefined;
     try {
-      const result = await fetchLatestWaWebVersion();
+      const result = await fetchLatestWaWebVersion({});
       waVersion = result.version;
     } catch (err) {
       log.warn(`Failed to fetch WhatsApp Web version, using bundled: ${err}`);

@@ -46,6 +46,10 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./hubspot/connector.js")).HubSpotConnector,
   shopify: async () =>
     (await import("./shopify/connector.js")).ShopifyConnector,
+  instagram: async () =>
+    (await import("./instagram/connector.js")).InstagramConnector,
+  threads: async () =>
+    (await import("./threads/connector.js")).ThreadsConnector,
   slack: async () =>
     (await import("./slack/connector.js")).SlackConnector,
   discord: async () =>
@@ -58,8 +62,6 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./gitlab/connector.js")).GitLabConnector,
   cloudflare: async () =>
     (await import("./cloudflare/connector.js")).CloudflareConnector,
-  digitalocean: async () =>
-    (await import("./digitalocean/connector.js")).DigitalOceanConnector,
   notion: async () =>
     (await import("./notion/connector.js")).NotionConnector,
   linear: async () =>
@@ -74,8 +76,6 @@ export const CONNECTOR_FACTORIES: Record<string, ConnectorFactory> = {
     (await import("./mailchimp/connector.js")).MailchimpConnector,
   dropbox: async () =>
     (await import("./dropbox/connector.js")).DropboxConnector,
-  salesforce: async () =>
-    (await import("./salesforce/connector.js")).SalesforceConnector,
 };
 
 // ---------------------------------------------------------------------------

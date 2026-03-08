@@ -70,35 +70,187 @@ open: URL|FILE|APP [--chrome] [--with APP] [--reveal] (open anything)
 camera: [--video --duration SEC] (webcam photo/video)
 location: (IP geolocation)
 
-### Integrations
-stripe: RESOURCE ACTION [--flags] (Stripe API — customers, products, prices, payments, invoices, subscriptions, balance, payouts, refunds, events, webhooks, checkout, links)
-paypal: RESOURCE ACTION [--flags] (PayPal API — orders, payments, subscriptions, plans, products, invoices, payouts, disputes, webhooks)
-x: ACTION [--flags] (X/Twitter — post, search, timeline, like, retweet, bookmark, follow, dm, lists, mute)
-twilio: ACTION [--flags] (Twilio — call, sms, calls, messages, recordings, account, numbers)
-github: ACTION [--flags] (GitHub — repos, issues, prs, actions, releases, search, clone, gists)
-vercel: ACTION [--flags] (Vercel — projects, deploy, deployments, domains, env, team)
-gdrive: ACTION [--flags] (Google Drive — list, search, upload, download, export, mkdir, share, move, rename, delete)
-onedrive: ACTION [--flags] (OneDrive — list, search, upload, download, mkdir, move, rename, delete)
-gmail: ACTION [--flags] (Gmail — messages, labels, drafts, threads, send, search, profile)
-outlook: ACTION [--flags] (Outlook — messages, folders, send, reply, forward, search, profile)
-hubspot: RESOURCE ACTION [--flags] (HubSpot CRM — contacts, companies, deals, tickets, owners, pipelines)
-shopify: RESOURCE ACTION [--flags] (Shopify — products, orders, customers, inventory, collections)
-slack: RESOURCE ACTION [--flags] (Slack — messages, channels, users, files, reactions, search, pins)
-discord: RESOURCE ACTION [--flags] (Discord — guilds, channels, messages, reactions, users, roles)
-sendgrid: RESOURCE ACTION [--flags] (SendGrid — mail, contacts, lists, templates, stats, senders)
-square: RESOURCE ACTION [--flags] (Square — payments, orders, customers, catalog, inventory, locations)
-gitlab: RESOURCE ACTION [--flags] (GitLab — projects, issues, merge requests, pipelines, branches, users)
-cloudflare: RESOURCE ACTION [--flags] (Cloudflare — zones, DNS, Workers, KV, analytics)
-digitalocean: RESOURCE ACTION [--flags] (DigitalOcean — droplets, domains, databases, apps, volumes)
-notion: RESOURCE ACTION [--flags] (Notion — search, pages, databases, blocks, users, comments)
-linear: RESOURCE ACTION [--flags] (Linear — issues, projects, teams, cycles, labels, states)
-jira: RESOURCE ACTION [--flags] (Jira — issues, projects, boards, sprints, users, statuses)
-airtable: RESOURCE ACTION [--flags] (Airtable — bases, tables, records, fields)
-asana: RESOURCE ACTION [--flags] (Asana — tasks, projects, sections, workspaces, teams, tags)
-mailchimp: RESOURCE ACTION [--flags] (Mailchimp — lists, members, campaigns, templates, automations)
-dropbox: RESOURCE ACTION [--flags] (Dropbox — files, folders, sharing, search, users)
-salesforce: RESOURCE ACTION [--flags] (Salesforce — records, SOQL, objects, search, users, limits)
+### Integrations (Connectors)
+
+All connectors are available via CLI (`jeriko <connector> <method>`) and the agent `connector` tool.
+Use `connector({ name: "<name>", method: "<method>", params: { ... } })` in agent mode.
+
 connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified gateway — list, health, info, call any connector)
+
+**Stripe** — Payments, subscriptions, invoices
+- `charges.create` (amount, currency, customer) | `.retrieve` (id) | `.list` (limit, customer)
+- `customers.create` (email, name) | `.retrieve` (id) | `.list` (limit, email)
+- `subscriptions.create` (customer, items) | `.retrieve` (id) | `.cancel` (id) | `.list` (customer, status)
+- `payment_intents.create` (amount, currency) | `.retrieve` (id) | `.confirm` (id)
+- `invoices.create` (customer, items) | `.retrieve` (id) | `.list` | `.finalize` (id) | `.send` (id) | `.void` (id)
+- `refunds.create` (charge, amount) | `.list` (charge) | `.get` (id)
+- `products.create` (name, type) | `.list` | `.get` (id) | `.update` (id) | `.delete` (id)
+- `prices.create` (product, unit_amount, currency) | `.list` (product) | `.get` (id)
+- `balance.retrieve` | `payouts.create` (amount) | `.list` | `.get` (id)
+- `events.list` (types) | `.get` (id) | `webhooks.list` | `.create` (url, enabled_events) | `.delete` (id)
+- `checkout.create` (line_items, mode, success_url, cancel_url) | `.list` | `.get` (id)
+- `payment_links.create` (line_items) | `.list` | `.get` (id)
+
+**PayPal** — Orders, subscriptions, invoices, payouts
+- `orders.create` (intent, purchase_units) | `.get` (id) | `.capture` (id)
+- `payments.get` (id) | `.refund` (id, amount)
+- `subscriptions.create` (plan_id) | `.list` (plan_id, status) | `.get` (id) | `.cancel` (id) | `.suspend` (id) | `.activate` (id)
+- `plans.create` (name, product_id, amount, interval) | `.list` | `.get` (id)
+- `products.create` (name, type) | `.list` | `.get` (id)
+- `invoices.create` (recipient, amount) | `.list` (status) | `.get` (id) | `.send` (id) | `.cancel` (id) | `.remind` (id)
+- `payouts.create` (items) | `.get` (id) | `disputes.list` (status) | `.get` (id)
+- `webhooks.list` | `.create` (url, events) | `.delete` (id)
+
+**GitHub** — Repos, issues, PRs, actions, releases
+- `repos.list` | `.get` (owner, repo) | `.create` (name, description, private)
+- `issues.list` (owner, repo) | `.get` (owner, repo, number) | `.create` (owner, repo, title, body, labels) | `.update` (owner, repo, number, state)
+- `pulls.list` (owner, repo) | `.get` (owner, repo, number) | `.create` (owner, repo, title, head, base) | `.merge` (owner, repo, number)
+- `actions.list_runs` (owner, repo) | `.trigger` (owner, repo, workflow_id, ref)
+- `releases.list` (owner, repo) | `.create` (owner, repo, tag_name, name, body)
+- `search.repos` (query) | `.issues` (query) | `.code` (query)
+- `gists.list` | `.get` (id) | `.create` (description, public, files)
+
+**Gmail** — Email, labels, drafts, threads
+- `messages.list` (q, max_results, label_ids) | `.get` (id, format) | `.send` (raw) | `.delete` (id) | `.trash` (id) | `.untrash` (id) | `.modify` (id, add_label_ids, remove_label_ids)
+- `labels.list` | `.get` (id) | `.create` (name) | `.delete` (id)
+- `drafts.list` | `.get` (id) | `.create` (raw) | `.send` (id) | `.delete` (id)
+- `threads.list` (q, max_results) | `.get` (id) | `.trash` (id)
+- `profile` | `history.list` (start_history_id, max_results)
+
+**Outlook** — Email, folders, calendar
+- `messages.list` (filter, top, orderby) | `.get` (id) | `.send` (to, subject, body) | `.reply` (id, comment) | `.forward` (id, to) | `.delete` (id) | `.move` (id, destination_id) | `.update` (id, is_read)
+- `folders.list` | `.get` (id) | `.create` (name) | `.delete` (id) | `.messages` (id, top, filter)
+- `search` (query, top) | `profile`
+
+**Google Drive** — Files, permissions, sharing
+- `files.list` (query, page_size) | `.get` (id) | `.create` (name, mimeType, parents) | `.update` (id, name) | `.delete` (id) | `.copy` (id, name) | `.export` (id, mimeType)
+- `permissions.list` (id) | `.create` (id, role, type, email) | `.delete` (id, permission_id)
+- `changes.watch` (channel_id, webhook_url)
+
+**OneDrive** — Files, folders, sharing
+- `files.list` (folder_path, top) | `.get` (id) | `.get_by_path` (path) | `.create_folder` (parent_id, name) | `.copy` (id, name, destination_id) | `.move` (id, destination_id) | `.delete` (id) | `.search` (query, top)
+- `sharing.create_link` (id, type, scope) | `.list` (id)
+- `subscriptions.create` (change_type, webhook_url) | `.list` | `.delete` (subscription_id) | `delta` (delta_token)
+
+**X (Twitter)** — Tweets, users, DMs, timelines
+- `tweets.get` (id) | `.search` (query, max_results) | `.create` (text, reply) | `.delete` (id)
+- `users.get` (id) | `.by_username` (username) | `.followers` (id) | `.following` (id) | `.timeline` (id, max_results)
+- `likes.create` (user_id, tweet_id) | `.delete` (user_id, tweet_id)
+- `retweets.create` (user_id, tweet_id) | `bookmarks.list` (user_id)
+- `dm.send` (to, text) | `.list` | `mute.create` (source_user_id, target_user_id) | `.delete`
+- `lists.list` (user_id) | `.get` (id)
+
+**Twilio** — SMS, voice calls, WhatsApp
+- `messages.send` (to, from, body) | `.get` (sid) | `.list`
+- `calls.create` (to, from, url) | `.get` (sid) | `.list` | `.update` (sid, status)
+- `lookups.phone` (phone_number) | `recordings.list` | `.get` (sid) | `account.get` | `numbers.list`
+
+**Vercel** — Deployments, projects, domains
+- `deployments.list` | `.get` (id) | `.create` (name, target) | `.cancel` (id) | `.delete` (id)
+- `projects.list` | `.get` (id) | `.create` (name, framework) | `.delete` (id)
+- `domains.list` (project_id) | `.add` (project_id, domain) | `.remove` (project_id, domain)
+- `env.list` (project_id) | `.create` (project_id, key, value, target) | `.delete` (project_id, id)
+- `team.get` | `logs.list` (id)
+
+**Slack** — Messages, channels, users, files
+- `messages.send` (channel, text, blocks) | `.update` (channel, ts, text) | `.delete` (channel, ts) | `.list` (channel, limit) | `.replies` (channel, ts)
+- `channels.list` (types, limit) | `.info` (channel) | `.create` (name, is_private) | `.join` (channel) | `.invite` (channel, users) | `.archive` (channel) | `.topic` (channel, topic)
+- `users.list` (limit) | `.info` (user) | `.me`
+- `reactions.add` (channel, ts, name) | `.remove` (channel, ts, name)
+- `files.list` (channel) | `.info` (file) | `search` (query) | `pins.add` (channel, ts) | `.list` (channel)
+
+**Discord** — Guilds, channels, messages, users
+- `guilds.list` | `.get` (id) | `.channels` (id) | `.members` (id, limit)
+- `channels.get` (id) | `.create` (guild_id, name, type) | `.update` (id, name) | `.delete` (id)
+- `messages.list` (channel, limit) | `.get` (channel, id) | `.send` (channel, content, embeds) | `.update` (channel, id, content) | `.delete` (channel, id)
+- `reactions.add` (channel, id, emoji) | `.remove` (channel, id, emoji)
+- `users.me` | `.get` (id) | `roles.list` (guild_id)
+
+**HubSpot** — CRM: contacts, companies, deals, tickets
+- `contacts.list` | `.get` (id) | `.create` (properties) | `.update` (id, properties) | `.delete` (id) | `.search` (query)
+- `companies.list` | `.get` (id) | `.create` (properties) | `.update` (id, properties) | `.delete` (id) | `.search` (query)
+- `deals.list` | `.get` (id) | `.create` (properties) | `.update` (id, properties) | `.delete` (id) | `.search` (query)
+- `tickets.list` | `.get` (id) | `.create` (properties) | `.update` (id, properties) | `.delete` (id)
+- `owners.list` | `.get` (id) | `pipelines.list` (object_type) | `.get` (object_type, id)
+- `associations.list` (from_type, id, to_type) | `.create` (from_type, from_id, to_type, to_id)
+- `notes.create` (properties) | `tasks.create` (properties) | `search` (object_type, query)
+
+**Shopify** — E-commerce: products, orders, customers, inventory
+- `shop.get` | `products.list` | `.get` (id) | `.create` (product) | `.update` (id, product) | `.delete` (id) | `.count`
+- `variants.list` (product_id) | `.get` (id) | `.update` (id, variant)
+- `orders.list` | `.get` (id) | `.create` (order) | `.update` (id) | `.close` (id) | `.cancel` (id) | `.count`
+- `customers.list` | `.get` (id) | `.create` (customer) | `.update` (id) | `.search` (query) | `.count`
+- `inventory.list` | `.set` (location_id, inventory_item_id, available) | `.adjust` (location_id, inventory_item_id, adjustment)
+- `collections.list` | `.get` (id) | `.create` | `smart_collections.list`
+- `fulfillments.list` (order_id) | `.create` (order_id, fulfillment) | `locations.list` | `.get` (id)
+- `webhooks.list` | `.create` (topic, address) | `.delete` (id)
+
+**Square** — Payments, orders, customers, catalog, inventory
+- `payments.list` | `.get` (id) | `.create` (source_id, amount, currency, location_id) | `.cancel` (id) | `.refund` (payment_id, amount)
+- `orders.search` (location_ids, query) | `.get` (id) | `.create` (order)
+- `customers.list` | `.get` (id) | `.create` (given_name, family_name, email) | `.update` (id) | `.delete` (id) | `.search` (query)
+- `catalog.list` (types) | `.get` (id) | `.search` (types, query)
+- `inventory.count` (id, location_ids) | `.adjust` (id, location_id, quantity)
+- `locations.list` | `.get` (id) | `merchants.me`
+
+**Notion** — Pages, databases, blocks, search
+- `search` (query, filter, limit) | `pages.get` (id) | `.create` (parent, properties, children) | `.update` (id, properties) | `.delete` (id)
+- `databases.list` (limit) | `.get` (id) | `.query` (id, filter, sorts, limit) | `.create` (parent, title, properties) | `.update` (id, title)
+- `blocks.get` (id) | `.children` (id, limit) | `.append` (id, children) | `.update` (id) | `.delete` (id)
+- `users.list` | `.get` (id) | `.me` | `comments.list` (block_id) | `.create` (parent, rich_text)
+
+**Linear** — Issues, projects, teams, cycles (GraphQL)
+- `issues.list` (limit) | `.get` (id) | `.create` (title, description, team_id, assignee_id, priority) | `.update` (id, title, state_id) | `.delete` (id) | `.search` (query)
+- `projects.list` | `.get` (id) | `.create` (name, description, team_ids)
+- `teams.list` | `.get` (id) | `cycles.list` | `labels.list` | `states.list` | `me`
+- `comments.create` (issue_id, body)
+
+**Jira** — Issues, projects, boards, sprints
+- `issues.get` (id) | `.create` (project, summary, description, issue_type) | `.update` (id, fields) | `.delete` (id) | `.transition` (id, transition_id) | `.search` (jql, limit) | `.assign` (id, assignee) | `.comment` (id, body)
+- `projects.list` | `.get` (id) | `boards.list` | `.get` (id)
+- `sprints.list` (board_id) | `.get` (id) | `.issues` (id)
+- `users.search` (query) | `.me` | `statuses.list` (project)
+
+**GitLab** — Projects, issues, merge requests, pipelines
+- `projects.list` (membership, limit) | `.get` (id) | `.create` (name, description, visibility) | `.delete` (id) | `.search` (query)
+- `issues.list` (project_id, state, labels) | `.get` (project_id, iid) | `.create` (project_id, title, description) | `.update` (project_id, iid) | `.delete` (project_id, iid)
+- `merge_requests.list` (project_id, state) | `.get` (project_id, iid) | `.create` (project_id, title, source_branch, target_branch) | `.merge` (project_id, iid)
+- `pipelines.list` (project_id) | `.get` (project_id, id) | `.jobs` (project_id, id)
+- `users.me` | `.list` (query) | `branches.list` (project_id)
+
+**Airtable** — Bases, tables, records, fields
+- `whoami` | `bases.list` | `.get` (id) | `tables.list` (base_id) | `.create` (base_id, name, fields)
+- `records.list` (base_id, table_id, limit, view, filter) | `.get` (base_id, table_id, id) | `.create` (base_id, table_id, fields) | `.update` (base_id, table_id, id, fields) | `.delete` (base_id, table_id, id)
+- `fields.create` (base_id, table_id, name, type) | `.update` (base_id, table_id, id, name)
+
+**Asana** — Tasks, projects, sections, workspaces
+- `tasks.list` (project/assignee/workspace) | `.get` (id) | `.create` (name, notes, assignee, projects, due_on, workspace) | `.update` (id, name, completed) | `.delete` (id) | `.search` (workspace, query) | `.subtasks` (id) | `.add_comment` (id, text)
+- `projects.list` (workspace) | `.get` (id) | `.create` (name, notes, workspace, team) | `.update` (id) | `.delete` (id)
+- `sections.list` (project) | `.create` (project, name) | `.update` (id, name) | `.add_task` (section, task_id)
+- `workspaces.list` | `.get` (id) | `teams.list` (workspace) | `users.me` | `.list` (workspace) | `tags.list` (workspace)
+
+**Mailchimp** — Lists, members, campaigns, templates
+- `lists.list` (limit) | `.get` (id) | `.create` (name, contact, permission_reminder)
+- `members.list` (list_id, status) | `.get` (list_id, id) | `.add` (list_id, email, status, merge_fields) | `.update` (list_id, id) | `.delete` (list_id, id) | `.tags` (list_id, id)
+- `campaigns.list` (status) | `.get` (id) | `.create` (type, recipients, settings) | `.send` (id) | `.delete` (id) | `.content` (id)
+- `templates.list` (type) | `.get` (id) | `automations.list` | `.get` (id) | `account` | `ping`
+
+**Dropbox** — Files, folders, sharing
+- `files.list` (path, limit, recursive) | `.list_continue` (cursor) | `.get_metadata` (path) | `.search` (query, path) | `.copy` (from_path, to_path) | `.move` (from_path, to_path) | `.delete` (path) | `.create_folder` (path)
+- `sharing.list` (path) | `.create_link` (path) | `.list_folders` | `.list_members` (id)
+- `users.me` | `.space`
+
+**SendGrid** — Email sending, contacts, templates
+- `mail.send` (to, from, subject, content) | `contacts.list` | `.get` (id) | `.search` (query) | `.add` (email) | `.delete` (id) | `.count`
+- `lists.list` | `.get` (id) | `.create` (name) | `.delete` (id)
+- `templates.list` | `.get` (id) | `stats.global` | `senders.list`
+
+**Cloudflare** — Zones, DNS, Workers, KV
+- `zones.list` (name, status) | `.get` (id) | `.create` (name, account_id) | `.delete` (id) | `.purge_cache` (zone_id)
+- `dns.list` (zone_id, type, name) | `.get` (zone_id, id) | `.create` (zone_id, type, name, content, proxied) | `.update` (zone_id, id) | `.delete` (zone_id, id)
+- `workers.list` (account_id) | `.get` (account_id, name) | `.delete` (account_id, name) | `.routes` (zone_id)
+- `kv.namespaces` (account_id) | `.keys` (account_id, namespace_id) | `.get` (account_id, namespace_id, key) | `.put` (account_id, namespace_id, key, value) | `.delete` (account_id, namespace_id, key)
+- `analytics.dashboard` (zone_id, since, until) | `user.me` | `.tokens`
 
 ### AI & Code
 ai: [--image PROMPT] [--size WxH] [--quality hd] (DALL-E image generation)
@@ -290,7 +442,8 @@ See `references/cdk-patterns.md` for common CDK patterns.
 - `connector({ name: "stripe", method: "customers.create", params: { email: "..." } })`
 - `connector({ name: "slack", method: "messages.send", params: { channel: "C...", text: "Hello" } })`
 - `connector({ name: "notion", method: "search", params: { query: "meeting notes" } })`
-- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, slack, discord, sendgrid, square, gitlab, cloudflare, digitalocean, notion, linear, jira, airtable, asana, mailchimp, dropbox, salesforce
+- Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, slack, discord, sendgrid, square, gitlab, cloudflare, notion, linear, jira, airtable, asana, mailchimp, dropbox
+- All methods for each connector are listed in the **Integrations (Connectors)** section above
 
 ### Sharing
 share: [session-id-or-slug] [--revoke ID] [--list] [--no-expire] (share conversations)

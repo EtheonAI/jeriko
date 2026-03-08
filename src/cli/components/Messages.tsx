@@ -147,7 +147,7 @@ const CompactToolCall: React.FC<{ toolCall: DisplayToolCall }> = ({ toolCall }) 
       {resultLine && (
         <Box marginLeft={2}>
           <Text color={toolCall.isError ? PALETTE.red : PALETTE.dim}>{ICONS.result}  </Text>
-          <Text color={toolCall.isError ? PALETTE.red : PALETTE.muted}>{resultLine}</Text>
+          <Text color={toolCall.isError ? PALETTE.red : PALETTE.muted} wrap="truncate-end">{resultLine}</Text>
         </Box>
       )}
     </Box>
@@ -171,7 +171,7 @@ export const StreamingText: React.FC<StreamingTextProps> = ({ text, phase }) => 
   if (!text || phase !== "streaming") return null;
 
   return (
-    <Box flexDirection="column" marginTop={1}>
+    <Box flexDirection="column" marginTop={1} overflowX="hidden">
       <Markdown text={text} />
       <Text color={PALETTE.dim}>{ICONS.cursor}</Text>
     </Box>

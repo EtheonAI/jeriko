@@ -16,6 +16,7 @@ import {
   getConsentBySubscription,
   getConsentBySession,
 } from "../../../src/daemon/billing/store.js";
+import { TIER_LIMITS, UNLIMITED_TRIGGERS_STORED } from "../../../src/daemon/billing/config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unlinkSync, existsSync } from "node:fs";
@@ -286,21 +287,21 @@ describe("billing/store", () => {
       expect(license.customer_id).toBeNull();
       expect(license.valid_until).toBeNull();
       expect(license.verified_at).toBeNull();
-      expect(license.connector_limit).toBe(2);
-      expect(license.trigger_limit).toBe(3);
+      expect(license.connector_limit).toBe(TIER_LIMITS.free.connectors);
+      expect(license.trigger_limit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("updates license with partial data", () => {
       updateLicense({
         tier: "pro",
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       });
 
       const license = getLicense();
       expect(license.tier).toBe("pro");
-      expect(license.connector_limit).toBe(10);
-      expect(license.trigger_limit).toBe(999999);
+      expect(license.connector_limit).toBe(UNLIMITED_TRIGGERS_STORED);
+      expect(license.trigger_limit).toBe(UNLIMITED_TRIGGERS_STORED);
       // Other fields should remain as defaults
       expect(license.key).toBe("current");
     });
@@ -333,14 +334,14 @@ describe("billing/store", () => {
     });
 
     it("overwrites previous license on subsequent updates", () => {
-      updateLicense({ tier: "free", connector_limit: 2, trigger_limit: 3 });
+      updateLicense({ tier: "free", connector_limit: TIER_LIMITS.free.connectors, trigger_limit: TIER_LIMITS.free.triggers });
       let license = getLicense();
       expect(license.tier).toBe("free");
 
-      updateLicense({ tier: "pro", connector_limit: 10, trigger_limit: 999999 });
+      updateLicense({ tier: "pro", connector_limit: UNLIMITED_TRIGGERS_STORED, trigger_limit: UNLIMITED_TRIGGERS_STORED });
       license = getLicense();
       expect(license.tier).toBe("pro");
-      expect(license.connector_limit).toBe(10);
+      expect(license.connector_limit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
 
     it("always uses 'current' as the singleton key", () => {

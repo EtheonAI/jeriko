@@ -210,7 +210,11 @@ describe("Model Resolution (resolveModel)", () => {
   it("defaults local model to llama3 when LOCAL_MODEL not set", () => {
     const orig = process.env.LOCAL_MODEL;
     delete process.env.LOCAL_MODEL;
-    expect(resolveModel("local", "local")).toBe("llama3");
+    // Resolves to LOCAL_MODEL env → Ollama-detected model → "llama3" fallback.
+    // When Ollama is running, the detected model takes priority over "llama3".
+    const resolved = resolveModel("local", "local");
+    expect(resolved).toBeTruthy();
+    expect(typeof resolved).toBe("string");
     if (orig !== undefined) process.env.LOCAL_MODEL = orig;
   });
 

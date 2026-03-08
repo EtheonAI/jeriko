@@ -107,10 +107,10 @@ describe("config", () => {
 
   test("getUserId returns the value when set", async () => {
     const saved = process.env.JERIKO_USER_ID;
-    process.env.JERIKO_USER_ID = "test-user-123";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
     try {
       const { getUserId } = await import("../../src/shared/config.js");
-      expect(getUserId()).toBe("test-user-123");
+      expect(getUserId()).toBe("abcdef0123456789abcdef0123456789");
     } finally {
       if (saved !== undefined) {
         process.env.JERIKO_USER_ID = saved;
@@ -585,10 +585,10 @@ describe("URL builders", () => {
   });
 
   test("buildWebhookUrl in relay mode (with userId)", async () => {
-    process.env.JERIKO_USER_ID = "user-abc";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
     const { buildWebhookUrl } = await import("../../src/shared/urls.js");
     const url = buildWebhookUrl("trigger-123");
-    expect(url).toBe("https://bot.jeriko.ai/hooks/user-abc/trigger-123");
+    expect(url).toBe("https://bot.jeriko.ai/hooks/abcdef0123456789abcdef0123456789/trigger-123");
   });
 
   test("buildWebhookUrl in self-hosted mode", async () => {
@@ -619,9 +619,9 @@ describe("URL builders", () => {
 
   test("buildOAuthStartUrl", async () => {
     const { buildOAuthStartUrl } = await import("../../src/shared/urls.js");
-    const url = buildOAuthStartUrl("github", "user-123.token-abc");
+    const url = buildOAuthStartUrl("github", "abcdef0123456789abcdef0123456789.token-abc");
     expect(url).toBe(
-      "https://bot.jeriko.ai/oauth/github/start?state=user-123.token-abc",
+      "https://bot.jeriko.ai/oauth/github/start?state=abcdef0123456789abcdef0123456789.token-abc",
     );
   });
 
@@ -660,10 +660,10 @@ describe("URL builders", () => {
   });
 
   test("buildShareLink in relay mode with userId", async () => {
-    process.env.JERIKO_USER_ID = "user-abc";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
     const { buildShareLink } = await import("../../src/shared/urls.js");
     const url = buildShareLink("share-xyz");
-    expect(url).toBe("https://bot.jeriko.ai/s/user-abc/share-xyz");
+    expect(url).toBe("https://bot.jeriko.ai/s/abcdef0123456789abcdef0123456789/share-xyz");
   });
 
   test("buildShareLink in self-hosted mode", async () => {
@@ -691,18 +691,18 @@ describe("relay-protocol", () => {
   });
 
   test("buildCompositeState joins with dot", () => {
-    const state = buildCompositeState("user-123", "random-token");
-    expect(state).toBe("user-123.random-token");
+    const state = buildCompositeState("abcdef0123456789abcdef0123456789", "random-token");
+    expect(state).toBe("abcdef0123456789abcdef0123456789.random-token");
   });
 
   test("parseCompositeState splits on first dot", () => {
-    const result = parseCompositeState("user-123.random-token");
-    expect(result).toEqual({ userId: "user-123", token: "random-token" });
+    const result = parseCompositeState("abcdef0123456789abcdef0123456789.random-token");
+    expect(result).toEqual({ userId: "abcdef0123456789abcdef0123456789", token: "random-token" });
   });
 
   test("parseCompositeState handles dots in token", () => {
-    const result = parseCompositeState("user-123.token.with.dots");
-    expect(result).toEqual({ userId: "user-123", token: "token.with.dots" });
+    const result = parseCompositeState("abcdef0123456789abcdef0123456789.token.with.dots");
+    expect(result).toEqual({ userId: "abcdef0123456789abcdef0123456789", token: "token.with.dots" });
   });
 
   test("parseCompositeState returns null for no dot", () => {
@@ -714,7 +714,7 @@ describe("relay-protocol", () => {
   });
 
   test("parseCompositeState returns null for empty token", () => {
-    expect(parseCompositeState("user-only.")).toBeNull();
+    expect(parseCompositeState("abcdef0123456789abcdef0123456789.")).toBeNull();
   });
 });
 

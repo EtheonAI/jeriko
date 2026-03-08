@@ -3,6 +3,7 @@
 import { describe, expect, it, beforeEach, afterEach, mock } from "bun:test";
 import {
   TOKEN_EXCHANGE_PROVIDERS,
+  buildAuthorizationUrl,
   exchangeCodeForTokens,
   refreshAccessToken,
   type TokenExchangeProvider,
@@ -24,8 +25,9 @@ describe("TOKEN_EXCHANGE_PROVIDERS", () => {
   it("has entries for all OAuth providers", () => {
     const expectedProviders = [
       "stripe", "github", "x", "gdrive", "onedrive", "vercel", "gmail", "outlook",
-      "hubspot", "shopify", "square", "gitlab", "digitalocean",
-      "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox", "salesforce",
+      "hubspot", "shopify", "instagram", "threads", "square", "gitlab",
+      "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
+      "discord",
     ];
     for (const name of expectedProviders) {
       expect(TOKEN_EXCHANGE_PROVIDERS.has(name)).toBe(true);
@@ -162,6 +164,124 @@ describe("hasLocalSecret", () => {
 });
 
 // ---------------------------------------------------------------------------
+// buildAuthorizationUrl
+// ---------------------------------------------------------------------------
+
+describe("buildAuthorizationUrl", () => {
+  const mockProvider: TokenExchangeProvider = {
+    name: "test-provider",
+    authUrl: "https://example.com/oauth/authorize",
+    tokenUrl: "https://example.com/oauth/token",
+    scopes: ["read", "write"],
+    tokenExchangeAuth: "body",
+  };
+
+  it("builds a valid authorization URL with required params", async () => {
+    const result = await buildAuthorizationUrl(
+      mockProvider,
+      "test-client-id",
+      "https://example.com/callback",
+      "user123.token456",
+    );
+
+    const url = new URL(result.url);
+    expect(url.origin + url.pathname).toBe("https://example.com/oauth/authorize");
+    expect(url.searchParams.get("client_id")).toBe("test-client-id");
+    expect(url.searchParams.get("redirect_uri")).toBe("https://example.com/callback");
+    expect(url.searchParams.get("state")).toBe("user123.token456");
+    expect(url.searchParams.get("response_type")).toBe("code");
+    expect(url.searchParams.get("scope")).toBe("read write");
+    expect(result.codeVerifier).toBeUndefined();
+  });
+
+  it("generates PKCE challenge when provider requires it", async () => {
+    const pkceProvider: TokenExchangeProvider = {
+      ...mockProvider,
+      usePKCE: true,
+    };
+
+    const result = await buildAuthorizationUrl(
+      pkceProvider,
+      "test-client-id",
+      "https://example.com/callback",
+      "state",
+    );
+
+    const url = new URL(result.url);
+    expect(url.searchParams.get("code_challenge")).toBeTruthy();
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(result.codeVerifier).toBeTruthy();
+    expect(result.codeVerifier!.length).toBeGreaterThan(0);
+  });
+
+  it("includes extraAuthParams when defined", async () => {
+    const providerWithExtras: TokenExchangeProvider = {
+      ...mockProvider,
+      extraAuthParams: { access_type: "offline", prompt: "consent" },
+    };
+
+    const result = await buildAuthorizationUrl(
+      providerWithExtras,
+      "test-client-id",
+      "https://example.com/callback",
+      "state",
+    );
+
+    const url = new URL(result.url);
+    expect(url.searchParams.get("access_type")).toBe("offline");
+    expect(url.searchParams.get("prompt")).toBe("consent");
+  });
+
+  it("replaces {shop} placeholder in authUrl when context is provided", async () => {
+    const shopifyProvider = TOKEN_EXCHANGE_PROVIDERS.get("shopify")!;
+
+    const result = await buildAuthorizationUrl(
+      shopifyProvider,
+      "test-client-id",
+      "https://bot.jeriko.ai/oauth/shopify/callback",
+      "state",
+      { shop: "mystore" },
+    );
+
+    const url = new URL(result.url);
+    expect(url.origin).toBe("https://mystore.myshopify.com");
+    expect(url.pathname).toBe("/admin/oauth/authorize");
+    expect(url.searchParams.get("client_id")).toBe("test-client-id");
+  });
+
+  it("leaves authUrl unchanged when no context is provided", async () => {
+    const shopifyProvider = TOKEN_EXCHANGE_PROVIDERS.get("shopify")!;
+
+    const result = await buildAuthorizationUrl(
+      shopifyProvider,
+      "test-client-id",
+      "https://bot.jeriko.ai/oauth/shopify/callback",
+      "state",
+    );
+
+    // Without context, {shop} placeholder remains — authUrl is unresolved
+    expect(result.url).toContain("{shop}");
+  });
+
+  it("omits scope param when provider has no scopes", async () => {
+    const noScopeProvider: TokenExchangeProvider = {
+      ...mockProvider,
+      scopes: [],
+    };
+
+    const result = await buildAuthorizationUrl(
+      noScopeProvider,
+      "test-client-id",
+      "https://example.com/callback",
+      "state",
+    );
+
+    const url = new URL(result.url);
+    expect(url.searchParams.has("scope")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // exchangeCodeForTokens
 // ---------------------------------------------------------------------------
 
@@ -276,6 +396,34 @@ describe("exchangeCodeForTokens", () => {
 
       const params = new URLSearchParams(capturedBody);
       expect(params.get("code_verifier")).toBe("test-verifier-value");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("resolves {shop} placeholder in tokenUrl when context is provided", async () => {
+    let capturedUrl: string = "";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, _opts: RequestInit) => {
+      capturedUrl = url;
+      return new Response(JSON.stringify({
+        access_token: "shopify-token",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      const shopifyProvider = TOKEN_EXCHANGE_PROVIDERS.get("shopify")!;
+      await exchangeCodeForTokens({
+        provider: shopifyProvider,
+        code: "test-code",
+        redirectUri: "https://example.com/callback",
+        clientId: "test-client-id",
+        clientSecret: "test-client-secret",
+        context: { shop: "mystore" },
+      });
+
+      expect(capturedUrl).toBe("https://mystore.myshopify.com/admin/oauth/access_token");
     } finally {
       globalThis.fetch = originalFetch;
     }

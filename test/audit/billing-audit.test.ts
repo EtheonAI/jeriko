@@ -94,7 +94,7 @@ function setTierState(
   updateLicense({
     tier,
     subscription_id: status !== "none" ? "sub_audit_test" : null,
-    connector_limit: limits.connectors,
+    connector_limit: limits.connectors === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.connectors,
     trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
   });
 }
@@ -185,24 +185,24 @@ describe("billing audit", () => {
   // =========================================================================
 
   describe("tier limits", () => {
-    it("free tier: 2 connectors, 3 triggers, label 'Community'", () => {
-      expect(TIER_LIMITS.free).toEqual({ connectors: 2, triggers: 3, label: "Community" });
+    it("free tier: 5 connectors, 10 triggers, label 'Community'", () => {
+      expect(TIER_LIMITS.free).toEqual({ connectors: 5, triggers: 10, label: "Community" });
     });
 
-    it("pro tier: 10 connectors, unlimited triggers, label 'Pro'", () => {
-      expect(TIER_LIMITS.pro.connectors).toBe(10);
+    it("pro tier: unlimited connectors, unlimited triggers, label 'Pro'", () => {
+      expect(TIER_LIMITS.pro.connectors).toBe(Infinity);
       expect(TIER_LIMITS.pro.triggers).toBe(Infinity);
       expect(TIER_LIMITS.pro.label).toBe("Pro");
     });
 
-    it("team tier: 10 connectors, unlimited triggers, label 'Team'", () => {
-      expect(TIER_LIMITS.team.connectors).toBe(10);
+    it("team tier: unlimited connectors, unlimited triggers, label 'Team'", () => {
+      expect(TIER_LIMITS.team.connectors).toBe(Infinity);
       expect(TIER_LIMITS.team.triggers).toBe(Infinity);
       expect(TIER_LIMITS.team.label).toBe("Team");
     });
 
-    it("enterprise tier: 10 connectors, unlimited triggers, label 'Enterprise'", () => {
-      expect(TIER_LIMITS.enterprise.connectors).toBe(10);
+    it("enterprise tier: unlimited connectors, unlimited triggers, label 'Enterprise'", () => {
+      expect(TIER_LIMITS.enterprise.connectors).toBe(Infinity);
       expect(TIER_LIMITS.enterprise.triggers).toBe(Infinity);
       expect(TIER_LIMITS.enterprise.label).toBe("Enterprise");
     });
@@ -270,8 +270,8 @@ describe("billing audit", () => {
       const license = getLicense();
       expect(license.key).toBe("current");
       expect(license.tier).toBe("free");
-      expect(license.connector_limit).toBe(2);
-      expect(license.trigger_limit).toBe(3);
+      expect(license.connector_limit).toBe(TIER_LIMITS.free.connectors);
+      expect(license.trigger_limit).toBe(TIER_LIMITS.free.triggers);
       expect(license.email).toBeNull();
       expect(license.subscription_id).toBeNull();
       expect(license.customer_id).toBeNull();
@@ -280,12 +280,12 @@ describe("billing audit", () => {
     });
 
     it("updateLicense merges partial updates", () => {
-      updateLicense({ tier: "pro", connector_limit: 10 });
+      updateLicense({ tier: "pro", connector_limit: UNLIMITED_TRIGGERS_STORED });
       const license = getLicense();
       expect(license.tier).toBe("pro");
-      expect(license.connector_limit).toBe(10);
-      // trigger_limit should remain at default (3) since not updated
-      expect(license.trigger_limit).toBe(3);
+      expect(license.connector_limit).toBe(UNLIMITED_TRIGGERS_STORED);
+      // trigger_limit should remain at default (free tier) since not updated
+      expect(license.trigger_limit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("updateLicense always uses singleton key 'current'", () => {
@@ -300,8 +300,8 @@ describe("billing audit", () => {
       const state = getLicenseState();
       expect(state.tier).toBe("free");
       expect(state.label).toBe("Community");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
       expect(state.status).toBe("none");
       expect(state.pastDue).toBe(false);
       expect(state.gracePeriod).toBe(false);
@@ -312,7 +312,7 @@ describe("billing audit", () => {
       const state = getLicenseState();
       expect(state.tier).toBe("pro");
       expect(state.label).toBe("Pro");
-      expect(state.connectorLimit).toBe(10);
+      expect(state.connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
       expect(state.status).toBe("active");
     });
 
@@ -320,7 +320,7 @@ describe("billing audit", () => {
       // License says pro (stale), but subscription is canceled
       updateLicense({
         tier: "pro",
-        connector_limit: 10,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
         trigger_limit: UNLIMITED_TRIGGERS_STORED,
         subscription_id: "sub_canceled",
       });
@@ -337,10 +337,10 @@ describe("billing audit", () => {
       });
       const state = getLicenseState();
       // effectiveTier("canceled", "pro") = "free"
-      // Math.min(10, 2) = 2, Math.min(999999, 3) = 3
+      // Math.min(999999, 5) = 5, Math.min(999999, 10) = 10
       expect(state.tier).toBe("free");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
     });
   });
 
@@ -361,7 +361,7 @@ describe("billing audit", () => {
       expect(isWithinGracePeriod({
         key: "current", tier: "pro", email: null, subscription_id: null,
         customer_id: null, valid_until: null, verified_at: null,
-        connector_limit: 10, trigger_limit: UNLIMITED_TRIGGERS_STORED,
+        connector_limit: UNLIMITED_TRIGGERS_STORED, trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(false);
     });
 
@@ -370,7 +370,7 @@ describe("billing audit", () => {
       expect(isWithinGracePeriod({
         key: "current", tier: "pro", email: null, subscription_id: null,
         customer_id: null, valid_until: future, verified_at: null,
-        connector_limit: 10, trigger_limit: UNLIMITED_TRIGGERS_STORED,
+        connector_limit: UNLIMITED_TRIGGERS_STORED, trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(true);
     });
 
@@ -379,7 +379,7 @@ describe("billing audit", () => {
       expect(isWithinGracePeriod({
         key: "current", tier: "pro", email: null, subscription_id: null,
         customer_id: null, valid_until: past, verified_at: null,
-        connector_limit: 10, trigger_limit: UNLIMITED_TRIGGERS_STORED,
+        connector_limit: UNLIMITED_TRIGGERS_STORED, trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(false);
     });
 
@@ -388,7 +388,7 @@ describe("billing audit", () => {
       expect(isWithinGracePeriod({
         key: "current", tier: "pro", email: null, subscription_id: null,
         customer_id: null, valid_until: futureMs, verified_at: null,
-        connector_limit: 10, trigger_limit: UNLIMITED_TRIGGERS_STORED,
+        connector_limit: UNLIMITED_TRIGGERS_STORED, trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(true);
     });
 
@@ -397,13 +397,13 @@ describe("billing audit", () => {
       const state = getLicenseState();
       expect(state.tier).toBe("pro");
       expect(state.pastDue).toBe(true);
-      expect(state.connectorLimit).toBe(10);
+      expect(state.connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
 
     it("past_due with valid_until set has gracePeriod true", () => {
       updateLicense({
         tier: "pro",
-        connector_limit: 10,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
         trigger_limit: UNLIMITED_TRIGGERS_STORED,
         subscription_id: "sub_pd",
         valid_until: Math.floor(Date.now() / 1000) + 86400,
@@ -551,8 +551,8 @@ describe("billing audit", () => {
       it("getLicense returns defaults when empty", () => {
         const lic = getLicense();
         expect(lic.tier).toBe("free");
-        expect(lic.connector_limit).toBe(2);
-        expect(lic.trigger_limit).toBe(3);
+        expect(lic.connector_limit).toBe(TIER_LIMITS.free.connectors);
+        expect(lic.trigger_limit).toBe(TIER_LIMITS.free.triggers);
       });
 
       it("updateLicense partial merge preserves existing fields", () => {
@@ -671,7 +671,7 @@ describe("billing audit", () => {
 
       const lic = getLicense();
       expect(lic.tier).toBe("pro");
-      expect(lic.connector_limit).toBe(10);
+      expect(lic.connector_limit).toBe(UNLIMITED_TRIGGERS_STORED);
       expect(lic.trigger_limit).toBe(UNLIMITED_TRIGGERS_STORED);
 
       const consent = getConsentBySubscription("sub_full");
@@ -698,8 +698,8 @@ describe("billing audit", () => {
       expect(getSubscriptionById("sub_del")!.status).toBe("canceled");
       expect(getSubscriptionById("sub_del")!.tier).toBe("free");
       expect(getLicense().tier).toBe("free");
-      expect(getLicense().connector_limit).toBe(2);
-      expect(getLicense().trigger_limit).toBe(3);
+      expect(getLicense().connector_limit).toBe(TIER_LIMITS.free.connectors);
+      expect(getLicense().trigger_limit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("invoice.paid extends valid_until", () => {
@@ -845,40 +845,40 @@ describe("billing audit", () => {
 
   describe("gate enforcement", () => {
     describe("canActivateConnector", () => {
-      it("free tier: allows 0 and 1, denies at 2", () => {
+      it("free tier: allows 0-4, denies at 5", () => {
         setTierState(db, "free", "none");
         expect(canActivateConnector(0).allowed).toBe(true);
-        expect(canActivateConnector(1).allowed).toBe(true);
-        expect(canActivateConnector(2).allowed).toBe(false);
-        expect(canActivateConnector(2).reason).toContain("Connector limit reached");
-        expect(canActivateConnector(2).reason).toContain("2/2");
-        expect(canActivateConnector(2).reason).toContain("Community");
+        expect(canActivateConnector(4).allowed).toBe(true);
+        expect(canActivateConnector(5).allowed).toBe(false);
+        expect(canActivateConnector(5).reason).toContain("Connector limit reached");
+        expect(canActivateConnector(5).reason).toContain("5/5");
+        expect(canActivateConnector(5).reason).toContain("Community");
       });
 
-      it("pro tier: allows up to 9, denies at 10", () => {
+      it("pro tier: allows any count (unlimited)", () => {
         setTierState(db, "pro", "active");
         expect(canActivateConnector(5).allowed).toBe(true);
-        expect(canActivateConnector(9).allowed).toBe(true);
-        expect(canActivateConnector(10).allowed).toBe(false);
-        expect(canActivateConnector(10).reason).toContain("Pro");
+        expect(canActivateConnector(100).allowed).toBe(true);
+        expect(canActivateConnector(999998).allowed).toBe(true);
       });
 
       it("denial message includes upgrade hint", () => {
         setTierState(db, "free", "none");
-        const result = canActivateConnector(2);
+        const result = canActivateConnector(5);
         expect(result.reason).toContain("jeriko upgrade");
+        expect(result.reason).toContain("unlimited");
       });
     });
 
     describe("canAddTrigger", () => {
-      it("free tier: allows 0-2, denies at 3", () => {
+      it("free tier: allows 0-9, denies at 10", () => {
         setTierState(db, "free", "none");
         expect(canAddTrigger(0).allowed).toBe(true);
-        expect(canAddTrigger(2).allowed).toBe(true);
-        expect(canAddTrigger(3).allowed).toBe(false);
-        expect(canAddTrigger(3).reason).toContain("Trigger limit reached");
-        expect(canAddTrigger(3).reason).toContain("3/3");
-        expect(canAddTrigger(3).reason).toContain("Community");
+        expect(canAddTrigger(9).allowed).toBe(true);
+        expect(canAddTrigger(10).allowed).toBe(false);
+        expect(canAddTrigger(10).reason).toContain("Trigger limit reached");
+        expect(canAddTrigger(10).reason).toContain("10/10");
+        expect(canAddTrigger(10).reason).toContain("Community");
       });
 
       it("pro tier: allows any count (unlimited)", () => {
@@ -890,7 +890,7 @@ describe("billing audit", () => {
 
       it("denial message includes upgrade hint", () => {
         setTierState(db, "free", "none");
-        const result = canAddTrigger(3);
+        const result = canAddTrigger(10);
         expect(result.reason).toContain("unlimited");
         expect(result.reason).toContain("jeriko upgrade");
       });
@@ -910,66 +910,68 @@ describe("billing audit", () => {
         expect(result.triggers.disabled).toHaveLength(0);
       });
 
-      it("evicts excess connectors on downgrade (5 -> 2)", async () => {
+      it("evicts excess connectors on downgrade (8 -> 5)", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
-        for (const n of ["a", "b", "c", "d", "e"]) connectors.addInstance(n);
+        for (const n of ["a", "b", "c", "d", "e", "f", "g", "h"]) connectors.addInstance(n);
         const triggers = new MockTriggers();
         const result = await enforceLicenseLimits(connectors, triggers);
         expect(result.connectors.evicted).toHaveLength(3);
-        expect(connectors.activeCount).toBe(2);
-        expect(result.connectors.limit).toBe(2);
+        expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+        expect(result.connectors.limit).toBe(TIER_LIMITS.free.connectors);
       });
 
-      it("disables excess triggers on downgrade (6 -> 3)", async () => {
+      it("disables excess triggers on downgrade (15 -> 10)", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
         const triggers = new MockTriggers();
-        for (let i = 1; i <= 6; i++) {
+        for (let i = 1; i <= 15; i++) {
           triggers.addTrigger(`t${i}`, true, new Date(Date.now() + i * 1000).toISOString());
         }
         const result = await enforceLicenseLimits(connectors, triggers);
-        expect(result.triggers.disabled).toHaveLength(3);
-        expect(triggers.enabledCount).toBe(3);
-        expect(result.triggers.limit).toBe(3);
+        expect(result.triggers.disabled).toHaveLength(5);
+        expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
+        expect(result.triggers.limit).toBe(TIER_LIMITS.free.triggers);
       });
 
       it("preserves oldest items (LIFO eviction)", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
-        connectors.addInstance("oldest");
-        connectors.addInstance("middle");
-        connectors.addInstance("newest");
+        // 7 connectors → limit 5, evict 2 newest
+        for (const n of ["c1", "c2", "c3", "c4", "c5", "c6", "c7"]) connectors.addInstance(n);
         const triggers = new MockTriggers();
-        triggers.addTrigger("t-old", true, "2024-01-01T00:00:00Z");
-        triggers.addTrigger("t-mid", true, "2024-06-01T00:00:00Z");
-        triggers.addTrigger("t-new1", true, "2025-01-01T00:00:00Z");
-        triggers.addTrigger("t-new2", true, "2025-06-01T00:00:00Z");
+        // 12 triggers → limit 10, disable 2 newest
+        for (let i = 1; i <= 12; i++) {
+          triggers.addTrigger(`t${i}`, true, new Date(2024, 0, i).toISOString());
+        }
 
         await enforceLicenseLimits(connectors, triggers);
 
-        // Connectors: newest evicted first
-        expect(connectors.getActiveNames()).toContain("oldest");
-        expect(connectors.getActiveNames()).toContain("middle");
-        expect(connectors.getActiveNames()).not.toContain("newest");
+        // Connectors: 2 newest evicted (c7, c6), oldest 5 survive
+        expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+        expect(connectors.getActiveNames()).toContain("c1");
+        expect(connectors.getActiveNames()).toContain("c5");
+        expect(connectors.getActiveNames()).not.toContain("c7");
+        expect(connectors.getActiveNames()).not.toContain("c6");
 
-        // Triggers: oldest 3 survive
-        expect(triggers.isEnabled("t-old")).toBe(true);
-        expect(triggers.isEnabled("t-mid")).toBe(true);
-        expect(triggers.isEnabled("t-new1")).toBe(true);
-        expect(triggers.isEnabled("t-new2")).toBe(false);
+        // Triggers: oldest 10 survive, newest 2 disabled
+        expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
+        expect(triggers.isEnabled("t1")).toBe(true);
+        expect(triggers.isEnabled("t10")).toBe(true);
+        expect(triggers.isEnabled("t11")).toBe(false);
+        expect(triggers.isEnabled("t12")).toBe(false);
       });
 
       it("idempotent — second run is no-op", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
-        for (const n of ["a", "b", "c", "d"]) connectors.addInstance(n);
+        for (const n of ["a", "b", "c", "d", "e", "f", "g", "h"]) connectors.addInstance(n);
         const triggers = new MockTriggers();
-        for (let i = 1; i <= 5; i++) triggers.addTrigger(`t${i}`, true);
+        for (let i = 1; i <= 14; i++) triggers.addTrigger(`t${i}`, true);
 
         await enforceLicenseLimits(connectors, triggers);
-        expect(connectors.activeCount).toBe(2);
-        expect(triggers.enabledCount).toBe(3);
+        expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+        expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
 
         const result2 = await enforceLicenseLimits(connectors, triggers);
         expect(result2.connectors.evicted).toHaveLength(0);
@@ -979,30 +981,29 @@ describe("billing audit", () => {
       it("combined enforcement (connectors + triggers)", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
-        for (const n of ["a", "b", "c", "d"]) connectors.addInstance(n);
+        for (const n of ["a", "b", "c", "d", "e", "f", "g", "h"]) connectors.addInstance(n);
         const triggers = new MockTriggers();
-        for (let i = 1; i <= 7; i++) triggers.addTrigger(`t${i}`, true);
+        for (let i = 1; i <= 15; i++) triggers.addTrigger(`t${i}`, true);
 
         const result = await enforceLicenseLimits(connectors, triggers);
-        expect(result.connectors.evicted).toHaveLength(2);
-        expect(result.triggers.disabled).toHaveLength(4);
-        expect(connectors.activeCount).toBe(2);
-        expect(triggers.enabledCount).toBe(3);
+        expect(result.connectors.evicted).toHaveLength(3);
+        expect(result.triggers.disabled).toHaveLength(5);
+        expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+        expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
       });
 
       it("skips already-disabled triggers", async () => {
         setTierState(db, "free", "canceled");
         const connectors = new MockConnectors();
         const triggers = new MockTriggers();
-        triggers.addTrigger("t1", true, "2024-01-01");
-        triggers.addTrigger("t2", true, "2024-02-01");
-        triggers.addTrigger("t3", false, "2024-03-01"); // already disabled
-        triggers.addTrigger("t4", true, "2024-04-01");
-        triggers.addTrigger("t5", true, "2024-05-01");
-        // 4 enabled, limit 3 -> disable 1 newest
+        // 11 enabled + 1 disabled = 12 total, limit 10 → disable 1 newest
+        for (let i = 1; i <= 10; i++) triggers.addTrigger(`t${i}`, true, `2024-0${Math.min(i, 9)}-01`);
+        triggers.addTrigger("t-disabled", false, "2024-10-01"); // already disabled
+        triggers.addTrigger("t11", true, "2024-11-01");
+        // 11 enabled, limit 10 -> disable 1 newest
         const result = await enforceLicenseLimits(connectors, triggers);
         expect(result.triggers.disabled).toHaveLength(1);
-        expect(triggers.enabledCount).toBe(3);
+        expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
       });
     });
   });
@@ -1014,11 +1015,11 @@ describe("billing audit", () => {
   describe("tier transitions", () => {
     it("free -> pro: limits expand", () => {
       setTierState(db, "free", "none");
-      expect(getLicenseState().connectorLimit).toBe(2);
-      expect(getLicenseState().triggerLimit).toBe(3);
+      expect(getLicenseState().connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(getLicenseState().triggerLimit).toBe(TIER_LIMITS.free.triggers);
 
       setTierState(db, "pro", "active");
-      expect(getLicenseState().connectorLimit).toBe(10);
+      expect(getLicenseState().connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
       expect(getLicenseState().triggerLimit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
 
@@ -1026,29 +1027,29 @@ describe("billing audit", () => {
       setTierState(db, "free", "canceled");
       const state = getLicenseState();
       expect(state.tier).toBe("free");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
     });
 
     it("re-upgrade lifts gates", () => {
       setTierState(db, "free", "canceled");
-      expect(canActivateConnector(2).allowed).toBe(false);
-      expect(canAddTrigger(3).allowed).toBe(false);
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(false);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(false);
 
       setTierState(db, "pro", "active");
-      expect(canActivateConnector(2).allowed).toBe(true);
-      expect(canActivateConnector(9).allowed).toBe(true);
-      expect(canAddTrigger(3).allowed).toBe(true);
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(true);
+      expect(canActivateConnector(100).allowed).toBe(true);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(true);
       expect(canAddTrigger(100).allowed).toBe(true);
     });
 
-    it("full downgrade scenario: 8 connectors + 10 triggers enforced", async () => {
+    it("full downgrade scenario: 12 connectors + 20 triggers enforced", async () => {
       setTierState(db, "pro", "active");
       const connectors = new MockConnectors();
-      for (const n of ["a", "b", "c", "d", "e", "f", "g", "h"]) connectors.addInstance(n);
+      for (const n of ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l"]) connectors.addInstance(n);
       const triggers = new MockTriggers();
       const base = new Date("2025-01-01").getTime();
-      for (let i = 1; i <= 10; i++) {
+      for (let i = 1; i <= 20; i++) {
         triggers.addTrigger(`t${i}`, true, new Date(base + i * 86400000).toISOString());
       }
 
@@ -1056,14 +1057,14 @@ describe("billing audit", () => {
       setTierState(db, "free", "canceled");
       const result = await enforceLicenseLimits(connectors, triggers);
 
-      expect(result.connectors.evicted).toHaveLength(6);
-      expect(connectors.activeCount).toBe(2);
-      expect(result.triggers.disabled).toHaveLength(7);
-      expect(triggers.enabledCount).toBe(3);
+      expect(result.connectors.evicted).toHaveLength(12 - TIER_LIMITS.free.connectors);
+      expect(connectors.activeCount).toBe(TIER_LIMITS.free.connectors);
+      expect(result.triggers.disabled).toHaveLength(20 - TIER_LIMITS.free.triggers);
+      expect(triggers.enabledCount).toBe(TIER_LIMITS.free.triggers);
 
-      // Gates block new activations
-      expect(canActivateConnector(2).allowed).toBe(false);
-      expect(canAddTrigger(3).allowed).toBe(false);
+      // Gates block new activations at limit
+      expect(canActivateConnector(TIER_LIMITS.free.connectors).allowed).toBe(false);
+      expect(canAddTrigger(TIER_LIMITS.free.triggers).allowed).toBe(false);
     });
   });
 

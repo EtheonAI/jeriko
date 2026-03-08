@@ -11,7 +11,7 @@
 //   - Wall-clock duration limits
 //   - Per-tool rate limiting
 
-import { getDriver, type DriverConfig, type DriverMessage, type StreamChunk, type ToolCall, type ToolResult } from "./drivers/index.js";
+import { getDriver, messageText, type DriverConfig, type DriverMessage, type StreamChunk, type ToolCall, type ToolResult } from "./drivers/index.js";
 import { resolveModel, getCapabilities, probeLocalModel, type ModelCapabilities } from "./drivers/models.js";
 import { getTool, listTools, toDriverFormat } from "./tools/registry.js";
 import { addMessage, addPart } from "./session/message.js";
@@ -172,13 +172,13 @@ export async function* runAgent(
 
     // Check for context compaction using dynamic threshold
     const currentTokens = estimateTokens(
-      messages.map((m) => m.content).join(""),
+      messages.map((m) => messageText(m)).join(""),
     );
     if (currentTokens >= compactionThreshold && messages.length > 4) {
       const beforeTokens = currentTokens;
       const compacted = compactMessages(messages);
       const afterTokens = estimateTokens(
-        compacted.map((m) => m.content).join(""),
+        compacted.map((m) => messageText(m)).join(""),
       );
       messages.length = 0;
       messages.push(...compacted);
@@ -225,8 +225,13 @@ export async function* runAgent(
       return;
     }
 
-    // Estimate tokens for this turn
-    const turnTokensIn = estimateTokens(messages[messages.length - 1]?.content ?? "");
+    // Estimate tokens for this turn (image blocks add ~1000 tokens each)
+    const lastMsg = messages[messages.length - 1];
+    const lastMsgText = lastMsg ? messageText(lastMsg) : "";
+    const imageBlockCount = lastMsg && Array.isArray(lastMsg.content)
+      ? lastMsg.content.filter((b) => b.type === "image").length
+      : 0;
+    const turnTokensIn = estimateTokens(lastMsgText) + (imageBlockCount * 1000);
     const turnTokensOut = estimateTokens(fullText);
     totalTokensIn += turnTokensIn;
     totalTokensOut += turnTokensOut;

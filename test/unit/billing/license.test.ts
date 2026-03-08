@@ -11,7 +11,7 @@ import {
   isWithinGracePeriod,
   isLicenseStale,
 } from "../../../src/daemon/billing/license.js";
-import { TIER_LIMITS, GRACE_PERIOD_MS } from "../../../src/daemon/billing/config.js";
+import { TIER_LIMITS, GRACE_PERIOD_MS, UNLIMITED_TRIGGERS_STORED } from "../../../src/daemon/billing/config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unlinkSync, existsSync } from "node:fs";
@@ -104,8 +104,8 @@ describe("billing/license", () => {
       const state = getLicenseState();
       expect(state.tier).toBe("free");
       expect(state.label).toBe("Community");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
       expect(state.email).toBeNull();
       expect(state.subscriptionId).toBeNull();
       expect(state.pastDue).toBe(false);
@@ -116,8 +116,8 @@ describe("billing/license", () => {
         tier: "pro",
         email: "pro@example.com",
         subscription_id: "sub_123",
-        connector_limit: TIER_LIMITS.pro.connectors,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       });
 
       upsertSubscription({
@@ -135,7 +135,7 @@ describe("billing/license", () => {
       const state = getLicenseState();
       expect(state.tier).toBe("pro");
       expect(state.label).toBe("Pro");
-      expect(state.connectorLimit).toBe(10);
+      expect(state.connectorLimit).toBe(UNLIMITED_TRIGGERS_STORED);
       expect(state.email).toBe("pro@example.com");
     });
 
@@ -183,8 +183,8 @@ describe("billing/license", () => {
 
       const state = getLicenseState();
       expect(state.tier).toBe("free");
-      expect(state.connectorLimit).toBe(2);
-      expect(state.triggerLimit).toBe(3);
+      expect(state.connectorLimit).toBe(TIER_LIMITS.free.connectors);
+      expect(state.triggerLimit).toBe(TIER_LIMITS.free.triggers);
     });
   });
 
@@ -198,12 +198,12 @@ describe("billing/license", () => {
     });
 
     it("allows connector at limit minus 1 (free tier)", () => {
-      const result = canActivateConnector(1);
+      const result = canActivateConnector(TIER_LIMITS.free.connectors - 1);
       expect(result.allowed).toBe(true);
     });
 
     it("denies connector at free tier limit", () => {
-      const result = canActivateConnector(2);
+      const result = canActivateConnector(TIER_LIMITS.free.connectors);
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("Connector limit reached");
       expect(result.reason).toContain("Community");
@@ -211,15 +211,15 @@ describe("billing/license", () => {
     });
 
     it("denies connector above free tier limit", () => {
-      const result = canActivateConnector(5);
+      const result = canActivateConnector(TIER_LIMITS.free.connectors + 1);
       expect(result.allowed).toBe(false);
     });
 
-    it("allows more connectors on pro tier", () => {
+    it("allows any number of connectors on pro tier (unlimited)", () => {
       updateLicense({
         tier: "pro",
-        connector_limit: TIER_LIMITS.pro.connectors,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       });
 
       upsertSubscription({
@@ -234,32 +234,10 @@ describe("billing/license", () => {
         terms_accepted_at: null,
       });
 
-      const result = canActivateConnector(5);
-      expect(result.allowed).toBe(true);
-    });
-
-    it("denies connector at pro tier limit", () => {
-      updateLicense({
-        tier: "pro",
-        connector_limit: TIER_LIMITS.pro.connectors,
-        trigger_limit: 999999,
-      });
-
-      upsertSubscription({
-        id: "sub_pro_gate_2",
-        customer_id: "cus_pro_gate_2",
-        email: "gate2@example.com",
-        tier: "pro",
-        status: "active",
-        current_period_start: null,
-        current_period_end: null,
-        cancel_at_period_end: false,
-        terms_accepted_at: null,
-      });
-
-      const result = canActivateConnector(10);
-      expect(result.allowed).toBe(false);
-      expect(result.reason).toContain("Pro");
+      // Even large counts should be allowed on pro
+      expect(canActivateConnector(5).allowed).toBe(true);
+      expect(canActivateConnector(100).allowed).toBe(true);
+      expect(canActivateConnector(1000).allowed).toBe(true);
     });
   });
 
@@ -277,12 +255,12 @@ describe("billing/license", () => {
     });
 
     it("allows trigger at limit minus 1 (free tier)", () => {
-      const result = canAddTrigger(2);
+      const result = canAddTrigger(TIER_LIMITS.free.triggers - 1);
       expect(result.allowed).toBe(true);
     });
 
     it("denies trigger at free tier limit", () => {
-      const result = canAddTrigger(3);
+      const result = canAddTrigger(TIER_LIMITS.free.triggers);
       expect(result.allowed).toBe(false);
       expect(result.reason).toContain("Trigger limit reached");
       expect(result.reason).toContain("Community");
@@ -292,8 +270,8 @@ describe("billing/license", () => {
     it("allows unlimited triggers on pro tier", () => {
       updateLicense({
         tier: "pro",
-        connector_limit: TIER_LIMITS.pro.connectors,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       });
 
       upsertSubscription({
@@ -326,8 +304,8 @@ describe("billing/license", () => {
         customer_id: null,
         valid_until: null,
         verified_at: null,
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(false);
     });
 
@@ -341,8 +319,8 @@ describe("billing/license", () => {
         customer_id: null,
         valid_until: futureTs,
         verified_at: null,
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(true);
     });
 
@@ -356,8 +334,8 @@ describe("billing/license", () => {
         customer_id: null,
         valid_until: pastTs,
         verified_at: null,
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(false);
     });
 
@@ -371,8 +349,8 @@ describe("billing/license", () => {
         customer_id: null,
         valid_until: futureMs,
         verified_at: null,
-        connector_limit: 10,
-        trigger_limit: 999999,
+        connector_limit: UNLIMITED_TRIGGERS_STORED,
+        trigger_limit: UNLIMITED_TRIGGERS_STORED,
       })).toBe(true);
     });
   });

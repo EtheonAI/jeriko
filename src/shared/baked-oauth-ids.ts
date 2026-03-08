@@ -15,6 +15,7 @@
 
 // Declared so TypeScript doesn't error on unbundled references.
 // Bun's `define` replaces these at build time; at dev time they're undefined.
+declare const __BAKED_RELAY_AUTH_SECRET__: string | undefined;
 declare const __BAKED_GITHUB_CLIENT_ID__: string | undefined;
 declare const __BAKED_GOOGLE_CLIENT_ID__: string | undefined;
 declare const __BAKED_MICROSOFT_CLIENT_ID__: string | undefined;
@@ -25,7 +26,6 @@ declare const __BAKED_HUBSPOT_CLIENT_ID__: string | undefined;
 declare const __BAKED_SHOPIFY_CLIENT_ID__: string | undefined;
 declare const __BAKED_SQUARE_CLIENT_ID__: string | undefined;
 declare const __BAKED_GITLAB_CLIENT_ID__: string | undefined;
-declare const __BAKED_DIGITALOCEAN_CLIENT_ID__: string | undefined;
 declare const __BAKED_NOTION_CLIENT_ID__: string | undefined;
 declare const __BAKED_LINEAR_CLIENT_ID__: string | undefined;
 declare const __BAKED_ATLASSIAN_CLIENT_ID__: string | undefined;
@@ -33,12 +33,22 @@ declare const __BAKED_AIRTABLE_CLIENT_ID__: string | undefined;
 declare const __BAKED_ASANA_CLIENT_ID__: string | undefined;
 declare const __BAKED_MAILCHIMP_CLIENT_ID__: string | undefined;
 declare const __BAKED_DROPBOX_CLIENT_ID__: string | undefined;
-declare const __BAKED_SALESFORCE_CLIENT_ID__: string | undefined;
+declare const __BAKED_DISCORD_CLIENT_ID__: string | undefined;
+declare const __BAKED_INSTAGRAM_CLIENT_ID__: string | undefined;
+declare const __BAKED_THREADS_CLIENT_ID__: string | undefined;
 
 /**
  * Baked-in OAuth client IDs, keyed by a logical group name.
  * Multiple providers can share the same client ID (e.g. gmail + gdrive share Google's).
  */
+/**
+ * Baked-in relay auth secret — shared key between all installations and the relay.
+ * Like a Firebase API key: embedded in the binary, used for relay API authentication.
+ * The real security is per-user (JERIKO_USER_ID) and server-side rate limiting.
+ */
+export const BAKED_RELAY_AUTH_SECRET: string | undefined =
+  typeof __BAKED_RELAY_AUTH_SECRET__ !== "undefined" ? __BAKED_RELAY_AUTH_SECRET__ : undefined;
+
 export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>> = {
   github:       typeof __BAKED_GITHUB_CLIENT_ID__       !== "undefined" ? __BAKED_GITHUB_CLIENT_ID__       : undefined,
   google:       typeof __BAKED_GOOGLE_CLIENT_ID__       !== "undefined" ? __BAKED_GOOGLE_CLIENT_ID__       : undefined,
@@ -50,7 +60,6 @@ export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>
   shopify:      typeof __BAKED_SHOPIFY_CLIENT_ID__      !== "undefined" ? __BAKED_SHOPIFY_CLIENT_ID__      : undefined,
   square:       typeof __BAKED_SQUARE_CLIENT_ID__       !== "undefined" ? __BAKED_SQUARE_CLIENT_ID__       : undefined,
   gitlab:       typeof __BAKED_GITLAB_CLIENT_ID__       !== "undefined" ? __BAKED_GITLAB_CLIENT_ID__       : undefined,
-  digitalocean: typeof __BAKED_DIGITALOCEAN_CLIENT_ID__ !== "undefined" ? __BAKED_DIGITALOCEAN_CLIENT_ID__ : undefined,
   notion:       typeof __BAKED_NOTION_CLIENT_ID__       !== "undefined" ? __BAKED_NOTION_CLIENT_ID__       : undefined,
   linear:       typeof __BAKED_LINEAR_CLIENT_ID__       !== "undefined" ? __BAKED_LINEAR_CLIENT_ID__       : undefined,
   atlassian:    typeof __BAKED_ATLASSIAN_CLIENT_ID__    !== "undefined" ? __BAKED_ATLASSIAN_CLIENT_ID__    : undefined,
@@ -58,5 +67,7 @@ export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>
   asana:        typeof __BAKED_ASANA_CLIENT_ID__        !== "undefined" ? __BAKED_ASANA_CLIENT_ID__        : undefined,
   mailchimp:    typeof __BAKED_MAILCHIMP_CLIENT_ID__    !== "undefined" ? __BAKED_MAILCHIMP_CLIENT_ID__    : undefined,
   dropbox:      typeof __BAKED_DROPBOX_CLIENT_ID__      !== "undefined" ? __BAKED_DROPBOX_CLIENT_ID__      : undefined,
-  salesforce:   typeof __BAKED_SALESFORCE_CLIENT_ID__   !== "undefined" ? __BAKED_SALESFORCE_CLIENT_ID__   : undefined,
+  discord:      typeof __BAKED_DISCORD_CLIENT_ID__      !== "undefined" ? __BAKED_DISCORD_CLIENT_ID__      : undefined,
+  instagram:    typeof __BAKED_INSTAGRAM_CLIENT_ID__    !== "undefined" ? __BAKED_INSTAGRAM_CLIENT_ID__    : undefined,
+  threads:      typeof __BAKED_THREADS_CLIENT_ID__      !== "undefined" ? __BAKED_THREADS_CLIENT_ID__      : undefined,
 };

@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { bodyLimit } from "hono/body-limit";
 import { getLogger } from "../../shared/logger.js";
+import { getDaemonPort } from "../../shared/config.js";
 import { authMiddleware } from "./middleware/auth.js";
 import { rateLimitMiddleware } from "./middleware/rate-limit.js";
 import { agentRoutes } from "./routes/agent.js";
@@ -17,6 +18,7 @@ import { oauthRoutes } from "./routes/oauth.js";
 import { shareRoutes, publicShareRoutes } from "./routes/share.js";
 import { billingRoutes, publicBillingRoutes } from "./routes/billing.js";
 import { createWebSocketHandlers } from "./websocket.js";
+import { deliverOAuthCallback, deliverOAuthError, hasOAuthPending } from "./oauth-bridge.js";
 import type { ChannelRegistry } from "../services/channels/index.js";
 import type { TriggerEngine } from "../services/triggers/engine.js";
 import type { ConnectorManager } from "../services/connectors/manager.js";
@@ -81,7 +83,7 @@ export function createApp(ctx: AppContext): Hono {
   app.use("*", async (c, next) => {
     const path = new URL(c.req.url).pathname;
     // Health, webhook, OAuth, public share, and billing webhook endpoints are unauthenticated
-    if (path === "/health" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/") || path === "/billing/webhook") {
+    if (path === "/health" || path === "/callback" || path.startsWith("/hooks/") || path.startsWith("/oauth/") || path.startsWith("/s/") || path === "/billing/webhook") {
       return next();
     }
     return authMiddleware()(c, next);
@@ -115,6 +117,29 @@ export function createApp(ctx: AppContext): Hono {
   app.route("/billing", publicBillingRoutes());
 
   // -----------------------------------------------------------------------
+  // OAuth callback — receives browser redirects for CLI OAuth flows.
+  // The CLI can route OAuth callbacks through the daemon via IPC
+  // (`oauth.await_callback`), and the browser redirects here.
+  // -----------------------------------------------------------------------
+  app.get("/callback", (c) => {
+    const code = c.req.query("code");
+    const error = c.req.query("error");
+
+    if (error || !code) {
+      const msg = error ?? "no code received";
+      deliverOAuthError(msg);
+      return c.html(oauthErrorHtml(msg));
+    }
+
+    if (!hasOAuthPending()) {
+      return c.html(oauthErrorHtml("No OAuth flow is waiting for a callback"), 400);
+    }
+
+    deliverOAuthCallback(code);
+    return c.html(oauthSuccessHtml());
+  });
+
+  // -----------------------------------------------------------------------
   // 404 fallback
   // -----------------------------------------------------------------------
   app.notFound((c) => {
@@ -144,6 +169,38 @@ export interface ServerOptions {
 }
 
 /**
+ * Kill any process holding the target port so the daemon can always bind.
+ * This handles zombie jeriko processes left over from crashes or stale installs.
+ * Only kills on localhost — never touches remote processes.
+ */
+function killPortHolder(port: number): void {
+  try {
+    // Get PIDs and their command names on this port.
+    const result = Bun.spawnSync(["lsof", "-ti", `:${port}`]);
+    const output = result.stdout.toString().trim();
+    if (!output) return;
+
+    const pids = output.split("\n").map((p) => Number(p.trim())).filter((p) => p > 0 && p !== process.pid);
+    let killed = 0;
+
+    for (const pid of pids) {
+      // Only kill jeriko processes — don't touch unrelated services.
+      const ps = Bun.spawnSync(["ps", "-p", String(pid), "-o", "comm="]);
+      const comm = ps.stdout.toString().trim().toLowerCase();
+      if (!comm.includes("jeriko") && !comm.includes("bun")) continue;
+
+      log.warn(`Killing stale jeriko process ${pid} holding port ${port}`);
+      try { process.kill(pid, "SIGTERM"); killed++; } catch { /* already dead */ }
+    }
+
+    // Brief pause for OS to release the port after SIGTERM.
+    if (killed > 0) Bun.sleepSync(500);
+  } catch {
+    // lsof not available or failed — proceed and let Bun.serve() report the error.
+  }
+}
+
+/**
  * Start the HTTP server using Bun's native serve. Returns the server instance.
  *
  * WebSocket is wired in: clients connecting to /ws are upgraded and handled
@@ -153,12 +210,15 @@ export function startServer(
   app: Hono,
   opts: ServerOptions = {},
 ): ReturnType<typeof Bun.serve> {
-  const port = opts.port ?? Number(process.env.JERIKO_PORT) ?? 3000;
+  const port = opts.port ?? getDaemonPort();
   const hostname = opts.hostname ?? "127.0.0.1";
 
   if (hostname !== "127.0.0.1" && hostname !== "localhost" && hostname !== "::1") {
     log.warn(`Daemon binding to ${hostname} — this exposes the API beyond localhost. Ensure firewall rules are in place.`);
   }
+
+  // Kill any zombie process holding our port so the daemon always starts cleanly.
+  killPortHolder(port);
 
   const wsHandlers = createWebSocketHandlers();
 
@@ -196,4 +256,53 @@ export function stopServer(): void {
     server = null;
     log.info("Jeriko daemon stopped");
   }
+}
+
+// ---------------------------------------------------------------------------
+// OAuth callback HTML — minimal pages shown in the browser after redirect
+// ---------------------------------------------------------------------------
+
+/** Escape HTML special characters to prevent XSS. */
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function oauthSuccessHtml(): string {
+  return `<!DOCTYPE html>
+<html><head><title>Jeriko — Connected</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; display: flex;
+    justify-content: center; align-items: center; min-height: 100vh;
+    background: #0a0a0a; color: #e5e5e5; margin: 0; }
+  .card { text-align: center; padding: 3rem; }
+  h1 { color: #22c55e; font-size: 2rem; margin-bottom: 0.5rem; }
+  p { color: #a3a3a3; font-size: 1.1rem; }
+</style></head>
+<body><div class="card">
+  <h1>Connected</h1>
+  <p>You can close this tab and return to the terminal.</p>
+</div></body></html>`;
+}
+
+function oauthErrorHtml(error: string): string {
+  return `<!DOCTYPE html>
+<html><head><title>Jeriko — Error</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; display: flex;
+    justify-content: center; align-items: center; min-height: 100vh;
+    background: #0a0a0a; color: #e5e5e5; margin: 0; }
+  .card { text-align: center; padding: 3rem; }
+  h1 { color: #ef4444; font-size: 2rem; margin-bottom: 0.5rem; }
+  p { color: #a3a3a3; font-size: 1.1rem; }
+</style></head>
+<body><div class="card">
+  <h1>Authentication Failed</h1>
+  <p>${escapeHtml(error)}</p>
+  <p>Close this tab and try again in the terminal.</p>
+</div></body></html>`;
 }

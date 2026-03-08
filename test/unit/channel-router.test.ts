@@ -591,7 +591,7 @@ describe("Channel router — integration commands", () => {
     }
   });
 
-  it("/connect github without client ID shows configuration error", async () => {
+  it("/connect github without client ID still generates relay OAuth URL", async () => {
     const origId = process.env.GITHUB_OAUTH_CLIENT_ID;
     delete process.env.GITHUB_OAUTH_CLIENT_ID;
 
@@ -611,8 +611,10 @@ describe("Channel router — integration commands", () => {
       await settle();
 
       const text = registry.lastMessage();
-      expect(text).toContain("not configured");
-      expect(text).toContain("GITHUB_OAUTH_CLIENT_ID");
+      // Relay-based OAuth: the relay server handles token exchange,
+      // so /connect always generates a login URL even without local client ID.
+      expect(text).toContain("Connect GitHub");
+      expect(text).toContain("/oauth/github/start");
     } finally {
       if (origId) {
         process.env.GITHUB_OAUTH_CLIENT_ID = origId;

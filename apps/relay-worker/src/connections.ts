@@ -287,6 +287,14 @@ export class ConnectionManager {
     }
   }
 
+  /**
+   * Get all connected user IDs.
+   * Used for broadcasting (e.g. Meta webhooks are app-level, not per-user).
+   */
+  getAllUserIds(): string[] {
+    return [...this.connections.keys()];
+  }
+
   // -------------------------------------------------------------------------
   // Stats
   // -------------------------------------------------------------------------

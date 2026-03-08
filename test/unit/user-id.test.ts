@@ -28,9 +28,15 @@ describe("getUserId", () => {
     expect(getUserId()).toBeUndefined();
   });
 
-  it("returns the user ID when set", () => {
+  it("returns the user ID when set to a valid hex string", () => {
+    const hexId = "abcdef0123456789abcdef0123456789";
+    process.env.JERIKO_USER_ID = hexId;
+    expect(getUserId()).toBe(hexId);
+  });
+
+  it("returns undefined for non-hex/non-UUID format", () => {
     process.env.JERIKO_USER_ID = "test-user-id-123";
-    expect(getUserId()).toBe("test-user-id-123");
+    expect(getUserId()).toBeUndefined();
   });
 
   it("returns a UUID-format string when set to UUID", () => {

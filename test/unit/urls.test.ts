@@ -71,21 +71,21 @@ describe("urls", () => {
 
   describe("buildWebhookUrl", () => {
     it("includes userId when using relay (no JERIKO_PUBLIC_URL)", () => {
-      process.env.JERIKO_USER_ID = "user-abc-123";
+      process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
       const url = buildWebhookUrl("trigger-xyz");
-      expect(url).toBe("https://bot.jeriko.ai/hooks/user-abc-123/trigger-xyz");
+      expect(url).toBe("https://bot.jeriko.ai/hooks/abcdef0123456789abcdef0123456789/trigger-xyz");
     });
 
     it("omits userId when self-hosted (JERIKO_PUBLIC_URL set)", () => {
       process.env.JERIKO_PUBLIC_URL = "https://my-tunnel.example.com";
-      process.env.JERIKO_USER_ID = "user-abc-123";
+      process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
       const url = buildWebhookUrl("trigger-xyz");
       expect(url).toBe("https://my-tunnel.example.com/hooks/trigger-xyz");
     });
 
     it("falls back to local URL when no userId and no public URL", () => {
       const url = buildWebhookUrl("trigger-xyz");
-      expect(url).toBe("http://127.0.0.1:3000/hooks/trigger-xyz");
+      expect(url).toBe("http://127.0.0.1:7741/hooks/trigger-xyz");
     });
 
     it("uses localBaseUrl when provided and no userId", () => {
@@ -104,15 +104,15 @@ describe("urls", () => {
 
   describe("buildOAuthCallbackUrl", () => {
     it("never includes userId in the URL path (relay mode)", () => {
-      process.env.JERIKO_USER_ID = "user-abc-123";
+      process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
       const url = buildOAuthCallbackUrl("github");
       expect(url).toBe("https://bot.jeriko.ai/oauth/github/callback");
-      expect(url).not.toContain("user-abc-123");
+      expect(url).not.toContain("abcdef0123456789abcdef0123456789");
     });
 
     it("uses public URL when self-hosted", () => {
       process.env.JERIKO_PUBLIC_URL = "https://my-tunnel.example.com";
-      process.env.JERIKO_USER_ID = "user-abc-123";
+      process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
       const url = buildOAuthCallbackUrl("github");
       expect(url).toBe("https://my-tunnel.example.com/oauth/github/callback");
     });
@@ -127,10 +127,10 @@ describe("urls", () => {
 
   describe("buildOAuthStartUrl", () => {
     it("never includes userId in the URL path (relay mode)", () => {
-      process.env.JERIKO_USER_ID = "user-abc-123";
+      process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
       const url = buildOAuthStartUrl("github", "state-token-xyz");
       expect(url).toBe("https://bot.jeriko.ai/oauth/github/start?state=state-token-xyz");
-      expect(url).not.toContain("user-abc-123");
+      expect(url).not.toContain("abcdef0123456789abcdef0123456789");
     });
 
     it("uses public URL when self-hosted", () => {
@@ -155,7 +155,7 @@ describe("urls", () => {
 
     it("does not create double-slash in generated URLs", () => {
       process.env.JERIKO_PUBLIC_URL = "https://example.com/";
-      process.env.JERIKO_USER_ID = "user-1";
+      process.env.JERIKO_USER_ID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
       const url = buildWebhookUrl("t-1");
       expect(url).not.toContain("//hooks");
       expect(url).toBe("https://example.com/hooks/t-1");
@@ -166,14 +166,14 @@ describe("urls", () => {
 
   describe("state token encoding", () => {
     it("encodes special characters in state token", () => {
-      process.env.JERIKO_USER_ID = "user-1";
+      process.env.JERIKO_USER_ID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
       const url = buildOAuthStartUrl("github", "token=foo&bar");
       expect(url).toContain("state=token%3Dfoo%26bar");
       expect(url).not.toContain("state=token=foo&bar");
     });
 
     it("passes clean tokens through unchanged", () => {
-      process.env.JERIKO_USER_ID = "user-1";
+      process.env.JERIKO_USER_ID = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
       const url = buildOAuthStartUrl("github", "abc123");
       expect(url).toContain("state=abc123");
     });

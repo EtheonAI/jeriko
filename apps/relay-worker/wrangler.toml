@@ -27,8 +27,11 @@ new_sqlite_classes = ["RelayDO"]
 
 [vars]
 ENVIRONMENT = "production"
-STRIPE_BILLING_PRICE_ID = "price_1RFrNYP9l6pSLOnXLp3CXmTz"
+STRIPE_BILLING_PRICE_ID = "price_1T6vcACjrY0RAaoHDuWYEDXl"
 JERIKO_BILLING_URL = "https://jeriko.ai"
+
+# Stripe test/sandbox keys — set via `wrangler secret put` or .dev.vars
+STRIPE_TEST_PRICE_ID = "price_1T8RS3Cw9IdT3cEoAx9auawZ"
 
 # Secrets (set via `wrangler secret put`):
 #   RELAY_AUTH_SECRET              — shared secret for daemon authentication

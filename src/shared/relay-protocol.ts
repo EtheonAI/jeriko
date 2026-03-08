@@ -134,6 +134,17 @@ export interface RelayOAuthTokensMessage {
   tokenType?: string;
 }
 
+/**
+ * Forwarded provider auth callback — browser redirect from an AI provider
+ * (e.g. OpenRouter PKCE). Separate from connector OAuth (oauth_callback).
+ * The daemon stores the code and the CLI retrieves it via IPC.
+ */
+export interface RelayProviderAuthCallbackMessage {
+  type: "provider_auth_callback";
+  provider: string;
+  params: Record<string, string>;
+}
+
 /** Forwarded share page request from a visitor. */
 export interface RelayShareRequestMessage {
   type: "share_request";
@@ -159,6 +170,7 @@ export type RelayInboundMessage =
   | RelayOAuthCallbackMessage
   | RelayOAuthStartMessage
   | RelayOAuthTokensMessage
+  | RelayProviderAuthCallbackMessage
   | RelayShareRequestMessage
   | RelayPongMessage
   | RelayErrorMessage;

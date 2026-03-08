@@ -97,14 +97,14 @@ describe("relay protocol — message serialization", () => {
   test("auth message serializes with all fields", () => {
     const msg: RelayAuthMessage = {
       type: "auth",
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       token: "secret-token",
       version: "1.0.0",
     };
     const json = JSON.stringify(msg);
     const parsed = JSON.parse(json);
     expect(parsed.type).toBe("auth");
-    expect(parsed.userId).toBe("user-123");
+    expect(parsed.userId).toBe("abcdef0123456789abcdef0123456789");
     expect(parsed.token).toBe("secret-token");
     expect(parsed.version).toBe("1.0.0");
   });
@@ -112,7 +112,7 @@ describe("relay protocol — message serialization", () => {
   test("auth message without version omits it", () => {
     const msg: RelayAuthMessage = {
       type: "auth",
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       token: "secret-token",
     };
     const json = JSON.stringify(msg);
@@ -386,21 +386,21 @@ describe("relay protocol — constants", () => {
 
 describe("relay protocol — composite state", () => {
   test("buildCompositeState creates userId.token format", () => {
-    const state = buildCompositeState("user-abc-123", "random-token-456");
-    expect(state).toBe("user-abc-123.random-token-456");
+    const state = buildCompositeState("abcdef0123456789abcdef0123456789", "random-token-456");
+    expect(state).toBe("abcdef0123456789abcdef0123456789.random-token-456");
   });
 
   test("parseCompositeState extracts userId and token", () => {
-    const result = parseCompositeState("user-abc-123.random-token-456");
+    const result = parseCompositeState("abcdef0123456789abcdef0123456789.random-token-456");
     expect(result).not.toBeNull();
-    expect(result!.userId).toBe("user-abc-123");
+    expect(result!.userId).toBe("abcdef0123456789abcdef0123456789");
     expect(result!.token).toBe("random-token-456");
   });
 
   test("parseCompositeState handles dots in token", () => {
-    const result = parseCompositeState("user-id.token.with.dots");
+    const result = parseCompositeState("abcdef0123456789abcdef0123456780.token.with.dots");
     expect(result).not.toBeNull();
-    expect(result!.userId).toBe("user-id");
+    expect(result!.userId).toBe("abcdef0123456789abcdef0123456780");
     expect(result!.token).toBe("token.with.dots");
   });
 
@@ -444,7 +444,7 @@ describe("URL builders — relay mode (default)", () => {
     envSnap = snapshotEnv();
     clearRelayEnv();
     // Relay mode: no JERIKO_PUBLIC_URL, set userId
-    process.env.JERIKO_USER_ID = "user-abc-123";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
   });
 
   afterEach(() => {
@@ -461,7 +461,7 @@ describe("URL builders — relay mode (default)", () => {
 
   test("buildWebhookUrl includes userId and triggerId", () => {
     const url = buildWebhookUrl("trig-456");
-    expect(url).toBe("https://bot.jeriko.ai/hooks/user-abc-123/trig-456");
+    expect(url).toBe("https://bot.jeriko.ai/hooks/abcdef0123456789abcdef0123456789/trig-456");
   });
 
   test("buildOAuthCallbackUrl uses relay base", () => {
@@ -470,8 +470,8 @@ describe("URL builders — relay mode (default)", () => {
   });
 
   test("buildOAuthStartUrl includes state parameter", () => {
-    const url = buildOAuthStartUrl("github", "user-abc-123.token-xyz");
-    expect(url).toBe("https://bot.jeriko.ai/oauth/github/start?state=user-abc-123.token-xyz");
+    const url = buildOAuthStartUrl("github", "abcdef0123456789abcdef0123456789.token-xyz");
+    expect(url).toBe("https://bot.jeriko.ai/oauth/github/start?state=abcdef0123456789abcdef0123456789.token-xyz");
   });
 
   test("buildOAuthStartUrl URL-encodes state", () => {
@@ -486,7 +486,7 @@ describe("URL builders — relay mode (default)", () => {
 
   test("buildShareLink includes userId in relay mode", () => {
     const url = buildShareLink("share-abc");
-    expect(url).toBe("https://bot.jeriko.ai/s/user-abc-123/share-abc");
+    expect(url).toBe("https://bot.jeriko.ai/s/abcdef0123456789abcdef0123456789/share-abc");
   });
 });
 
@@ -497,7 +497,7 @@ describe("URL builders — self-hosted mode", () => {
     envSnap = snapshotEnv();
     clearRelayEnv();
     process.env.JERIKO_PUBLIC_URL = "https://my-tunnel.example.com";
-    process.env.JERIKO_USER_ID = "user-abc-123";
+    process.env.JERIKO_USER_ID = "abcdef0123456789abcdef0123456789";
   });
 
   afterEach(() => {
@@ -549,7 +549,7 @@ describe("URL builders — local dev mode", () => {
 
   test("buildWebhookUrl falls back to localhost", () => {
     const url = buildWebhookUrl("trig-local");
-    expect(url).toBe("http://127.0.0.1:3000/hooks/trig-local");
+    expect(url).toBe("http://127.0.0.1:7741/hooks/trig-local");
   });
 
   test("buildWebhookUrl respects JERIKO_PORT", () => {
@@ -662,7 +662,7 @@ describe("relay protocol — auth message format", () => {
   test("auth message has exactly the required fields", () => {
     const msg: RelayAuthMessage = {
       type: "auth",
-      userId: "test-user",
+      userId: "abcdef0123456789abcdef0123456789",
       token: "test-token",
     };
     const keys = Object.keys(msg).sort();
@@ -672,7 +672,7 @@ describe("relay protocol — auth message format", () => {
   test("auth message with version has 4 fields", () => {
     const msg: RelayAuthMessage = {
       type: "auth",
-      userId: "test-user",
+      userId: "abcdef0123456789abcdef0123456789",
       token: "test-token",
       version: "2.0.0",
     };
@@ -813,12 +813,12 @@ describe("relay protocol — OAuth callback format", () => {
       provider: "github",
       params: {
         code: "abc123",
-        state: "user-id.random-token",
+        state: "abcdef0123456789abcdef0123456780.random-token",
       },
     };
     const parsed = JSON.parse(JSON.stringify(msg));
     expect(parsed.params.code).toBe("abc123");
-    expect(parsed.params.state).toBe("user-id.random-token");
+    expect(parsed.params.state).toBe("abcdef0123456789abcdef0123456780.random-token");
   });
 
   test("oauth_start message preserves provider name", () => {
@@ -885,13 +885,13 @@ describe("relay protocol — OAuth callback format", () => {
 describe("relay protocol — RelayConnection shape", () => {
   test("RelayConnection has all required fields", () => {
     const conn: RelayConnection = {
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       connectedAt: new Date().toISOString(),
       lastPing: new Date().toISOString(),
       authenticated: true,
       triggerIds: new Set(["trig-1", "trig-2"]),
     };
-    expect(conn.userId).toBe("user-123");
+    expect(conn.userId).toBe("abcdef0123456789abcdef0123456789");
     expect(conn.authenticated).toBe(true);
     expect(conn.triggerIds.size).toBe(2);
     expect(conn.triggerIds.has("trig-1")).toBe(true);
@@ -899,7 +899,7 @@ describe("relay protocol — RelayConnection shape", () => {
 
   test("RelayConnection triggerIds is a Set (not array)", () => {
     const conn: RelayConnection = {
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       connectedAt: new Date().toISOString(),
       lastPing: new Date().toISOString(),
       authenticated: true,
@@ -912,7 +912,7 @@ describe("relay protocol — RelayConnection shape", () => {
 
   test("RelayConnection version is optional", () => {
     const conn: RelayConnection = {
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       connectedAt: new Date().toISOString(),
       lastPing: new Date().toISOString(),
       authenticated: true,
@@ -924,7 +924,7 @@ describe("relay protocol — RelayConnection shape", () => {
   test("connectedAt and lastPing are ISO 8601 timestamps", () => {
     const now = new Date().toISOString();
     const conn: RelayConnection = {
-      userId: "user-123",
+      userId: "abcdef0123456789abcdef0123456789",
       connectedAt: now,
       lastPing: now,
       authenticated: true,

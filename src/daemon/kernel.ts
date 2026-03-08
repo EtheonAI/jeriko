@@ -56,6 +56,8 @@ export interface KernelState {
   relay: import("./services/relay/client.js").RelayClient | null;
   server: ReturnType<typeof Bun.serve> | null;
   startedAt: number | null;
+  /** Pending provider auth codes received from relay (keyed by provider name). */
+  pendingProviderAuth: Map<string, { code: string; receivedAt: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +76,7 @@ const state: KernelState = {
   relay: null,
   server: null,
   startedAt: null,
+  pendingProviderAuth: new Map(),
 };
 
 let log: Logger;
@@ -180,6 +183,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/skill.js"),
     import("./agent/tools/webdev.js"),
     import("./agent/tools/memory-tool.js"),
+    import("./agent/tools/generate-image.js"),
   ]);
   log.info("Kernel boot: step 6 — built-in tools registered");
 
@@ -232,18 +236,33 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     channels.register(new WhatsAppChannel());
   }
   // Load system prompt from ~/.config/jeriko/agent.md (copied from AGENT.md at install).
-  // This gives the AI its "Jeriko" identity and command knowledge.
+  // Falls back to AGENT.md in the repo root for dev mode.
   let systemPrompt = "";
   try {
     const { readFileSync, existsSync } = await import("node:fs");
-    const { join } = await import("node:path");
+    const { join, dirname } = await import("node:path");
     const { getConfigDir } = await import("../shared/config.js");
     const promptPath = join(getConfigDir(), "agent.md");
     if (existsSync(promptPath)) {
       systemPrompt = readFileSync(promptPath, "utf-8");
       log.info(`Kernel boot: loaded system prompt from ${promptPath} (${systemPrompt.length} chars)`);
     } else {
-      log.warn(`Kernel boot: no agent.md found at ${promptPath} — agent will have no system prompt`);
+      // Dev fallback: walk up from cwd looking for AGENT.md in the repo root
+      let dir = process.cwd();
+      for (let i = 0; i < 5; i++) {
+        const candidate = join(dir, "AGENT.md");
+        if (existsSync(candidate)) {
+          systemPrompt = readFileSync(candidate, "utf-8");
+          log.info(`Kernel boot: loaded system prompt from ${candidate} (dev fallback, ${systemPrompt.length} chars)`);
+          break;
+        }
+        const parent = dirname(dir);
+        if (parent === dir) break;
+        dir = parent;
+      }
+      if (!systemPrompt) {
+        log.warn(`Kernel boot: no agent.md found at ${promptPath} — agent will have no system prompt`);
+      }
     }
   } catch (err) {
     log.warn(`Kernel boot: failed to load system prompt: ${err}`);
@@ -297,6 +316,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     systemPrompt,
     getTriggerEngine: () => state.triggers,
     getConnectors: () => connectors,
+    sttConfig: config.media?.stt,
+    ttsConfig: config.media?.tts,
   });
   log.info("Kernel boot: step 9 — channel registry created");
 
@@ -342,9 +363,13 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   try {
     const { getUserId } = await import("../shared/config.js");
     const userId = getUserId();
-    // RELAY_AUTH_SECRET is the dedicated relay token. Falls back to
-    // NODE_AUTH_SECRET for backward compat (single-machine setups).
-    const relayToken = process.env.RELAY_AUTH_SECRET ?? process.env.NODE_AUTH_SECRET;
+    // Auth token resolution: env override → baked-in binary secret → unavailable.
+    // The baked secret is compiled into the binary for distributed users (like Firebase API keys).
+    let relayToken = process.env.RELAY_AUTH_SECRET;
+    if (!relayToken) {
+      const { BAKED_RELAY_AUTH_SECRET } = await import("../shared/baked-oauth-ids.js");
+      relayToken = BAKED_RELAY_AUTH_SECRET;
+    }
     const selfHosted = !!process.env.JERIKO_PUBLIC_URL;
 
     if (userId && relayToken && !selfHosted) {
@@ -457,6 +482,18 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
         } catch (err) {
           log.error(`Relay OAuth tokens error: ${err}`);
         }
+      });
+
+      // Wire provider auth callback: relay → daemon pending auth store.
+      // The CLI polls for the auth code via IPC after opening the browser.
+      relay.onProviderAuthCallback((provider, params) => {
+        const code = params.code;
+        if (!code) {
+          log.warn(`Provider auth callback: missing code (provider: ${provider})`);
+          return;
+        }
+        state.pendingProviderAuth.set(provider, { code, receivedAt: Date.now() });
+        log.info(`Provider auth callback: received code for ${provider}`);
       });
 
       // Wire share page forwarding: relay → daemon share renderer
@@ -809,21 +846,27 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     // Get all models from the capability index (populated from models.dev)
     const allModels = listModels();
 
-    // Filter to models from our registered drivers + custom providers
+    // Filter to models from configured providers only.
+    // Built-in providers require their API key to be set; custom providers
+    // are always included (they're explicitly configured in config.json).
     const registeredDrivers = new Set(listDrivers());
     const providerIds = new Set(config.providers?.map((p) => p.id) ?? []);
 
-    // Built-in driver → provider mapping
-    const driverProviders: Record<string, string> = {
-      anthropic: "anthropic",
-      openai: "openai",
-      local: "local",
+    const builtInDriverProviders: Record<string, { provider: string; envKey?: string }> = {
+      anthropic: { provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
+      openai:    { provider: "openai",    envKey: "OPENAI_API_KEY" },
+      local:     { provider: "local" }, // no key needed
     };
 
     const relevantProviders = new Set<string>();
     for (const driver of registeredDrivers) {
-      const provider = driverProviders[driver];
-      if (provider) relevantProviders.add(provider);
+      const mapping = builtInDriverProviders[driver];
+      if (mapping) {
+        // Only include built-in provider if its API key is set (or no key needed)
+        if (!mapping.envKey || process.env[mapping.envKey]) {
+          relevantProviders.add(mapping.provider);
+        }
+      }
     }
     for (const id of providerIds) {
       relevantProviders.add(id);
@@ -926,15 +969,26 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const registered = new Set<string>();
 
     // Built-in drivers (anthropic, openai, local)
+    // Only mark as "built-in" if the provider's API key is actually set.
+    // Without the key, the provider is "available" (user can add it via /model add).
     const builtInIds = new Set(["anthropic", "openai", "local", "claude-code"]);
+    const builtInMeta: Record<string, { name: string; envKey?: string; defaultModel?: string }> = {
+      anthropic: { name: "Anthropic", envKey: "ANTHROPIC_API_KEY", defaultModel: "claude" },
+      openai:    { name: "OpenAI",    envKey: "OPENAI_API_KEY",    defaultModel: "gpt4" },
+      local:     { name: "Local (Ollama)", defaultModel: "local" },
+    };
     for (const driverName of builtInDrivers) {
       if (driverName === "claude-code") continue;
-      if (!builtInIds.has(driverName)) continue; // Only show true built-ins here
+      if (!builtInIds.has(driverName)) continue;
       registered.add(driverName);
+      const meta = builtInMeta[driverName];
+      const isConfigured = !meta?.envKey || !!process.env[meta.envKey];
       providers.push({
         id: driverName,
-        name: driverName.charAt(0).toUpperCase() + driverName.slice(1),
-        type: "built-in",
+        name: meta?.name ?? driverName.charAt(0).toUpperCase() + driverName.slice(1),
+        type: isConfigured ? "built-in" : "available",
+        envKey: meta?.envKey,
+        defaultModel: meta?.defaultModel,
       });
     }
 
@@ -1090,7 +1144,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!name) throw new Error("name is required");
 
     const { getConnectorDef, isConnectorConfigured } = await import("../shared/connector.js");
-    const { getOAuthProvider, isOAuthCapable, getClientId } = await import("./services/oauth/providers.js");
+    const { getOAuthProvider, isOAuthCapable } = await import("./services/oauth/providers.js");
 
     const def = getConnectorDef(name);
     if (!def) throw new Error(`Unknown connector: ${name}`);
@@ -1099,13 +1153,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       return { ok: true, name, status: "already_connected" };
     }
 
-    // OAuth connector — generate state token and return login URL
+    // OAuth connector — generate state token and return relay login URL.
+    // The relay at bot.jeriko.ai owns the OAuth app credentials (client IDs + secrets).
+    // The daemon just builds the relay start URL; the relay handles everything else.
     const provider = getOAuthProvider(name);
     if (provider) {
-      const clientId = getClientId(provider);
-      if (!clientId) {
-        throw new Error(`${provider.label} OAuth not configured — set ${provider.clientIdVar} or use baked-in credentials`);
-      }
       const { generateState } = await import("./services/oauth/state.js");
       const { buildOAuthStartUrl } = await import("../shared/urls.js");
       const { getUserId } = await import("../shared/config.js");
@@ -1328,7 +1380,9 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
   // ── Config IPC method ─────────────────────────────────────────
   registerMethod("config", async () => {
-    return state.config ?? {};
+    // Re-read from disk to reflect current state (not stale boot-time config)
+    const { loadConfig } = await import("../shared/config.js");
+    return loadConfig();
   });
 
   // ── Share IPC methods ───────────────────────────────────────
@@ -1446,8 +1500,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       userAgent: (params.user_agent as string) ?? "unknown",
     };
 
-    const { createCheckoutSession } = await import("./billing/stripe.js");
-    const result = await createCheckoutSession(email, clientMeta);
+    const { createCheckoutViaRelay } = await import("./billing/relay-proxy.js");
+    const result = await createCheckoutViaRelay(email, clientMeta);
+    if (!result) {
+      throw new Error("Unable to create checkout session. Relay server may be unreachable or auth token is missing (check RELAY_AUTH_SECRET).");
+    }
     return { url: result.url, session_id: result.sessionId };
   });
 
@@ -1461,11 +1518,14 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
 
     if (!customerId) {
-      throw new Error("No active subscription found. Use `jeriko upgrade` to subscribe first.");
+      throw new Error("No active subscription found. Use /upgrade to subscribe first.");
     }
 
-    const { createPortalSession } = await import("./billing/stripe.js");
-    const result = await createPortalSession(customerId);
+    const { createPortalViaRelay } = await import("./billing/relay-proxy.js");
+    const result = await createPortalViaRelay(customerId);
+    if (!result) {
+      throw new Error("Unable to open billing portal. Relay server may be unreachable or auth token is missing (check RELAY_AUTH_SECRET).");
+    }
     return { url: result.url };
   });
 
@@ -1483,33 +1543,39 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }));
   });
 
-  registerMethod("billing.cancel", async () => {
-    const { isBillingConfigured, cancelSubscription } = await import("./billing/stripe.js");
-    if (!isBillingConfigured()) throw new Error("Billing is not configured");
+  // billing.cancel is intentionally not implemented as a separate IPC method.
+  // Cancellation is handled through the Stripe Customer Portal (billing.portal),
+  // which provides a complete billing management UI including cancel, downgrade,
+  // payment method updates, and invoice history.
 
-    const { getLicenseState } = await import("./billing/license.js");
-    const { getSubscription } = await import("./billing/store.js");
+  // ── OAuth callback bridge (CLI → daemon HTTP → CLI) ──────────
+  registerMethod("oauth.await_callback", async (params) => {
+    const timeoutMs = (params.timeout_ms as number) ?? 120_000;
+    const { awaitOAuthCallback } = await import("./api/oauth-bridge.js");
+    const code = await awaitOAuthCallback(timeoutMs);
+    return { code };
+  });
 
-    const licState = getLicenseState();
-    const subscription = getSubscription();
+  // ── Provider auth via relay (CLI polls for auth code) ────────
+  registerMethod("provider_auth.poll", async (params) => {
+    const provider = params.provider as string;
+    const timeoutMs = (params.timeout_ms as number) ?? 120_000;
+    if (!provider) throw new Error("provider is required");
 
-    if (!subscription || licState.tier === "free") {
-      throw new Error("No active subscription to cancel");
+    // Poll for the auth code — the relay client stores it when received.
+    const startTime = Date.now();
+    const pollInterval = 500;
+
+    while (Date.now() - startTime < timeoutMs) {
+      const pending = state.pendingProviderAuth.get(provider);
+      if (pending) {
+        state.pendingProviderAuth.delete(provider);
+        return { code: pending.code };
+      }
+      await new Promise((r) => setTimeout(r, pollInterval));
     }
 
-    if (subscription.cancel_at_period_end) {
-      const endDate = subscription.current_period_end
-        ? new Date(subscription.current_period_end * 1000).toLocaleDateString()
-        : "end of billing period";
-      return { already_cancelling: true, cancel_at: endDate };
-    }
-
-    const { cancelAt } = await cancelSubscription(subscription.id);
-    const endDisplay = cancelAt
-      ? new Date(cancelAt * 1000).toLocaleDateString()
-      : "end of billing period";
-
-    return { cancelled: true, cancel_at: endDisplay };
+    throw new Error("Provider auth timed out — no callback received");
   });
 
   // ── Session lifecycle IPC methods ─────────────────────────────
@@ -1549,6 +1615,16 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       token_count: newSession.token_count,
       updated_at: newSession.updated_at,
     };
+  });
+
+  registerMethod("delete_session", async (params) => {
+    const { deleteSession, getSession, getSessionBySlug } = await import("./agent/session/session.js");
+    const slugOrId = params.slug_or_id as string;
+    if (!slugOrId) throw new Error("slug_or_id is required");
+    const target = getSessionBySlug(slugOrId) ?? getSession(slugOrId);
+    if (!target) throw new Error(`Session "${slugOrId}" not found`);
+    deleteSession(target.id);
+    return { id: target.id, slug: target.slug, deleted: true };
   });
 
   // ── Auth IPC methods ──────────────────────────────────────────

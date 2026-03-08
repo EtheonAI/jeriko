@@ -53,7 +53,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     label: "PayPal",
     description: "Orders, subscriptions, payouts, invoices",
     required: ["PAYPAL_CLIENT_ID", "PAYPAL_CLIENT_SECRET"],
-    optional: ["PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX"],
+    optional: ["PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX", "PAYPAL_MODE"],
     limitParam: "page_size",
   },
   {
@@ -144,6 +144,22 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     oauth: { clientIdVar: "SHOPIFY_OAUTH_CLIENT_ID", clientSecretVar: "SHOPIFY_OAUTH_CLIENT_SECRET" },
   },
   {
+    name: "instagram",
+    label: "Instagram",
+    description: "Posts, stories, reels, comments, insights",
+    required: ["INSTAGRAM_ACCESS_TOKEN"],
+    optional: [],
+    oauth: { clientIdVar: "INSTAGRAM_OAUTH_CLIENT_ID", clientSecretVar: "INSTAGRAM_OAUTH_CLIENT_SECRET" },
+  },
+  {
+    name: "threads",
+    label: "Threads",
+    description: "Posts, replies, insights, user profiles",
+    required: ["THREADS_ACCESS_TOKEN"],
+    optional: [],
+    oauth: { clientIdVar: "THREADS_OAUTH_CLIENT_ID", clientSecretVar: "THREADS_OAUTH_CLIENT_SECRET" },
+  },
+  {
     name: "slack",
     label: "Slack",
     description: "Messages, channels, users, files, reactions",
@@ -155,7 +171,8 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     label: "Discord",
     description: "Guilds, channels, messages, users",
     required: ["DISCORD_BOT_TOKEN"],
-    optional: [],
+    optional: ["DISCORD_REFRESH_TOKEN"],
+    oauth: { clientIdVar: "DISCORD_OAUTH_CLIENT_ID", clientSecretVar: "DISCORD_OAUTH_CLIENT_SECRET" },
   },
   {
     name: "sendgrid",
@@ -187,15 +204,6 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Zones, DNS, Workers, KV, analytics",
     required: ["CLOUDFLARE_API_TOKEN"],
     optional: ["CLOUDFLARE_ACCOUNT_ID"],
-    limitParam: "per_page",
-  },
-  {
-    name: "digitalocean",
-    label: "DigitalOcean",
-    description: "Droplets, domains, databases, apps, volumes",
-    required: ["DIGITALOCEAN_ACCESS_TOKEN"],
-    optional: ["DIGITALOCEAN_REFRESH_TOKEN"],
-    oauth: { clientIdVar: "DIGITALOCEAN_OAUTH_CLIENT_ID", clientSecretVar: "DIGITALOCEAN_OAUTH_CLIENT_SECRET" },
     limitParam: "per_page",
   },
   {
@@ -253,14 +261,6 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     required: ["DROPBOX_ACCESS_TOKEN"],
     optional: ["DROPBOX_REFRESH_TOKEN"],
     oauth: { clientIdVar: "DROPBOX_OAUTH_CLIENT_ID", clientSecretVar: "DROPBOX_OAUTH_CLIENT_SECRET" },
-  },
-  {
-    name: "salesforce",
-    label: "Salesforce",
-    description: "Records, SOQL queries, objects, search",
-    required: ["SALESFORCE_ACCESS_TOKEN", "SALESFORCE_INSTANCE_URL"],
-    optional: ["SALESFORCE_REFRESH_TOKEN"],
-    oauth: { clientIdVar: "SALESFORCE_OAUTH_CLIENT_ID", clientSecretVar: "SALESFORCE_OAUTH_CLIENT_SECRET" },
   },
 ];
 

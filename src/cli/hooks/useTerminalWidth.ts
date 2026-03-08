@@ -1,11 +1,11 @@
 /**
  * useTerminalWidth — responsive terminal width detection.
  *
- * Provides current terminal width and derived layout helpers.
- * Inspired by nanocoder's responsive terminal hook.
+ * Provides current terminal dimensions and derived layout helpers.
+ * Listens for resize events to re-render on terminal size changes.
  *
  * Usage:
- *   const { width, isNarrow, isWide } = useTerminalWidth();
+ *   const { width, height, isNarrow, isWide } = useTerminalWidth();
  */
 
 import { useState, useEffect } from "react";
@@ -25,6 +25,8 @@ const WIDE_THRESHOLD = 100;
 export interface TerminalLayout {
   /** Current terminal width in columns. */
   width: number;
+  /** Current terminal height in rows. */
+  height: number;
   /** Terminal is narrow (<60 cols) — use compact layout. */
   isNarrow: boolean;
   /** Terminal is wide (>=100 cols) — use full layout. */
@@ -36,12 +38,14 @@ export interface TerminalLayout {
 export function useTerminalWidth(): TerminalLayout {
   const { stdout } = useStdout();
   const [width, setWidth] = useState(stdout?.columns ?? 80);
+  const [height, setHeight] = useState(stdout?.rows ?? 24);
 
   useEffect(() => {
     if (!stdout) return;
 
     const onResize = () => {
       setWidth(stdout.columns);
+      setHeight(stdout.rows);
     };
 
     stdout.on("resize", onResize);
@@ -52,6 +56,7 @@ export function useTerminalWidth(): TerminalLayout {
 
   return {
     width,
+    height,
     isNarrow: width < NARROW_THRESHOLD,
     isWide: width >= WIDE_THRESHOLD,
     truncatePath: (path: string, maxWidth?: number) => {

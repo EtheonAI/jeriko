@@ -863,6 +863,21 @@ export class TriggerEngine {
     const config = loadConfig();
     const { backend, model } = parseModelSpec(config.agent.model);
 
+    // Warn if the model doesn't support tool calling — agent actions that
+    // rely on tools (e.g. "Use Gmail to send the reply") will fail silently.
+    const { getDriver } = await import("../../agent/drivers/index.js");
+    const { resolveModel, getCapabilities } = await import("../../agent/drivers/models.js");
+    const driver = getDriver(backend);
+    const resolvedId = resolveModel(driver.name, model);
+    const caps = getCapabilities(driver.name, resolvedId);
+    if (!caps.toolCall) {
+      log.warn(
+        `Trigger ${triggerId}: model "${resolvedId}" does not support tool calling. ` +
+        `Agent actions requiring tools (Gmail, connectors, etc.) will not work. ` +
+        `Switch to a model with tool support (Claude, GPT-4, etc.) for trigger agent actions.`,
+      );
+    }
+
     // Build the full user message: prompt + trigger context
     // SECURITY: Payload is DATA only — wrapped with boundary markers and
     // truncated to prevent prompt injection via webhook/email content.

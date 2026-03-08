@@ -260,7 +260,7 @@ Create a `.env` file in the project root (or run `jeriko init`):
 | `TELEGRAM_BOT_TOKEN` | For Telegram | Token from @BotFather |
 | `ADMIN_TELEGRAM_IDS` | For Telegram | Comma-separated allowed user IDs |
 | `NODE_AUTH_SECRET` | For multi-machine | HMAC secret for WebSocket auth |
-| `PROXY_PORT` | No | Server port (default: `3000`) |
+| `JERIKO_PORT` | No | Daemon HTTP port (default: `7741`) |
 | `DEFAULT_NODE` | No | Default target machine (default: `local`) |
 | `WHATSAPP_ADMIN_PHONE` | For WhatsApp | Admin phone number (no +, with country code) |
 | `IMAP_HOST` | For email | IMAP server (default: `imap.gmail.com`) |

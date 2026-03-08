@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 21 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(21);
+  it("defines exactly 22 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(22);
   });
 
   it("has all required fields on every provider", () => {
@@ -82,14 +82,13 @@ describe("OAuth providers", () => {
     expect(x!.usePKCE).toBe(true);
   });
 
-  it("Vercel uses Sign in with Vercel endpoints and requires PKCE", () => {
+  it("Vercel uses Sign in with Vercel endpoints (PKCE, no scopes in URL)", () => {
     const v = getOAuthProvider("vercel");
     expect(v).toBeDefined();
     expect(v!.authUrl).toBe("https://vercel.com/oauth/authorize");
-    expect(v!.tokenUrl).toBe("https://api.vercel.com/login/oauth/token");
+    expect(v!.tokenUrl).toBe("https://api.vercel.com/v2/oauth/access_token");
     expect(v!.usePKCE).toBe(true);
-    expect(v!.scopes).toContain("openid");
-    expect(v!.scopes).toContain("offline_access");
+    expect(v!.scopes).toEqual([]);
     expect(v!.refreshTokenEnvVar).toBe("VERCEL_REFRESH_TOKEN");
   });
 
@@ -264,7 +263,7 @@ describe("ConnectorDef OAuth metadata", () => {
     }
   });
 
-  it("total connector count is 12", () => {
+  it("total connector count is 27", () => {
     expect(CONNECTOR_DEFS.length).toBe(27);
   });
 });
@@ -361,7 +360,7 @@ describe("OAuth routes", () => {
     }
   });
 
-  it("GET /oauth/vercel/start includes PKCE challenge and scopes", async () => {
+  it("GET /oauth/vercel/start uses PKCE but no scopes", async () => {
     const origId = process.env.VERCEL_OAUTH_CLIENT_ID;
     process.env.VERCEL_OAUTH_CLIENT_ID = "vercel-client-id-123";
 
@@ -374,7 +373,7 @@ describe("OAuth routes", () => {
       expect(location).toContain("vercel.com/oauth/authorize");
       expect(location).toContain("code_challenge=");
       expect(location).toContain("code_challenge_method=S256");
-      expect(location).toContain("scope=openid");
+      expect(location).not.toContain("scope=");
     } finally {
       if (origId) {
         process.env.VERCEL_OAUTH_CLIENT_ID = origId;

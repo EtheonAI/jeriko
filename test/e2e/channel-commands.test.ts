@@ -36,6 +36,22 @@ function wait(ms = 200): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * Poll until a condition is met or timeout expires.
+ * Standard async E2E pattern — avoids fixed waits for operations with
+ * unpredictable timing (e.g. dynamic imports, network-dependent adapters).
+ */
+async function waitFor(
+  condition: () => boolean,
+  { timeout = 5000, interval = 100 } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await wait(interval);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Mock channel adapter — records all outbound messages and deletions.
 // ---------------------------------------------------------------------------
@@ -1038,12 +1054,24 @@ describe("Channel commands E2E", () => {
     test("/channels add whatsapp — attempts live add (no token required)", async () => {
       mock.clear();
       mock.simulateIncoming("/channels add whatsapp");
-      await wait();
 
       // WhatsApp doesn't require tokens — it tries to add directly.
-      // In test env, the add may fail (no Baileys connection) but should not crash.
-      const sent = mock.lastSent();
+      // The add is fully async (dynamic import of Baileys + connect attempt),
+      // so we poll until the operation completes (success or failure message).
+      await waitFor(
+        () => mock.sent.some((m) =>
+          m.text.includes("added and connected") || m.text.includes("Failed to add"),
+        ),
+      );
+
+      const sent = mock.allSentText();
       expect(sent).toBeTruthy();
+
+      // Clean up: if WhatsApp was successfully added, unregister it so it
+      // doesn't contaminate subsequent test groups.
+      if (channels.get("whatsapp")) {
+        await channels.unregister("whatsapp");
+      }
     });
 
     test("/channels connect — no arg shows usage", async () => {

@@ -7,7 +7,7 @@
 
 import { getLogger } from "../../shared/logger.js";
 import { verifyStripeSignature } from "../services/connectors/stripe/webhook.js";
-import { loadBillingConfig, TIER_LIMITS, GRACE_PERIOD_MS, type BillingTier, isBillingTier } from "./config.js";
+import { loadBillingConfig, TIER_LIMITS, UNLIMITED_TRIGGERS_STORED, GRACE_PERIOD_MS, type BillingTier, isBillingTier } from "./config.js";
 import {
   upsertSubscription,
   recordEvent,
@@ -438,8 +438,8 @@ function syncLicenseFromTier(
     email: email || null,
     subscription_id: subscriptionId,
     customer_id: customerId,
-    connector_limit: limits.connectors,
-    trigger_limit: limits.triggers === Infinity ? 999999 : limits.triggers,
+    connector_limit: limits.connectors === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.connectors,
+    trigger_limit: limits.triggers === Infinity ? UNLIMITED_TRIGGERS_STORED : limits.triggers,
     verified_at: now,
     valid_until: now + Math.floor(GRACE_PERIOD_MS / 1000),
   });

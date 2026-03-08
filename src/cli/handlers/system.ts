@@ -21,15 +21,17 @@ import {
   formatPlan,
   formatTaskCategory,
   formatTaskHub,
+  formatTriggerList,
   formatNotificationList,
   formatError,
 } from "../format.js";
-import { t, setActiveTheme, getActiveTheme } from "../theme.js";
-import { listThemes, type ThemePreset } from "../themes.js";
-import { getProviderOptions, CHANNEL_OPTIONS, validateApiKey } from "../lib/setup.js";
-import { verifyApiKey } from "../wizard/verify.js";
+import { t, getActiveTheme } from "../theme.js";
+import { getProviderOptions, validateApiKey, MIN_API_KEY_LENGTH } from "../lib/setup.js";
+import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList, verifyLMStudioRunning } from "../wizard/verify.js";
 import { persistSetup, type OnboardingResult } from "../wizard/onboarding.js";
-import type { ChannelChoice } from "../lib/setup.js";
+import { getProviderAuth, getOAuthConfig } from "../lib/provider-auth.js";
+import { runOAuthFlow } from "../lib/oauth-flow.js";
+import { openInBrowser } from "../lib/open-browser.js";
 
 export interface SystemCommandContext {
   backend: Backend;
@@ -74,26 +76,8 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
     // ── Onboarding wizard ──
 
     async onboard(): Promise<void> {
-      // Step 1: Channel selection (Telegram, WhatsApp, or skip)
-      launchWizard(ctx, {
-        title: "Setup Wizard",
-        steps: [
-          {
-            type: "select",
-            message: "Set up a messaging channel",
-            options: CHANNEL_OPTIONS.map((ch) => ({
-              value: ch.id,
-              label: ch.name,
-              hint: ch.hint,
-            })),
-          },
-        ],
-        onComplete: async ([channelId]) => {
-          dispatch({ type: "SET_PHASE", phase: "idle" });
-          const channel = (channelId ?? "skip") as ChannelChoice;
-          onboardChannel(ctx, channel);
-        },
-      });
+      // Step 1: Provider selection
+      onboardProvider(ctx);
     },
 
     async skills(): Promise<void> {
@@ -190,13 +174,14 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
               type: "text",
               message: "Enter your email address:",
               placeholder: "you@example.com",
-              validate: (v) => !v.includes("@") ? "Must be a valid email" : undefined,
+              validate: (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.trim()) ? undefined : "Must be a valid email address",
             },
           ],
           onComplete: async ([emailValue]) => {
             dispatch({ type: "SET_PHASE", phase: "idle" });
             try {
               const result = await backend.startUpgrade(emailValue!);
+              openInBrowser(result.url);
               addSystemMessage(t.green(`\u2713 Checkout opened: ${result.url}`));
             } catch (err) {
               addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
@@ -207,6 +192,7 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
       }
       try {
         const result = await backend.startUpgrade(email);
+        openInBrowser(result.url);
         addSystemMessage(t.green(`\u2713 Checkout opened: ${result.url}`));
       } catch (err) {
         addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
@@ -216,6 +202,7 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
     async billing(): Promise<void> {
       try {
         const result = await backend.openBillingPortal();
+        openInBrowser(result.url);
         addSystemMessage(t.green(`\u2713 Billing portal: ${result.url}`));
       } catch (err) {
         addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
@@ -223,14 +210,12 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
     },
 
     async cancel(): Promise<void> {
-      if (!requireDaemon(ctx, "Cancellation")) return;
+      // Redirect to the Stripe Customer Portal — handles cancellation,
+      // payment method changes, and invoice history in one place.
       try {
-        const result = await backend.cancelSubscription();
-        if (result.already_cancelling) {
-          addSystemMessage(t.muted(`Subscription is already set to cancel on ${result.cancel_at}.`));
-        } else {
-          addSystemMessage(t.green(`Subscription cancelled. Access until ${result.cancel_at}.`));
-        }
+        const result = await backend.openBillingPortal();
+        openInBrowser(result.url);
+        addSystemMessage(t.green(`Manage or cancel your subscription: ${result.url}`));
       } catch (err) {
         addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
       }
@@ -313,6 +298,16 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
       }
     },
 
+    async triggers(): Promise<void> {
+      if (!requireDaemon(ctx, "Triggers")) return;
+      try {
+        const triggers = await backend.listTriggers();
+        addSystemMessage(formatTriggerList(triggers));
+      } catch (err) {
+        addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+      }
+    },
+
     async notifications(): Promise<void> {
       try {
         const prefs = await backend.listNotifications();
@@ -324,48 +319,8 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
 
     // ── Theme ──
 
-    async theme(args: string): Promise<void> {
-      const themeName = args.trim();
-      if (!themeName) {
-        // Interactive theme picker
-        const current = getActiveTheme();
-        const themes = listThemes();
-        launchWizard(ctx, {
-          title: "Switch Theme",
-          steps: [
-            {
-              type: "select",
-              message: `Current: ${current}`,
-              options: themes.map((th) => ({
-                value: th.name,
-                label: th.displayName,
-                hint: th.name === current ? "current" : th.type,
-              })),
-            },
-          ],
-          onComplete: async ([selected]) => {
-            dispatch({ type: "SET_PHASE", phase: "idle" });
-            const match = themes.find((th) => th.name === selected);
-            if (match) {
-              setActiveTheme(selected as ThemePreset);
-              addSystemMessage(t.green(`\u2713 Theme switched to ${match.displayName}`));
-            }
-          },
-        });
-        return;
-      }
-
-      // Direct switch
-      const themes = listThemes();
-      const match = themes.find((th) => th.name === themeName);
-      if (!match) {
-        const available = themes.map((th) => th.name).join(", ");
-        addSystemMessage(formatError(`Unknown theme "${themeName}". Available: ${available}`));
-        return;
-      }
-
-      setActiveTheme(themeName as ThemePreset);
-      addSystemMessage(t.green(`\u2713 Theme switched to ${match.displayName}`));
+    async theme(_args: string): Promise<void> {
+      addSystemMessage(t.muted(`Active theme: ${getActiveTheme()}`));
     },
   };
 }
@@ -373,69 +328,27 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
 // ---------------------------------------------------------------------------
 // Onboarding wizard chain — composable steps
 //
-// Flow: Channel → (Telegram token) → Provider → (API key + verify) → Finalize
+// Flow: Provider → Auth (OAuth or API key) → Finalize
+// Channels are added post-setup via /connect.
 // ---------------------------------------------------------------------------
 
 import type { ProviderOption } from "../lib/setup.js";
 
 /** Accumulated state passed through the wizard chain. */
 interface OnboardState {
-  channel: ChannelChoice;
-  telegramToken?: string;
-  whatsappEnabled?: boolean;
   provider?: ProviderOption;
   apiKey?: string;
+  /** Specific Ollama model selected (written as LOCAL_MODEL in .env). */
+  localModel?: string;
 }
 
 /**
- * Step 1b: Route based on channel selection.
- * Telegram → token input, WhatsApp → note + continue, Skip → continue.
+ * Step 1: AI provider selection → auth method or finalize.
  */
-function onboardChannel(ctx: SystemCommandContext, channel: ChannelChoice): void {
-  const state: OnboardState = { channel };
-
-  if (channel === "telegram") {
-    onboardTelegramToken(ctx, state);
-  } else if (channel === "whatsapp") {
-    state.whatsappEnabled = true;
-    ctx.addSystemMessage(t.muted("WhatsApp will pair via QR code when the daemon starts."));
-    onboardProvider(ctx, state);
-  } else {
-    onboardProvider(ctx, state);
-  }
-}
-
-/**
- * Step 1c: Telegram bot token input → provider selection.
- */
-function onboardTelegramToken(ctx: SystemCommandContext, state: OnboardState): void {
-  launchWizard(ctx, {
-    title: "Telegram Bot Token",
-    steps: [
-      {
-        type: "text",
-        message: "Telegram bot token (from @BotFather)",
-        placeholder: "123456:ABC-DEF...",
-        validate: (value) => {
-          if (value.trim().length < 10) return "Token too short";
-        },
-      },
-    ],
-    onComplete: async ([token]) => {
-      ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-      state.telegramToken = (token ?? "").trim();
-      onboardProvider(ctx, state);
-    },
-  });
-}
-
-/**
- * Step 2: AI provider selection → API key or finalize.
- */
-function onboardProvider(ctx: SystemCommandContext, state: OnboardState): void {
+function onboardProvider(ctx: SystemCommandContext): void {
   const providerOptions = getProviderOptions();
   launchWizard(ctx, {
-    title: "AI Provider",
+    title: "Setup Wizard",
     steps: [
       {
         type: "select",
@@ -452,9 +365,14 @@ function onboardProvider(ctx: SystemCommandContext, state: OnboardState): void {
       const provider = providerOptions.find((p) => p.id === providerId);
       if (!provider) return;
 
-      state.provider = provider;
+      const state: OnboardState = { provider };
+
       if (provider.needsApiKey) {
-        onboardApiKey(ctx, state);
+        onboardAuth(ctx, state);
+      } else if (provider.id === "local") {
+        await onboardOllama(ctx, state);
+      } else if (provider.id === "lmstudio") {
+        await onboardLMStudio(ctx, state);
       } else {
         await onboardFinalize(ctx, state);
       }
@@ -463,10 +381,94 @@ function onboardProvider(ctx: SystemCommandContext, state: OnboardState): void {
 }
 
 /**
- * Step 3: API key input → verify → finalize.
+ * Step 2: Auth method — OAuth picker or direct API key.
+ * Providers with OAuth support show a choice; others go straight to key input.
+ */
+function onboardAuth(ctx: SystemCommandContext, state: OnboardState): void {
+  if (!state.provider) return;
+  const provider = state.provider;
+  const authDef = getProviderAuth(provider.id);
+
+  // Provider has OAuth — show auth method picker
+  if (authDef && authDef.choices.length > 1) {
+    launchWizard(ctx, {
+      title: `Connect ${provider.name}`,
+      steps: [
+        {
+          type: "select",
+          message: `How would you like to authenticate?`,
+          options: authDef.choices.map((c) => ({
+            value: c.id,
+            label: c.label,
+            hint: c.hint,
+          })),
+        },
+      ],
+      onComplete: async ([choiceId]) => {
+        ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
+        const choice = authDef.choices.find((c) => c.id === choiceId);
+        if (!choice) return;
+
+        if (choice.method === "oauth-pkce") {
+          await onboardOAuth(ctx, state);
+        } else {
+          onboardApiKey(ctx, state);
+        }
+      },
+    });
+    return;
+  }
+
+  // No OAuth — straight to API key
+  onboardApiKey(ctx, state);
+}
+
+/**
+ * OAuth flow — opens browser, waits for callback.
+ */
+async function onboardOAuth(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
+  if (!state.provider) return;
+  const provider = state.provider;
+  const oauthConfig = getOAuthConfig(provider.id);
+  if (!oauthConfig) {
+    ctx.addSystemMessage(formatError("OAuth not configured for this provider"));
+    onboardApiKey(ctx, state);
+    return;
+  }
+
+  ctx.addSystemMessage(t.muted("Opening browser for authentication..."));
+
+  try {
+    const result = await runOAuthFlow({
+      authUrl: oauthConfig.authUrl,
+      tokenUrl: oauthConfig.tokenUrl,
+      clientId: oauthConfig.clientId,
+      pkce: oauthConfig.pkce,
+      scopes: oauthConfig.scopes,
+      extraAuthParams: oauthConfig.extraAuthParams,
+      responseKeyField: oauthConfig.responseKeyField,
+      callbackPort: oauthConfig.callbackPort,
+      useRelay: oauthConfig.useRelay,
+      relayProvider: oauthConfig.relayProvider,
+    });
+
+    state.apiKey = result.key;
+    ctx.addSystemMessage(t.green("\u2713 Authenticated successfully"));
+    await onboardFinalize(ctx, state);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ctx.addSystemMessage(formatError(`OAuth failed: ${msg}`));
+    ctx.addSystemMessage(t.muted("Falling back to API key input..."));
+    onboardApiKey(ctx, state);
+  }
+}
+
+/**
+ * API key input → verify → finalize.
  */
 function onboardApiKey(ctx: SystemCommandContext, state: OnboardState): void {
-  const provider = state.provider!;
+  if (!state.provider) return;
+  const provider = state.provider;
   launchWizard(ctx, {
     title: `${provider.name} API Key`,
     steps: [
@@ -475,8 +477,8 @@ function onboardApiKey(ctx: SystemCommandContext, state: OnboardState): void {
         message: `Enter your ${provider.name} API key`,
         validate: (value) => {
           if (!validateApiKey(value)) {
-            return value.trim().length < 10
-              ? "API key must be at least 10 characters"
+            return value.trim().length < MIN_API_KEY_LENGTH
+              ? `API key must be at least ${MIN_API_KEY_LENGTH} characters`
               : "API key must not contain whitespace";
           }
         },
@@ -487,7 +489,6 @@ function onboardApiKey(ctx: SystemCommandContext, state: OnboardState): void {
       const key = (apiKey ?? "").trim();
       state.apiKey = key;
 
-      // Verify the key
       ctx.addSystemMessage(t.muted("Verifying API key..."));
       const valid = await verifyApiKey(provider.id, key);
       if (valid) {
@@ -502,37 +503,106 @@ function onboardApiKey(ctx: SystemCommandContext, state: OnboardState): void {
 }
 
 /**
+ * Ollama detection — check if running, detect models, let user pick.
+ */
+async function onboardOllama(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
+  ctx.addSystemMessage(t.muted("Checking Ollama..."));
+
+  const running = await verifyOllamaRunning();
+  if (!running) {
+    ctx.addSystemMessage(
+      formatError("Ollama not detected") + "\n" +
+      t.muted("  Install: https://ollama.com") + "\n" +
+      t.muted("  Then run: ollama pull llama3"),
+    );
+    await onboardFinalize(ctx, state);
+    return;
+  }
+
+  const models = await fetchOllamaModelList();
+  if (models.length === 0) {
+    ctx.addSystemMessage(
+      t.warning("Ollama is running but no models installed") + "\n" +
+      t.muted("  Run: ollama pull <model>") + "\n" +
+      t.muted("  Examples: llama3, deepseek-coder, mistral, qwen2"),
+    );
+    await onboardFinalize(ctx, state);
+    return;
+  }
+
+  if (models.length === 1) {
+    state.localModel = models[0]!;
+    ctx.addSystemMessage(t.green(`\u2713 Ollama detected — using ${models[0]!}`));
+    await onboardFinalize(ctx, state);
+    return;
+  }
+
+  // Multiple models — let user pick
+  launchWizard(ctx, {
+    title: "Ollama Models",
+    steps: [
+      {
+        type: "select",
+        message: `${models.length} models found — choose one:`,
+        options: models.map((m) => ({ value: m, label: m })),
+      },
+    ],
+    onComplete: async ([selected]) => {
+      ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
+      if (selected) state.localModel = selected;
+      await onboardFinalize(ctx, state);
+    },
+  });
+}
+
+/**
+ * LM Studio detection — check if running.
+ */
+async function onboardLMStudio(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
+  ctx.addSystemMessage(t.muted("Checking LM Studio..."));
+
+  const running = await verifyLMStudioRunning();
+  if (running) {
+    ctx.addSystemMessage(t.green("\u2713 LM Studio detected"));
+  } else {
+    ctx.addSystemMessage(
+      t.warning("LM Studio not detected") + "\n" +
+      t.muted("  Download: https://lmstudio.ai") + "\n" +
+      t.muted("  Start LM Studio and load a model") + "\n" +
+      t.muted("  API server runs on http://127.0.0.1:1234"),
+    );
+  }
+
+  await onboardFinalize(ctx, state);
+}
+
+/**
  * Final step: persist config + env, update backend model, show summary.
  */
 async function onboardFinalize(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
-  const provider = state.provider!;
+  if (!state.provider) return;
+  const provider = state.provider;
 
   const result: OnboardingResult = {
     provider: provider.id,
     model: provider.model,
     apiKey: state.apiKey ?? "",
     envKey: provider.envKey,
-    channel: state.channel,
-    telegramToken: state.telegramToken,
-    whatsappEnabled: state.whatsappEnabled,
+    localModel: state.localModel,
   };
 
   await persistSetup(result);
 
-  // Update the active model in the running session
+  const displayModel = state.localModel ?? provider.model;
   ctx.dispatch({ type: "SET_MODEL", model: provider.model });
 
-  const parts = [t.green("\u2713 Setup complete!")];
-  if (state.telegramToken) {
-    parts.push(t.muted("  Telegram: configured"));
-  }
-  if (state.whatsappEnabled) {
-    parts.push(t.muted("  WhatsApp: enabled (QR pairing on daemon start)"));
-  }
-  parts.push(t.muted(`  Provider: ${provider.name}`));
-  parts.push(t.muted(`  Model:    ${provider.model}`));
-  parts.push("");
-  parts.push(t.dim("Type a message to start chatting."));
+  const parts = [
+    t.green("\u2713 Setup complete!"),
+    t.muted(`  Provider: ${provider.name}`),
+    t.muted(`  Model:    ${displayModel}`),
+    "",
+    t.dim("Type a message to start chatting. Use /connect to add channels."),
+  ];
 
   ctx.addSystemMessage(parts.join("\n"));
 }

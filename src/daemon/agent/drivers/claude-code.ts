@@ -54,9 +54,13 @@ function buildPrompt(messages: DriverMessage[]): string {
   for (const msg of messages) {
     if (msg.role === "system") continue; // Handled via --system-prompt
     if (msg.role === "assistant") {
-      parts.push(`[Previous response]: ${msg.content}`);
+      const text = typeof msg.content === "string" ? msg.content : "";
+      parts.push(`[Previous response]: ${text}`);
     } else if (msg.role === "user") {
-      parts.push(msg.content);
+      const text = typeof msg.content === "string"
+        ? msg.content
+        : msg.content.filter((b) => b.type === "text").map((b) => (b as { text: string }).text).join("\n");
+      parts.push(text);
     }
   }
 

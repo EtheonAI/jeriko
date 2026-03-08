@@ -383,17 +383,19 @@ export function generateMatchKeys(modelId: string): string[] {
 /**
  * Cross-reference an Ollama model against the models.dev registry.
  *
- * Merges capabilities: keeps Ollama probe data for runtime-specific properties
- * (toolCall — determined by template support) and inherits model-intrinsic
- * properties from models.dev (reasoning, context window, output limit).
+ * Merges capabilities: Ollama's `capabilities` array is authoritative for
+ * what the runtime supports (tools, thinking, vision). models.dev provides
+ * supplementary data (context window, output limit) and fills in capabilities
+ * that Ollama's older API versions don't report.
  *
- * The Ollama probe detects what the runtime CAN do (tool calling via template).
- * models.dev knows what the model IS (reasoning-capable, context size, etc.).
- * Merging both gives the most accurate picture.
+ * When the Ollama probe had access to the `capabilities` array (modern Ollama),
+ * those values are authoritative — models.dev cannot override them.
+ * When the array was absent (older Ollama), models.dev fills in the gaps.
  */
 function crossReferenceWithRegistry(
   modelId: string,
   probed: ModelCapabilities,
+  hadCapabilitiesArray: boolean,
 ): ModelCapabilities {
   if (familyCrossRef.size === 0) return probed;
 
@@ -410,16 +412,18 @@ function crossReferenceWithRegistry(
 
       return {
         ...probed,
-        // Inherit model-intrinsic capabilities from models.dev
-        reasoning: ref.reasoning,
-        vision: ref.vision,
-        structuredOutput: ref.structuredOutput,
-        // Use the larger value — Ollama probe may underreport, but models.dev
-        // reflects the model's true capacity regardless of runtime config.
+        // When Ollama reported a `capabilities` array, its values are
+        // authoritative (the runtime knows what the model supports).
+        // models.dev can only fill in gaps when the array was absent.
+        reasoning: hadCapabilitiesArray ? probed.reasoning : (probed.reasoning || ref.reasoning),
+        vision: hadCapabilitiesArray ? probed.vision : (probed.vision || ref.vision),
+        structuredOutput: hadCapabilitiesArray ? probed.structuredOutput : (probed.structuredOutput || ref.structuredOutput),
+        // Context/output: use the larger value — Ollama probe may underreport,
+        // but models.dev reflects the model's true capacity.
         context: Math.max(probed.context, ref.context),
         maxOutput: Math.max(probed.maxOutput, ref.maxOutput),
         // Keep toolCall from Ollama probe — it reflects whether the Ollama
-        // runtime actually supports tool calling for this model (template-dependent).
+        // runtime actually supports tool calling for this model.
       };
     }
   }
@@ -449,6 +453,10 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
   let context = 32_768;
   let maxOutput = 4_096;
   let toolCall = false;
+  let reasoning = false;
+  let vision = false;
+  let probeSucceeded = false;
+  let hadCapabilitiesArray = false;
   const family = modelId.split(":")[0] ?? modelId;
 
   try {
@@ -462,10 +470,21 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     if (resp.ok) {
       const data = (await resp.json()) as Record<string, unknown>;
 
-      // Extract context length from model_info
+      // Extract context length from model_info.
+      // Ollama uses architecture-prefixed keys (e.g., "deepseek3.2.context_length")
+      // as well as the standard "general.context_length". Check both.
       const modelInfo = data.model_info as Record<string, unknown> | undefined;
       if (modelInfo) {
-        const ctxLen = modelInfo["general.context_length"] as number | undefined;
+        let ctxLen = modelInfo["general.context_length"] as number | undefined;
+        if (!ctxLen) {
+          // Find architecture-prefixed context_length (e.g., "deepseek3.2.context_length")
+          for (const [key, val] of Object.entries(modelInfo)) {
+            if (key.endsWith(".context_length") && typeof val === "number" && val > 0) {
+              ctxLen = val;
+              break;
+            }
+          }
+        }
         if (ctxLen && ctxLen > 0) context = ctxLen;
       }
 
@@ -479,25 +498,38 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
         if (predictMatch) maxOutput = parseInt(predictMatch[1]!, 10);
       }
 
-      // Detect tool calling from template
-      const template = data.template as string | undefined;
-      if (template) {
-        // Ollama templates that support tools contain tool-related template blocks
-        toolCall = template.includes(".Tools") ||
-                   template.includes("tools") ||
-                   template.includes("<tool_call>") ||
-                   template.includes("function_call");
+      // Detect tool calling — check Ollama's capabilities array first (most reliable),
+      // then fall back to template inspection for older Ollama versions.
+      const capabilities = data.capabilities as string[] | undefined;
+      if (Array.isArray(capabilities) && capabilities.includes("tools")) {
+        toolCall = true;
+      }
 
-        // Cloud-proxied models use a minimal passthrough template ("{{ .Prompt }}")
-        // and support tools natively via the underlying API. Detect by:
-        //   1. Template is just "{{ .Prompt }}" (passthrough)
-        //   2. Model name contains "cloud" (convention for Ollama cloud proxies)
-        const isPassthrough = template.trim() === "{{ .Prompt }}";
-        const isCloudModel = modelId.toLowerCase().includes("cloud");
-        if (!toolCall && (isPassthrough || isCloudModel)) {
-          toolCall = true;
-          log.debug(`Ollama probe "${modelId}": detected cloud/passthrough model — enabling tools`);
+      if (!toolCall) {
+        const template = data.template as string | undefined;
+        if (template) {
+          // Ollama templates that support tools contain tool-related template blocks
+          toolCall = template.includes(".Tools") ||
+                     template.includes("tools") ||
+                     template.includes("<tool_call>") ||
+                     template.includes("function_call");
+
+          // Cloud-proxied models use a minimal passthrough template ("{{ .Prompt }}")
+          // and support tools natively via the underlying API.
+          const isPassthrough = template.trim() === "{{ .Prompt }}";
+          const isCloudModel = modelId.toLowerCase().includes("cloud");
+          if (!toolCall && (isPassthrough || isCloudModel)) {
+            toolCall = true;
+            log.debug(`Ollama probe "${modelId}": detected cloud/passthrough model — enabling tools`);
+          }
         }
+      }
+
+      // Detect reasoning and vision from capabilities array
+      if (Array.isArray(capabilities)) {
+        hadCapabilitiesArray = true;
+        if (capabilities.includes("thinking")) reasoning = true;
+        if (capabilities.includes("vision")) vision = true;
       }
 
       // Max output: default to context/4 if not explicitly set, capped at 32K
@@ -505,7 +537,8 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
         maxOutput = Math.min(Math.floor(context / 4), 32_768);
       }
 
-      log.debug(`Ollama probe "${modelId}": ctx=${context} out=${maxOutput} tools=${toolCall}`);
+      probeSucceeded = true;
+      log.debug(`Ollama probe "${modelId}": ctx=${context} out=${maxOutput} tools=${toolCall} reasoning=${reasoning}`);
     } else {
       log.debug(`Ollama probe "${modelId}" failed: HTTP ${resp.status}`);
     }
@@ -521,19 +554,24 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     context,
     maxOutput,
     toolCall,
-    reasoning: false,
-    vision: false,
+    reasoning,
+    vision,
     structuredOutput: false,
     costInput: 0,
     costOutput: 0,
   };
 
   // Cross-reference with models.dev to detect capabilities that Ollama's
-  // /api/show can't report — reasoning, vision, structured output, and more
+  // /api/show can't report — vision, structured output, and more
   // accurate context/output limits from the model's spec sheet.
-  const enriched = crossReferenceWithRegistry(modelId, probed);
+  const enriched = crossReferenceWithRegistry(modelId, probed, hadCapabilitiesArray);
 
-  localProbeCache.set(modelId, enriched);
+  // Only cache successful probes. Failed probes (Ollama down, timeout) return
+  // defaults with toolCall=false — caching these would permanently disable
+  // tools even after Ollama becomes available.
+  if (probeSucceeded) {
+    localProbeCache.set(modelId, enriched);
+  }
   return enriched;
 }
 
@@ -879,6 +917,23 @@ export function parseModelSpec(
   spec: string,
   isDriverKnown?: (name: string) => boolean,
 ): ModelSpec {
+  const checkFn = isDriverKnown ?? isKnownProvider;
+
+  // Check for "/" separator first — unambiguous provider delimiter.
+  // Ollama tags use ":" (e.g., "llama3:70b", "deepseek-v3.2:cloud") but never "/",
+  // so "local/deepseek-v3.2:cloud" → backend="local", model="deepseek-v3.2:cloud".
+  const slashIdx = spec.indexOf("/");
+  if (slashIdx > 0) {
+    const slashLeft = spec.slice(0, slashIdx);
+    const slashRight = spec.slice(slashIdx + 1);
+    let knownViaSlash = false;
+    try { knownViaSlash = checkFn(slashLeft); } catch { /* not found */ }
+    if (knownViaSlash) {
+      return { backend: slashLeft, model: slashRight };
+    }
+  }
+
+  // Check for ":" separator — used by "provider:model" syntax.
   const colonIdx = spec.indexOf(":");
   if (colonIdx < 0) {
     return { backend: spec, model: spec };
@@ -887,15 +942,8 @@ export function parseModelSpec(
   const left = spec.slice(0, colonIdx);
   const right = spec.slice(colonIdx + 1);
 
-  // Use provided check function or fall back to isKnownProvider
-  const checkFn = isDriverKnown ?? isKnownProvider;
-
-  // Also check the driver registry (handles built-in aliases like "claude", "gpt")
   let knownAsDriver = false;
   try {
-    // Lazy import to avoid circular dependency — isKnownProvider uses aliasIndex
-    // which is sufficient for custom providers, but built-in drivers are registered
-    // in the driver registry with aliases not in aliasIndex.
     knownAsDriver = checkFn(left);
   } catch {
     // Not found — not a known provider

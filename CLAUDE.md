@@ -1,264 +1,178 @@
-# Jeriko — Developer Guide
+# CLAUDE.md
 
-Unix-first CLI toolkit for AI agents. Commands replace proprietary tool abstractions.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What is Jeriko
+
+Unix-first CLI toolkit for AI agents. TypeScript + Bun runtime, compiled to standalone binary.
 Model-agnostic: any AI with exec capability can control the machine.
 
-**For AI agent command reference:** See `AGENT.md` — this is the system prompt sent to all AI models (GPT-4o, Claude API, local models). It contains every command, flag, workflow, and integration. `CLAUDE.md` is for Claude Code developers working on Jeriko's codebase.
+**For AI agent command reference:** See `AGENT.md` — the system prompt sent to all AI models.
+`CLAUDE.md` is for developers working on Jeriko's codebase.
 
-## Quick Start
+## Build & Dev Commands
 
 ```bash
-npm install
-export PATH="$(pwd)/bin:$PATH"
-jeriko init --yes
-jeriko sys --format text          # verify it works
+bun install                          # install deps (workspace root)
+bun run dev                          # watch mode (bun --watch src/index.ts)
+bun run build                        # compile to standalone binary (~66MB)
+bun run typecheck                    # tsc --noEmit (strict mode)
 ```
 
-## Architecture (4 layers)
+## Testing
+
+```bash
+bun test                             # all tests
+bun run test:smoke                   # fast gates (<100ms)
+bun run test:unit                    # all unit tests
+bun run test:integration             # all integration tests
+bun run test:e2e                     # end-to-end tests
+
+# Run a single test file
+bun test test/unit/channel-router.test.ts
+
+# Run a subsystem (12 parallel suites in CI)
+bun run test:unit:cli                # CLI components, handlers, hooks, formatting
+bun run test:unit:agent              # orchestrator, model system, tool registry
+bun run test:unit:billing            # tiers, license, webhooks, store
+bun run test:unit:channels           # channel router, adapters
+bun run test:unit:connectors         # 14 connector types, OAuth
+bun run test:unit:triggers           # cron, webhook, file, email triggers
+bun run test:unit:relay              # relay client, protocol, connections
+bun run test:unit:security           # API auth, escape functions
+bun run test:unit:shared             # config, output, bus, args, DB
+bun run test:unit:skills             # skill loader, skill tool
+bun run test:unit:webdev             # webdev tool, browser scripts
+bun run test:unit:streaming          # SSE parsers, socket stream, drivers
+
+# Integration suites
+bun run test:integration:relay       # real Bun relay server + WebSocket
+bun run test:integration:commands    # full daemon boot + HTTP API
+bun run test:integration:connectors  # connector definitions + health
+```
+
+Test preload (`test/preload.ts`) forces `chalk.level = 3` for consistent ANSI output across all environments.
+
+## Architecture (4 layers + platform)
 
 ```
 Layer 4: Relay     → apps/relay/ (Bun, local dev) + apps/relay-worker/ (CF Worker, production)
 Layer 3: Daemon    → src/daemon/kernel.ts (16-step boot) → agent, API, services, storage
 Layer 2: CLI       → src/cli/dispatcher.ts → 51 commands, Ink-based interactive REPL
-Layer 1: Shared    → src/shared/ (config, urls, relay-protocol, output, escape, skills)
+Layer 1: Shared    → src/shared/ (config, types, output, escape, relay-protocol, urls, skills)
+Platform: src/platform/ → OS abstraction (darwin/linux/win32) for native features
 ```
 
-Relay: `apps/relay/` (local) + `apps/relay-worker/` (prod) — routes webhooks/OAuth to user daemon
-Daemon: `src/daemon/` — agent loop, triggers, connectors, channels, storage
-Shared: `src/shared/` — pure types, relay protocol, URL builders, config
+### Entry Points
+
+- `src/index.ts` — routes to CLI dispatcher
+- `jeriko` (no args) → interactive chat REPL (`src/cli/chat.tsx`)
+- `jeriko <cmd>` → CLI command (`src/cli/dispatcher.ts` → `src/cli/commands/`)
+- `jeriko serve` → daemon boot (`src/daemon/kernel.ts`)
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `src/daemon/kernel.ts` | 16-step daemon boot sequence |
+| `src/cli/dispatcher.ts` | Command registry, global flags, fuzzy matching |
+| `src/cli/app.tsx` | Root Ink component (useReducer state, callbacks) |
+| `src/cli/backend.ts` | Backend interface — daemon IPC vs in-process agent |
+| `src/shared/config.ts` | JerikoConfig schema, loader (defaults → user → project → env) |
+| `src/shared/output.ts` | ok()/fail() output contract, format switching |
+| `src/daemon/agent/orchestrator.ts` | Main agent loop (observe → think → act) |
+| `src/daemon/agent/tools/registry.ts` | Tool registry (17 tools, alias support) |
+| `src/daemon/exec/gateway.ts` | Single entry for all shell execution |
+| `src/daemon/api/app.ts` | Hono HTTP server, middleware, route mounting |
+
+### Workspace Structure
+
+```
+Root workspace:     src/         (main Jeriko CLI + daemon)
+Apps:               apps/relay/           (Bun relay, local dev)
+                    apps/relay-worker/    (CF Worker relay, production)
+                    apps/website/         (Next.js marketing site)
+Packages:           packages/protocol/    (wire protocol types)
+                    packages/plugin-sdk/  (plugin developer types)
+                    packages/sdk/         (daemon API client)
+```
+
+### Daemon Services
+
+- **Channels** (2): Telegram (grammy), WhatsApp (Baileys)
+- **Connectors** (14+): stripe, paypal, github, twilio, vercel, x, gdrive, onedrive, gmail, outlook, hubspot, shopify, instagram, threads
+- **Triggers** (6 types): cron, webhook, file, http, email, once
+- **Agent tools** (17): bash, browse, camera, connector, delegate, edit, list, memory-tool, parallel, read, screenshot, search, skill, web, webdev, write + registry
+- **LLM drivers**: Anthropic, OpenAI, local (Ollama/LM Studio), Claude Code, custom providers (OpenAI-compat or Anthropic-compat)
 
 ## Output Contract
 
-All commands emit: `{"ok":true,"data":{...}}` or `{"ok":false,"error":"..."}`
+All CLI commands emit: `{"ok":true,"data":{...}}` or `{"ok":false,"error":"...","code":N}`
 Three formats: `--format json` (default) | `--format text` | `--format logfmt`
+
+Use `ok()` / `fail()` from `src/shared/output.ts` — never `console.log` in commands.
 
 ## Exit Codes
 
 0=success, 1=general, 2=network, 3=auth, 5=not_found, 7=timeout
-Use `EXIT.NETWORK`, `EXIT.AUTH`, etc. from `lib/cli.js`.
-
-## Adding a New Command
-
-1. Create `tools/myfeature.js` (library functions)
-2. Create `bin/jeriko-mycommand` (CLI wrapper using `parseArgs`, `ok`, `fail`, `run`)
-3. `chmod +x bin/jeriko-mycommand`
-4. Register Telegram handler in `tools/index.js`
-5. Add command name to `RESERVED` in `lib/plugins.js`
-6. Document in `docs/COMMANDS.md`
-
-See `docs/CONTRIBUTING.md` for full template with stdin support and error handling.
+Use `EXIT.NETWORK`, `EXIT.AUTH`, etc. from `src/shared/types.ts`.
 
 ## Code Conventions
 
-- **Plain JavaScript** — no TypeScript, no build step
-- **No classes** — plain functions + module exports
-- **`ok()` / `fail()`** — never `console.log` in commands
-- **Minimal deps** — prefer Node.js built-ins
-- **`escapeAppleScript()`** — always escape user input in AppleScript strings
-- **`readStdin()`** — support piped input where it makes sense
-- **No global state** — each command is a fresh process
+- **TypeScript** (strict mode, ESNext target, Bun runtime)
+- **Imports use `.js` extensions** — always `import { X } from "./file.js"`, not `.ts`
+- **Classes for services** — drivers, engines, registries, managers, relay infrastructure
+- **Factory functions for CLI handlers** — return object of async methods (see `src/cli/handlers/session.ts`)
+- **React + Ink for CLI** — functional components, centralized useReducer state (`src/cli/hooks/useAppReducer.ts`)
+- **Raw SQL via bun:sqlite** — no ORM runtime; Drizzle used only for migration generation
+- **No path aliases in imports** — tsconfig paths exist but always use relative imports with `.js`
 
 ### Naming
 
 | What | Convention | Example |
 |------|-----------|---------|
-| CLI commands | `bin/jeriko-lowercase` | `bin/jeriko-mycommand` |
-| Tool libraries | `tools/lowercase.js` | `tools/myfeature.js` |
+| CLI commands | `src/cli/commands/<category>/<name>.ts` | `src/cli/commands/agent/skill.ts` |
+| Agent tools | `src/daemon/agent/tools/<name>.ts` | `src/daemon/agent/tools/browse.ts` |
+| Connectors | `src/daemon/services/connectors/<name>.ts` | — |
 | Flags | `--kebab-case` | `--kill-name` |
 | JSON keys | `camelCase` | `{ runCount: 5 }` |
-| Env vars | `UPPER_SNAKE_CASE` | `IMAP_HOST` |
+| Env vars | `UPPER_SNAKE_CASE` | `ANTHROPIC_API_KEY` |
 
 ## Security Rules
 
-- `escapeAppleScript()` on ALL user input interpolated into AppleScript
-- `SENSITIVE_KEYS` in `tools/shell.js` stripped from exec subprocesses
-- Plugins untrusted by default — no webhooks, no prompt injection until `jeriko trust`
-- `NODE_AUTH_SECRET` required — server refuses to start without it
-- Timing-safe token comparison in `server/auth.js`
-- See `docs/SECURITY.md` for full model
+- `escapeAppleScript()` on ALL user input interpolated into AppleScript (30+ call sites)
+- `escapeShellArg()` on ALL user input in shell commands (25+ call sites)
+- SENSITIVE_KEYS redaction in exec gateway, plugin sandbox, and config (3 synchronized lists in `src/shared/secrets.ts`, `src/daemon/exec/gateway.ts`, `src/daemon/plugin/sandbox.ts`)
+- Timing-safe HMAC comparison at 15+ call sites (daemon, relay Bun, relay CF Worker, webhooks)
+- Plugin sandbox strips sensitive env vars before subprocess execution
+- Execution gateway: single entry for all shell commands (lease → sandbox → audit pipeline)
+- See `docs/SECURITY.md` and `docs/SECURITY-AUDIT-2026-03-06.md`
 
-## Testing
+## Backend Parity (Critical Invariant)
 
-```bash
-jeriko mycommand --format json    # valid JSON with ok field?
-jeriko mycommand --format text    # NOT JSON?
-jeriko mycommand --format logfmt  # key=value pairs?
-echo "input" | jeriko mycommand   # stdin works?
-jeriko mycommand --bad-input; echo "Exit: $?"  # correct exit code?
-```
+`src/cli/backend.ts` in-process mode MUST mirror `src/daemon/kernel.ts` boot sequence:
+- `registerTools()` must match kernel step 6 (all 17 tools including memory-tool)
+- `loadSystemPrompt()` must load AGENT.md + inject skill summaries + inject memory
+- `agentConfig` must pass `systemPrompt` to `runAgent()`
 
-## PayPal Integration (`jeriko paypal`)
+Without this, CLI mode silently has no system prompt and missing tools.
 
-OAuth2 client credentials flow. Env: `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_MODE` (sandbox|live).
+## CI Pipeline
 
-```bash
-jeriko paypal init                     # interactive setup
-jeriko paypal init --client-id xxx --secret xxx --sandbox  # non-interactive
-
-# Orders
-jeriko paypal orders create --amount 50.00 --currency USD [--description "text"]
-jeriko paypal orders get --id ORDER_ID
-jeriko paypal orders capture --id ORDER_ID
-jeriko paypal orders authorize --id ORDER_ID
-
-# Payments
-jeriko paypal payments get --id CAPTURE_ID
-jeriko paypal payments refund --id CAPTURE_ID [--amount 10.00]
-
-# Subscriptions
-jeriko paypal subscriptions list --plan PLAN_ID [--status ACTIVE|SUSPENDED|CANCELLED]
-jeriko paypal subscriptions get --id SUB_ID
-jeriko paypal subscriptions create --plan PLAN_ID
-jeriko paypal subscriptions cancel --id SUB_ID [--reason "text"]
-jeriko paypal subscriptions suspend --id SUB_ID
-jeriko paypal subscriptions activate --id SUB_ID
-
-# Plans
-jeriko paypal plans list [--limit 10]
-jeriko paypal plans get --id PLAN_ID
-jeriko paypal plans create --product PROD_ID --name "Monthly" --amount 9.99 --interval MONTH
-
-# Products
-jeriko paypal products list [--limit 10]
-jeriko paypal products get --id PROD_ID
-jeriko paypal products create --name "My Product" [--type SERVICE|PHYSICAL|DIGITAL]
-
-# Invoices
-jeriko paypal invoices list [--limit 10] [--status DRAFT|SENT|PAID|CANCELLED]
-jeriko paypal invoices get --id INV_ID
-jeriko paypal invoices create --recipient "email@example.com" --amount 100.00
-jeriko paypal invoices send --id INV_ID
-jeriko paypal invoices cancel --id INV_ID
-jeriko paypal invoices remind --id INV_ID
-
-# Payouts
-jeriko paypal payouts create --email "user@example.com" --amount 25.00 [--currency USD]
-jeriko paypal payouts get --id BATCH_ID
-
-# Disputes
-jeriko paypal disputes list [--status OPEN|WAITING|RESOLVED]
-jeriko paypal disputes get --id DISPUTE_ID
-
-# Webhooks
-jeriko paypal webhooks list
-jeriko paypal webhooks create --url "https://..." --events "PAYMENT.CAPTURE.COMPLETED,..."
-jeriko paypal webhooks delete --id WEBHOOK_ID
-```
-
-## Relay Infrastructure (Multi-User Webhook/OAuth Routing)
-
-External services (Stripe, GitHub, PayPal) send webhooks to `bot.jeriko.ai`. The relay server routes them to the correct user's daemon via WebSocket.
-
-**Architecture:**
-```
-External Service → POST https://bot.jeriko.ai/hooks/:userId/:triggerId
-  → Relay server (apps/relay/) validates trigger ownership
-  → Forwards over WebSocket to user's daemon
-  → Daemon TriggerEngine.handleWebhook() processes locally
-  → Signature verification on daemon (secrets never leave user's machine)
-```
-
-**Relay Server — Two implementations** (same wire protocol, same routes):
-- `apps/relay/` — Bun + Hono (local dev, testing)
-- `apps/relay-worker/` — Cloudflare Worker + Durable Object (production at `bot.jeriko.ai`)
-
-**Bun Relay** (`apps/relay/`): Local dev and test suite
-- `relay.ts` — createRelayApp() + createRelayServer(opts) factory (testable, no side effects)
-- `connections.ts` — module-level Maps, HMAC timing-safe auth (node:crypto)
-
-**CF Worker Relay** (`apps/relay-worker/`): Production deployment
-- `index.ts` — Worker entry, routes all requests to single global DO (`idFromName("global")`)
-- `relay-do.ts` — RelayDO Durable Object (Hibernatable WebSockets + Hono HTTP)
-- `connections.ts` — ConnectionManager class (async Web Crypto auth, hibernation-safe attachments)
-- `crypto.ts` — Web Crypto API helpers (hmacSHA256, safeCompare, verifyStripeSignature)
-- `routes/` — webhook.ts, oauth.ts, billing.ts, health.ts (same logic, dependency-injected)
-
-**Shared routes** (both relays):
-- POST /hooks/:userId/:triggerId (validates trigger ownership)
-- POST /hooks/:triggerId (legacy — looks up trigger owner)
-- GET /oauth/:userId/:provider/callback (forwards to daemon, waits for HTML)
-- POST /billing/webhook (Stripe centralized), GET /billing/license/:userId
-- GET /health (public), GET /health/status (authenticated)
-
-**Relay Client** (`src/daemon/services/relay/client.ts`): Outbound WebSocket
-- Connects at kernel step 10.6 (non-fatal — works offline)
-- Exponential backoff reconnection (1s → 2s → 4s → ... 60s max)
-- Auth timeout (15s), heartbeat (30s ping, 10s pong timeout)
-- Skipped when: no user ID, no auth secret, or JERIKO_PUBLIC_URL set (self-hosted)
-
-**Wire Protocol** (`src/shared/relay-protocol.ts`): Single source of truth
-- Outbound: auth, register_triggers, unregister_triggers, webhook_ack, oauth_result, ping
-- Inbound: auth_ok, auth_fail, webhook, oauth_callback, pong, error
-
-**URL Builders** (`src/shared/urls.ts`): Mode-aware URL generation
-- Relay mode (default): `https://bot.jeriko.ai/hooks/:userId/:triggerId`
-- Self-hosted (JERIKO_PUBLIC_URL): `https://my-tunnel.com/hooks/:triggerId`
-- Local dev: `http://127.0.0.1:3000/hooks/:triggerId`
-
-**User ID**: `getUserId()` in `src/shared/config.ts`, generated at `jeriko install`, persisted as `JERIKO_USER_ID` in `~/.config/jeriko/.env`
-
-**Key env vars**: `JERIKO_USER_ID`, `RELAY_AUTH_SECRET`, `NODE_AUTH_SECRET`, `JERIKO_RELAY_URL`, `JERIKO_PUBLIC_URL`, `JERIKO_BILLING_URL`
-
-See `docs/ARCHITECTURE.md` → Relay Infrastructure for full technical details.
-
-## Web Development (Pre-Built Templates)
-
-When building web apps, ALWAYS use the pre-built templates. They are instant (cp, no download).
-
-### Available Templates
-- **`web-static`** — Vite + React 19 + Tailwind 4 + shadcn/ui (50+ components) + Wouter + Framer Motion + Recharts
-- **`web-db-user`** — Everything in web-static + Express + Drizzle ORM + tRPC + JWT auth + database
-
-### Workflow
-```bash
-jeriko create web-static my-app      # instant copy from templates/webdev/web-static
-cd ~/.jeriko/projects/my-app
-pnpm install                          # install deps
-pnpm run dev                          # starts Vite on localhost:3000
-```
-Or with auto-dev: `jeriko create web-static my-app --dev`
-
-### Rules for Building Apps
-1. ALWAYS use `jeriko create web-static` or `jeriko create web-db-user` — never scaffold from scratch
-2. After scaffold: write REAL code into `client/src/pages/`, `client/src/components/`
-3. Use the pre-installed shadcn components in `client/src/components/ui/` (Button, Card, Dialog, Tabs, etc.)
-4. Start dev server: `jeriko dev --start my-app` (auto-detects available port)
-5. Check actual port: `jeriko dev --status` → get the URL
-6. Preview: `jeriko dev --preview my-app` or `jeriko browse --navigate <URL from status>`
-7. Screenshot to check: `jeriko browse --screenshot <URL from status>`
-7. Iterate: edit code → check screenshot → repeat
-8. Deploy: `jeriko vercel deploy` or `jeriko github pages`
-
-### Template Structure
-```
-client/
-  src/
-    App.tsx           ← main app (Wouter router)
-    pages/            ← add pages here
-    components/       ← app components
-    components/ui/    ← 50+ shadcn components (ready to import)
-    hooks/            ← custom hooks
-    contexts/         ← React contexts
-    lib/              ← utilities
-  index.html
-  public/
-server/               ← Express server (web-db-user only)
-shared/               ← shared types
-vite.config.ts
-package.json
-```
-
-### DO NOT
-- Run `npm create vite` or `npx create-react-app` — use the templates
-- Install shadcn manually — it's pre-installed in the templates
-- Create bare HTML files — use the React templates
+5-stage progressive gate (`ci.yml`):
+1. **Typecheck + Smoke** — fast fail (<30s)
+2. **Unit tests** — 12 parallel jobs by subsystem (fail-fast: false)
+3. **Integration tests** — relay, commands, connectors
+4. **E2E tests** — full system
+5. **Build verification** — Linux x64 binary
 
 ## Key Docs
 
-- `docs/COMMANDS.md` — full CLI reference (all 37 commands, every flag)
-- `docs/ARCHITECTURE.md` — system design, three layers, data flow
-- `docs/CONTRIBUTING.md` — how to add commands, code style, templates
-- `docs/SECURITY.md` — security model, what exists, what doesn't
+- `AGENT.md` — system prompt for AI agents (all commands, flags, workflows)
+- `docs/COMMANDS.md` — full CLI reference (51 commands)
+- `docs/ARCHITECTURE.md` — system design, data flow
+- `docs/CONTRIBUTING.md` — how to add commands, code style
+- `docs/SECURITY.md` — security model
 - `docs/PLUGINS.md` — plugin system, trust, env isolation
-- `docs/TRIGGERS.md` — cron, webhook, email, http, file triggers
-- `BLUEPRINT.md` — full original CLI reference (archived from this file)
+- `docs/TRIGGERS.md` — trigger types and configuration
+- `docs/adr/` — architectural decision records

@@ -12,19 +12,27 @@
 // Types
 // ---------------------------------------------------------------------------
 
-/** Provider-specific configuration for token exchange. */
+/** Provider-specific configuration for OAuth flows (auth URL building + token exchange). */
 export interface TokenExchangeProvider {
   /** Provider name (matches OAuthProvider.name). */
   name: string;
+  /** OAuth 2.0 authorization endpoint (where the browser is sent). */
+  authUrl: string;
   /** OAuth 2.0 token exchange endpoint. */
   tokenUrl: string;
+  /** Scopes to request (space-separated when sent). */
+  scopes: string[];
+  /** Whether to use PKCE (RFC 7636). Required by X/Twitter, Vercel, Airtable. */
+  usePKCE?: boolean;
   /**
    * How to authenticate the token exchange request.
    * - "body" (default): Send client_id + client_secret in the POST body.
    * - "basic": Send client_secret as HTTP Basic auth (Stripe-style).
    */
   tokenExchangeAuth: "body" | "basic";
-  /** Extra params to include in the token exchange POST (e.g. access_type). */
+  /** Extra params to include in the authorization URL (e.g. access_type, prompt). */
+  extraAuthParams?: Record<string, string>;
+  /** Extra params to include in the token exchange POST. */
   extraTokenParams?: Record<string, string>;
 }
 
@@ -60,115 +68,247 @@ export interface ExchangeOptions {
  * definitions. It's kept separate because the relay doesn't need (and shouldn't
  * import) the full daemon provider module.
  */
-export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider> = new Map([
+export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider> = new Map<string, TokenExchangeProvider>([
   ["stripe", {
     name: "stripe",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
+    scopes: [],
     tokenExchangeAuth: "basic",
   }],
   ["github", {
     name: "github",
+    authUrl: "https://github.com/login/oauth/authorize",
     tokenUrl: "https://github.com/login/oauth/access_token",
+    scopes: ["repo", "read:user", "read:org"],
     tokenExchangeAuth: "body",
   }],
   ["x", {
     name: "x",
+    authUrl: "https://twitter.com/i/oauth2/authorize",
     tokenUrl: "https://api.twitter.com/2/oauth2/token",
+    scopes: ["tweet.read", "tweet.write", "users.read", "dm.read", "dm.write", "offline.access"],
+    usePKCE: true,
     tokenExchangeAuth: "body",
   }],
   ["gdrive", {
     name: "gdrive",
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
+    scopes: ["https://www.googleapis.com/auth/drive"],
     tokenExchangeAuth: "body",
+    extraAuthParams: { access_type: "offline", prompt: "consent" },
     extraTokenParams: { access_type: "offline", prompt: "consent" },
   }],
   ["onedrive", {
     name: "onedrive",
+    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    scopes: ["Files.ReadWrite.All", "offline_access"],
     tokenExchangeAuth: "body",
   }],
   ["vercel", {
     name: "vercel",
-    tokenUrl: "https://api.vercel.com/login/oauth/token",
+    authUrl: "https://vercel.com/oauth/authorize",
+    tokenUrl: "https://api.vercel.com/v2/oauth/access_token",
+    scopes: [],
+    usePKCE: true,
     tokenExchangeAuth: "body",
   }],
   ["gmail", {
     name: "gmail",
+    authUrl: "https://accounts.google.com/o/oauth2/v2/auth",
     tokenUrl: "https://oauth2.googleapis.com/token",
+    scopes: ["https://www.googleapis.com/auth/gmail.modify", "https://www.googleapis.com/auth/gmail.send"],
     tokenExchangeAuth: "body",
+    extraAuthParams: { access_type: "offline", prompt: "consent" },
     extraTokenParams: { access_type: "offline", prompt: "consent" },
   }],
   ["outlook", {
     name: "outlook",
+    authUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
     tokenUrl: "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+    scopes: ["Mail.ReadWrite", "Mail.Send", "offline_access"],
     tokenExchangeAuth: "body",
   }],
   ["hubspot", {
     name: "hubspot",
+    authUrl: "https://app.hubspot.com/oauth/authorize",
     tokenUrl: "https://api.hubapi.com/oauth/v1/token",
+    scopes: ["crm.objects.contacts.read", "crm.objects.contacts.write", "crm.objects.companies.read", "crm.objects.companies.write", "crm.objects.deals.read", "crm.objects.deals.write", "crm.objects.owners.read", "crm.objects.quotes.read", "crm.objects.quotes.write", "crm.objects.products.read", "crm.objects.products.write", "crm.objects.invoices.read", "crm.objects.invoices.write", "crm.objects.orders.read", "crm.objects.orders.write", "crm.lists.read", "crm.lists.write", "crm.import", "crm.export", "oauth", "conversations.read", "conversations.write"],
     tokenExchangeAuth: "body",
   }],
   ["shopify", {
     name: "shopify",
+    authUrl: "https://{shop}.myshopify.com/admin/oauth/authorize",
     tokenUrl: "https://{shop}.myshopify.com/admin/oauth/access_token",
+    scopes: ["read_products", "write_products", "read_orders", "write_orders", "read_customers", "write_customers", "read_inventory", "write_inventory"],
+    tokenExchangeAuth: "body",
+  }],
+  ["instagram", {
+    name: "instagram",
+    authUrl: "https://www.instagram.com/oauth/authorize",
+    tokenUrl: "https://api.instagram.com/oauth/access_token",
+    scopes: ["instagram_business_basic", "instagram_business_manage_messages", "instagram_business_manage_comments", "instagram_business_content_publish"],
+    tokenExchangeAuth: "body",
+  }],
+  ["threads", {
+    name: "threads",
+    authUrl: "https://threads.net/oauth/authorize",
+    tokenUrl: "https://graph.threads.net/oauth/access_token",
+    scopes: ["threads_basic", "threads_content_publish", "threads_manage_insights", "threads_manage_replies", "threads_read_replies"],
     tokenExchangeAuth: "body",
   }],
   ["square", {
     name: "square",
+    authUrl: "https://connect.squareup.com/oauth2/authorize",
     tokenUrl: "https://connect.squareup.com/oauth2/token",
+    scopes: ["PAYMENTS_READ", "PAYMENTS_WRITE", "ORDERS_READ", "ORDERS_WRITE", "CUSTOMERS_READ", "CUSTOMERS_WRITE", "ITEMS_READ", "ITEMS_WRITE", "INVENTORY_READ", "INVENTORY_WRITE", "MERCHANT_PROFILE_READ"],
     tokenExchangeAuth: "body",
   }],
   ["gitlab", {
     name: "gitlab",
+    authUrl: "https://gitlab.com/oauth/authorize",
     tokenUrl: "https://gitlab.com/oauth/token",
-    tokenExchangeAuth: "body",
-  }],
-  ["digitalocean", {
-    name: "digitalocean",
-    tokenUrl: "https://cloud.digitalocean.com/v1/oauth/token",
+    scopes: ["api", "read_user", "read_repository"],
     tokenExchangeAuth: "body",
   }],
   ["notion", {
     name: "notion",
+    authUrl: "https://api.notion.com/v1/oauth/authorize",
     tokenUrl: "https://api.notion.com/v1/oauth/token",
+    scopes: [],
     tokenExchangeAuth: "basic",
   }],
   ["linear", {
     name: "linear",
+    authUrl: "https://linear.app/oauth/authorize",
     tokenUrl: "https://api.linear.app/oauth/token",
+    scopes: ["read", "write", "issues:create", "comments:create"],
     tokenExchangeAuth: "body",
   }],
   ["jira", {
     name: "jira",
+    authUrl: "https://auth.atlassian.com/authorize",
     tokenUrl: "https://auth.atlassian.com/oauth/token",
+    scopes: ["read:jira-work", "write:jira-work", "read:jira-user", "offline_access"],
     tokenExchangeAuth: "body",
+    extraAuthParams: { audience: "api.atlassian.com", prompt: "consent" },
   }],
   ["airtable", {
     name: "airtable",
+    authUrl: "https://airtable.com/oauth2/v1/authorize",
     tokenUrl: "https://airtable.com/oauth2/v1/token",
+    scopes: ["data.records:read", "data.records:write", "schema.bases:read", "schema.bases:write"],
+    usePKCE: true,
     tokenExchangeAuth: "body",
   }],
   ["asana", {
     name: "asana",
+    authUrl: "https://app.asana.com/-/oauth_authorize",
     tokenUrl: "https://app.asana.com/-/oauth_token",
+    scopes: ["default"],
     tokenExchangeAuth: "body",
   }],
   ["mailchimp", {
     name: "mailchimp",
+    authUrl: "https://login.mailchimp.com/oauth2/authorize",
     tokenUrl: "https://login.mailchimp.com/oauth2/token",
+    scopes: [],
     tokenExchangeAuth: "body",
   }],
   ["dropbox", {
     name: "dropbox",
+    authUrl: "https://www.dropbox.com/oauth2/authorize",
     tokenUrl: "https://api.dropboxapi.com/oauth2/token",
+    scopes: ["files.metadata.read", "files.metadata.write", "files.content.read", "files.content.write", "sharing.read", "sharing.write", "account_info.read"],
     tokenExchangeAuth: "body",
+    extraAuthParams: { token_access_type: "offline" },
   }],
-  ["salesforce", {
-    name: "salesforce",
-    tokenUrl: "https://login.salesforce.com/services/oauth2/token",
+  ["discord", {
+    name: "discord",
+    authUrl: "https://discord.com/oauth2/authorize",
+    tokenUrl: "https://discord.com/api/oauth2/token",
+    scopes: ["bot", "guilds", "guilds.members.read", "messages.read"],
     tokenExchangeAuth: "body",
   }],
 ]);
+
+// ---------------------------------------------------------------------------
+// Auth URL building (used by relay to build auth URLs directly)
+// ---------------------------------------------------------------------------
+
+/** Result of building an authorization URL. Includes PKCE verifier if applicable. */
+export interface AuthorizationUrlResult {
+  /** Full authorization URL to redirect the browser to. */
+  url: string;
+  /** PKCE code verifier (must be stored and sent during token exchange). */
+  codeVerifier?: string;
+}
+
+/**
+ * Build an OAuth authorization URL for a provider.
+ *
+ * Used by the relay to build auth URLs directly — the relay owns the client IDs
+ * (as CF Worker secrets), so the daemon doesn't need baked-in client IDs.
+ *
+ * @param provider    Provider config from TOKEN_EXCHANGE_PROVIDERS
+ * @param clientId    OAuth client ID (from relay env secrets)
+ * @param redirectUri Callback URL (e.g. https://bot.jeriko.ai/oauth/:provider/callback)
+ * @param state       Composite state token (userId.sessionToken)
+ * @param context     Provider-specific context. Used to resolve authUrl placeholders like {shop} for Shopify.
+ */
+export async function buildAuthorizationUrl(
+  provider: TokenExchangeProvider,
+  clientId: string,
+  redirectUri: string,
+  state: string,
+  context?: Record<string, string>,
+): Promise<AuthorizationUrlResult> {
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    state,
+    response_type: "code",
+  });
+
+  if (provider.scopes.length > 0) {
+    params.set("scope", provider.scopes.join(" "));
+  }
+
+  // PKCE for providers that require it.
+  // Note: PKCE generation is synchronous here (uses node:crypto).
+  // The CF Worker relay calls this function — CF Workers support node:crypto
+  // via the nodejs_compat compatibility flag.
+  let codeVerifier: string | undefined;
+  if (provider.usePKCE) {
+    const crypto = await import("node:crypto");
+    codeVerifier = crypto.randomBytes(32).toString("base64url").replace(/[^a-zA-Z0-9\-._~]/g, "").slice(0, 128);
+    const challenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+    params.set("code_challenge", challenge);
+    params.set("code_challenge_method", "S256");
+  }
+
+  // Extra auth params (e.g. access_type=offline, prompt=consent)
+  if (provider.extraAuthParams) {
+    for (const [key, value] of Object.entries(provider.extraAuthParams)) {
+      params.set(key, value);
+    }
+  }
+
+  // Resolve provider-specific placeholders in authUrl (e.g. {shop} for Shopify)
+  let authUrl = provider.authUrl;
+  if (context) {
+    for (const [key, value] of Object.entries(context)) {
+      authUrl = authUrl.replace(`{${key}}`, value);
+    }
+  }
+
+  return {
+    url: `${authUrl}?${params.toString()}`,
+    codeVerifier,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Token exchange

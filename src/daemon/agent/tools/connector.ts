@@ -65,16 +65,16 @@ export const connectorTool: ToolDefinition = {
   id: "connector",
   name: "connector",
   description:
-    "Call a configured connector API. Supports: Slack, Discord, Gmail, Stripe, GitHub, Twilio, Square, " +
-    "Notion, Linear, Jira, Airtable, Asana, GitLab, Salesforce, Dropbox, Mailchimp, HubSpot, Shopify, " +
-    "SendGrid, Cloudflare, DigitalOcean, PayPal, Vercel, OneDrive, Outlook, X, Google Drive. " +
-    "Use this to send messages, manage issues, create records, process payments, and more.",
+    "Call a configured connector API. Supports: Gmail, Outlook, Stripe, PayPal, GitHub, Twilio, " +
+    "Google Drive, OneDrive, Vercel, X, Instagram, Threads, Slack, Discord, HubSpot, Shopify, " +
+    "SendGrid, Square, GitLab, Cloudflare, Notion, Linear, Jira, Airtable, Asana, Mailchimp, Dropbox. " +
+    "Use this to send emails, manage issues, create records, process payments, and more.",
   parameters: {
     type: "object",
     properties: {
       name: {
         type: "string",
-        description: "Connector name: slack, discord, gmail, stripe, github, twilio, square, notion, linear, jira, airtable, asana, gitlab, salesforce, dropbox, mailchimp, hubspot, shopify, sendgrid, cloudflare, digitalocean, paypal, vercel, onedrive, outlook, x, gdrive",
+        description: "Connector name: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, instagram, threads, slack, discord, hubspot, shopify, sendgrid, square, gitlab, cloudflare, notion, linear, jira, airtable, asana, mailchimp, dropbox",
       },
       method: {
         type: "string",
@@ -90,8 +90,9 @@ export const connectorTool: ToolDefinition = {
   execute,
   aliases: [
     "connectors", "gmail", "stripe", "github", "twilio", "email_send", "send_email",
-    "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare", "digitalocean",
-    "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox", "salesforce",
+    "instagram", "threads",
+    "slack", "discord", "sendgrid", "square", "gitlab", "cloudflare",
+    "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
     "hubspot", "shopify", "outlook", "onedrive", "gdrive", "vercel", "paypal", "x",
   ],
 };

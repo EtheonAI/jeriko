@@ -18,8 +18,8 @@
  * Always listens for Ctrl+C regardless of phase (interrupt/abort).
  */
 
-import React, { useState, useRef, useCallback } from "react";
-import { Text, Box, useInput } from "ink";
+import React, { useState, useRef, useCallback, useEffect } from "react";
+import { Text, Box, useInput, useStdout } from "ink";
 import { PALETTE } from "../theme.js";
 import { slashCompleter, SLASH_COMMANDS } from "../commands.js";
 import {
@@ -51,6 +51,12 @@ inputHistory.load();
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
+
+/** Maximum characters accepted from a single paste event. */
+const MAX_PASTE_CHARS = 50_000;
+
+/** Maximum lines allowed in the input buffer. */
+const MAX_INPUT_LINES = 500;
 
 interface InputProps {
   phase: Phase;
@@ -103,6 +109,73 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
     setAutocomplete({ items: [], selectedIndex: -1, visible: false });
   }, []);
 
+  // ----- Bracketed paste mode -----
+  // Enable bracketed paste (\x1b[?2004h) so the terminal wraps pasted text
+  // in escape sequences (\x1b[200~ ... \x1b[201~). We intercept these markers
+  // via a pre-read listener on stdin (using 'readable' to cooperate with Ink's
+  // own readable handler rather than conflicting via 'data').
+
+  const { stdout } = useStdout();
+
+  useEffect(() => {
+    if (!stdout?.isTTY || !isIdle) return;
+
+    // Enable bracketed paste mode — terminal wraps pasted content in
+    // \x1b[200~ ... \x1b[201~ markers. Ink's useInput delivers multi-char
+    // input as a single string, which we detect in the input handler below.
+    stdout.write("\x1b[?2004h");
+
+    return () => {
+      stdout.write("\x1b[?2004l");
+    };
+  }, [stdout, isIdle]);
+
+  /** Insert pasted text at cursor, handling multi-line with size limits. */
+  const handlePaste = useCallback((text: string) => {
+    if (!text) return;
+
+    // Truncate oversized pastes to prevent memory issues
+    let sanitized = text;
+    let truncated = false;
+
+    if (sanitized.length > MAX_PASTE_CHARS) {
+      sanitized = sanitized.slice(0, MAX_PASTE_CHARS);
+      truncated = true;
+    }
+
+    const parts = sanitized.split("\n");
+
+    if (parts.length > MAX_INPUT_LINES) {
+      parts.length = MAX_INPUT_LINES;
+      truncated = true;
+    }
+
+    if (truncated) {
+      // Visual feedback is handled by the parent — we just truncate here.
+      // The user will see the input is shorter than expected.
+    }
+    const newLines = [...lines];
+    const currentLine = newLines[cursorLine] ?? "";
+    const before = currentLine.slice(0, cursorCol);
+    const after = currentLine.slice(cursorCol);
+
+    newLines[cursorLine] = before + parts[0];
+
+    for (let i = 1; i < parts.length - 1; i++) {
+      newLines.splice(cursorLine + i, 0, parts[i]!);
+    }
+
+    const lastPart = parts[parts.length - 1] ?? "";
+    if (parts.length > 1) {
+      newLines.splice(cursorLine + parts.length - 1, 0, lastPart + after);
+    }
+
+    setLines(newLines);
+    setCursorLine(cursorLine + parts.length - 1);
+    setCursorCol(lastPart.length);
+    setAutocomplete({ items: [], selectedIndex: -1, visible: false });
+  }, [lines, cursorLine, cursorCol]);
+
   /** Update autocomplete suggestions based on current input. */
   const updateAutocomplete = useCallback((currentLines: string[]) => {
     // Only show autocomplete for single-line input starting with /
@@ -133,6 +206,13 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
       // and Escape dismisses autocomplete or clears the input line.
       if (key.ctrl && input === "c") {
         onInterrupt();
+        return;
+      }
+      // Ctrl+D — standard Unix EOF (exit when input is empty)
+      if (key.ctrl && input === "d") {
+        if (isIdle && lines.every((l) => l.length === 0)) {
+          onInterrupt();
+        }
         return;
       }
       if (key.escape) {
@@ -381,63 +461,42 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
         return;
       }
 
-      // ── Regular character input ───────────────────────────────
+      // ── Regular character input / paste detection ─────────────
       if (input && !key.ctrl && !key.meta) {
-        // Paste detection: if input contains newlines, insert as multi-line
-        if (input.includes("\n")) {
-          const parts = input.split("\n");
-          const newLines = [...lines];
-          const currentLine = newLines[cursorLine] ?? "";
-          const before = currentLine.slice(0, cursorCol);
-          const after = currentLine.slice(cursorCol);
-
-          // First part joins the current line
-          newLines[cursorLine] = before + parts[0];
-
-          // Middle parts become new lines
-          for (let i = 1; i < parts.length - 1; i++) {
-            newLines.splice(cursorLine + i, 0, parts[i]!);
-          }
-
-          // Last part gets the remainder of the original line
-          const lastPart = parts[parts.length - 1] ?? "";
-          if (parts.length > 1) {
-            newLines.splice(cursorLine + parts.length - 1, 0, lastPart + after);
-          }
-
-          setLines(newLines);
-          setCursorLine(cursorLine + parts.length - 1);
-          setCursorCol(lastPart.length);
-          updateAutocomplete(newLines);
-        } else {
-          const newLines = [...lines];
-          const line = newLines[cursorLine] ?? "";
-          newLines[cursorLine] = line.slice(0, cursorCol) + input + line.slice(cursorCol);
-          setLines(newLines);
-          setCursorCol((c) => c + input.length);
-          updateAutocomplete(newLines);
+        // Multi-character input without modifier keys is a paste event.
+        // The terminal sends all pasted characters as a single chunk.
+        if (input.length > 1 && input.includes("\n")) {
+          handlePaste(input);
+          return;
         }
+        const newLines = [...lines];
+        const line = newLines[cursorLine] ?? "";
+        newLines[cursorLine] = line.slice(0, cursorCol) + input + line.slice(cursorCol);
+        setLines(newLines);
+        setCursorCol((c) => c + input.length);
+        updateAutocomplete(newLines);
       }
     },
     { isActive: true },
   );
 
   // Always render — input stays visible in all phases
-  const ruleWidth = 80;
-  const rule = "\u2500".repeat(ruleWidth);
 
   // When not idle, show a disabled/dimmed input
   if (!isIdle) {
     return (
-      <Box flexDirection="column">
-        <Text color={PALETTE.faint}>{rule}</Text>
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={PALETTE.faint}
+        paddingX={1}
+      >
         <Text>
           <Text color={PALETTE.dim}>{"\u276F "}</Text>
           <Text color={PALETTE.dim}>
             {lines[0] || " "}
           </Text>
         </Text>
-        <Text color={PALETTE.faint}>{rule}</Text>
       </Box>
     );
   }
@@ -445,39 +504,40 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
   // Render input lines with cursor
   return (
     <Box flexDirection="column">
-      {/* Top border */}
-      <Text color={PALETTE.faint}>{rule}</Text>
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={PALETTE.dim}
+        paddingX={1}
+      >
+        {lines.map((line, lineIdx) => {
+          const isCurrentLine = lineIdx === cursorLine;
+          const prompt = lineIdx === 0 ? "\u276F " : "  ";
+          const promptColor = lineIdx === 0 ? PALETTE.brand : PALETTE.dim;
 
-      {lines.map((line, lineIdx) => {
-        const isCurrentLine = lineIdx === cursorLine;
-        const prompt = lineIdx === 0 ? "\u276F " : "  ";
-        const promptColor = lineIdx === 0 ? PALETTE.brand : PALETTE.dim;
+          if (isCurrentLine) {
+            const before = line.slice(0, cursorCol);
+            const cursorChar = line[cursorCol] ?? " ";
+            const after = line.slice(cursorCol + 1);
 
-        if (isCurrentLine) {
-          const before = line.slice(0, cursorCol);
-          const cursorChar = line[cursorCol] ?? " ";
-          const after = line.slice(cursorCol + 1);
+            return (
+              <Text key={lineIdx}>
+                <Text color={promptColor} bold={lineIdx === 0}>{prompt}</Text>
+                <Text>{before}</Text>
+                <Text inverse>{cursorChar}</Text>
+                <Text>{after}</Text>
+              </Text>
+            );
+          }
 
           return (
             <Text key={lineIdx}>
-              <Text color={promptColor} bold={lineIdx === 0}>{prompt}</Text>
-              <Text>{before}</Text>
-              <Text inverse>{cursorChar}</Text>
-              <Text>{after}</Text>
+              <Text color={promptColor}>{prompt}</Text>
+              <Text>{line}</Text>
             </Text>
           );
-        }
-
-        return (
-          <Text key={lineIdx}>
-            <Text color={promptColor}>{prompt}</Text>
-            <Text>{line}</Text>
-          </Text>
-        );
-      })}
-
-      {/* Bottom border */}
-      <Text color={PALETTE.faint}>{rule}</Text>
+        })}
+      </Box>
 
       {/* Autocomplete popup */}
       {autocomplete.visible && (

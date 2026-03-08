@@ -118,7 +118,7 @@ export function billingRoutes(): Hono {
       if (!isBillingConfigured()) {
         return c.json({
           ok: false,
-          error: "Unable to create checkout session — billing server unavailable. Check your internet connection.",
+          error: "Unable to create checkout session — billing not configured. Set RELAY_AUTH_SECRET or STRIPE_BILLING_SECRET_KEY.",
         }, 503);
       }
 
@@ -183,7 +183,7 @@ export function billingRoutes(): Hono {
       if (!isBillingConfigured()) {
         return c.json({
           ok: false,
-          error: "Unable to open billing portal — billing server unavailable. Check your internet connection.",
+          error: "Unable to open billing portal — billing not configured. Set RELAY_AUTH_SECRET or STRIPE_BILLING_SECRET_KEY.",
         }, 503);
       }
 

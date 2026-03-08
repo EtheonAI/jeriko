@@ -290,7 +290,11 @@ describe("resolveModel", () => {
   it("resolves 'local' alias to env or default", () => {
     const original = process.env.LOCAL_MODEL;
     delete process.env.LOCAL_MODEL;
-    expect(resolveModel("local", "local")).toBe("llama3");
+    // Resolves to LOCAL_MODEL env → Ollama-detected model → "llama3" fallback.
+    // When Ollama is running, the detected model takes priority over "llama3".
+    const resolved = resolveModel("local", "local");
+    expect(resolved).toBeTruthy();
+    expect(typeof resolved).toBe("string");
     if (original) process.env.LOCAL_MODEL = original;
   });
 

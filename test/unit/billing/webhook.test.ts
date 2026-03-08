@@ -13,7 +13,7 @@ import {
   getConsentBySubscription,
   getConsentBySession,
 } from "../../../src/daemon/billing/store.js";
-import { BILLING_ENV } from "../../../src/daemon/billing/config.js";
+import { BILLING_ENV, TIER_LIMITS, UNLIMITED_TRIGGERS_STORED } from "../../../src/daemon/billing/config.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { unlinkSync, existsSync } from "node:fs";
@@ -204,6 +204,8 @@ describe("billing/webhook", () => {
       expect(license.email).toBe("new@example.com");
       expect(license.subscription_id).toBe("sub_new_checkout");
       expect(license.customer_id).toBe("cus_new");
+      expect(license.connector_limit).toBe(UNLIMITED_TRIGGERS_STORED);
+      expect(license.trigger_limit).toBe(UNLIMITED_TRIGGERS_STORED);
     });
   });
 
@@ -270,8 +272,8 @@ describe("billing/webhook", () => {
 
       license = getLicense();
       expect(license.tier).toBe("free");
-      expect(license.connector_limit).toBe(2);
-      expect(license.trigger_limit).toBe(3);
+      expect(license.connector_limit).toBe(TIER_LIMITS.free.connectors);
+      expect(license.trigger_limit).toBe(TIER_LIMITS.free.triggers);
     });
   });
 

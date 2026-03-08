@@ -5,12 +5,25 @@
 //
 // URL format: POST /hooks/:userId/:triggerId
 //
+// Also handles Meta platform (Instagram, Threads) webhook verification
+// and broadcast-style forwarding for app-level webhooks.
+//
 // The relay does NOT verify webhook signatures — that stays on the daemon
 // where the secrets live. The relay is a transparent forwarder.
 
 import { Hono } from "hono";
 import type { ConnectionManager } from "../connections.js";
+import type { Env } from "../lib/types.js";
 import type { RelayWebhookMessage } from "../../../../src/shared/relay-protocol.js";
+
+// ---------------------------------------------------------------------------
+// Meta webhook verify token mapping
+// ---------------------------------------------------------------------------
+
+const META_VERIFY_TOKEN_KEYS: Readonly<Record<string, keyof Env>> = {
+  instagram: "INSTAGRAM_WEBHOOK_VERIFY_TOKEN",
+  threads: "THREADS_WEBHOOK_VERIFY_TOKEN",
+};
 
 // ---------------------------------------------------------------------------
 // Shared webhook forwarding logic
@@ -59,9 +72,79 @@ function buildWebhookMessage(
  * Create webhook routes with the given connection manager.
  *
  * @param connections - ConnectionManager instance from the Durable Object
+ * @param env - Worker environment bindings (for Meta verify tokens)
  */
-export function createWebhookRoutes(connections: ConnectionManager): Hono {
+export function createWebhookRoutes(connections: ConnectionManager, env: Env): Hono {
   const router = new Hono();
+
+  // -------------------------------------------------------------------------
+  // Meta platform webhooks (Instagram, Threads)
+  //
+  // MUST be registered before the wildcard /:userId/:triggerId routes,
+  // otherwise /hooks/meta/instagram matches as userId=meta, triggerId=instagram.
+  //
+  // Meta webhooks are app-level — no userId/triggerId in the URL.
+  // GET  /hooks/meta/:provider — verification challenge (subscription setup)
+  // POST /hooks/meta/:provider — event forwarding (broadcast to all daemons)
+  // -------------------------------------------------------------------------
+
+  /**
+   * GET /hooks/meta/:provider — Meta webhook verification challenge.
+   *
+   * Meta sends this when subscribing a webhook in the app dashboard.
+   * Must echo hub.challenge if hub.verify_token matches our secret.
+   */
+  router.get("/meta/:provider", (c) => {
+    const provider = c.req.param("provider");
+    const envKey = META_VERIFY_TOKEN_KEYS[provider];
+    if (!envKey) {
+      return c.json({ ok: false, error: `Unknown Meta provider: ${provider}` }, 404);
+    }
+
+    const verifyToken = env[envKey] as string | undefined;
+    if (!verifyToken) {
+      return c.json({ ok: false, error: `Verify token not configured for ${provider}` }, 500);
+    }
+
+    const mode = c.req.query("hub.mode");
+    const token = c.req.query("hub.verify_token");
+    const challenge = c.req.query("hub.challenge");
+
+    if (mode === "subscribe" && token === verifyToken) {
+      return c.text(challenge ?? "", 200);
+    }
+
+    return c.json({ ok: false, error: "Verification failed" }, 403);
+  });
+
+  /**
+   * POST /hooks/meta/:provider — Receive Meta webhook events.
+   *
+   * Meta webhooks are app-level (not per-user), so we broadcast
+   * to all connected daemons using the existing forwarding helpers.
+   */
+  router.post("/meta/:provider", async (c) => {
+    const provider = c.req.param("provider");
+    if (!META_VERIFY_TOKEN_KEYS[provider]) {
+      return c.json({ ok: false, error: `Unknown Meta provider: ${provider}` }, 404);
+    }
+
+    const { body, headers, requestId } = await extractWebhookPayload(c);
+    const triggerId = `meta:${provider}`;
+
+    // Broadcast to all connected daemons
+    let forwarded = 0;
+    for (const userId of connections.getAllUserIds()) {
+      const message = buildWebhookMessage(requestId, triggerId, headers, body);
+      if (connections.sendTo(userId, message)) forwarded++;
+    }
+
+    return c.json({ ok: true, data: { provider, forwarded } });
+  });
+
+  // -------------------------------------------------------------------------
+  // Standard webhook routes (per-user, per-trigger)
+  // -------------------------------------------------------------------------
 
   /**
    * POST /hooks/:userId/:triggerId — Forward webhook to user's daemon.

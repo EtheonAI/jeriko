@@ -13,7 +13,7 @@ The Jeriko server is a unified runtime combining four interfaces:
 | Telegram   | Telegraf polling    | User-facing bot commands + AI    |
 | WhatsApp   | Baileys            | Alternative messaging interface  |
 
-Default port: `PROXY_PORT` environment variable (default `3000`).
+Default port: `JERIKO_PORT` environment variable (default `7741`).
 Rate limit: 120 requests per minute per IP.
 
 ## Starting the Server
@@ -637,7 +637,7 @@ Both are logged to console but do not terminate the process.
 
 | Variable              | Required | Default                         | Description                          |
 |-----------------------|----------|---------------------------------|--------------------------------------|
-| `PROXY_PORT`          | No       | `3000`                          | HTTP + WebSocket port                |
+| `JERIKO_PORT`         | No       | `7741`                          | HTTP + WebSocket port                |
 | `NODE_AUTH_SECRET`    | Yes      | (none, fails if unset)          | Master secret for auth               |
 | `ADMIN_TELEGRAM_IDS`  | Yes      | (none, denies all if unset)     | Comma-separated Telegram user IDs    |
 | `TELEGRAM_BOT_TOKEN`  | No       | (skips Telegram if unset)       | Telegram Bot API token               |

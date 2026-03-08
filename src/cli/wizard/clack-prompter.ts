@@ -1,9 +1,25 @@
 /**
  * ClackPrompter — Concrete WizardPrompter wrapping @clack/prompts.
+ *
+ * Wraps clack's validate callbacks to guard against `undefined`/`null`
+ * values that clack can pass internally before validation runs,
+ * which would otherwise crash its renderer with `.trim()` on undefined.
  */
 
 import * as clack from "@clack/prompts";
 import type { WizardPrompter } from "./prompter.js";
+
+/**
+ * Wrap a validate function to safely handle undefined/null values.
+ * Clack's internal state can be undefined before user types anything,
+ * and its renderer calls .trim() on the raw value — crashing if undefined.
+ */
+function safeValidate(
+  validate?: (value: string) => string | undefined,
+): ((value: string | undefined) => string | Error | undefined) | undefined {
+  if (!validate) return undefined;
+  return (value: string | undefined) => validate(value ?? "");
+}
 
 export class ClackPrompter implements WizardPrompter {
   intro(title: string): void {
@@ -36,7 +52,8 @@ export class ClackPrompter implements WizardPrompter {
     return clack.text({
       message: opts.message,
       placeholder: opts.placeholder,
-      validate: opts.validate as any,
+      defaultValue: "",
+      validate: safeValidate(opts.validate),
     });
   }
 
@@ -46,7 +63,7 @@ export class ClackPrompter implements WizardPrompter {
   }): Promise<string | symbol> {
     return clack.password({
       message: opts.message,
-      validate: opts.validate as any,
+      validate: safeValidate(opts.validate),
     });
   }
 

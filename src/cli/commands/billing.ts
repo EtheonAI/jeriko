@@ -166,7 +166,7 @@ export const upgradeCommand: CommandHandler = {
         } catch {
           fail(
             "Unable to create checkout session. "
-            + "Start the daemon with `jeriko serve` or check your internet connection.",
+            + "Start the daemon with `jeriko serve` or check relay auth configuration.",
           );
           return;
         }
@@ -240,7 +240,7 @@ export const billingCommand: CommandHandler = {
         } catch {
           fail(
             "Unable to open billing portal. "
-            + "Start the daemon with `jeriko serve` or check your internet connection.",
+            + "Start the daemon with `jeriko serve` or check relay auth configuration.",
           );
           return;
         }

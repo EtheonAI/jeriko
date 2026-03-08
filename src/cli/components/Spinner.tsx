@@ -77,29 +77,38 @@ export const Spinner: React.FC<SpinnerProps> = ({
   color,
   preset,
 }) => {
-  const resolvedPreset = preset ? ((SPINNER_PRESETS as Record<string, SpinnerPreset>)[preset] ?? DEFAULT_PRESET) : DEFAULT_PRESET;
+  const resolvedPreset = preset
+    ? ((SPINNER_PRESETS as Record<string, SpinnerPreset>)[preset] ?? DEFAULT_PRESET)
+    : DEFAULT_PRESET;
   const resolvedColor = color ?? resolvedPreset.color;
   const { frames, intervalMs } = resolvedPreset;
 
+  // Single state update per tick — frame index drives both animation and elapsed time.
+  // Using a ref for startTime avoids unnecessary effect re-runs.
+  const startTimeRef = React.useRef(Date.now());
   const [frame, setFrame] = useState(0);
-  const [startTime] = useState(() => Date.now());
-  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    startTimeRef.current = Date.now();
+    setFrame(0);
+  }, [preset]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      setFrame((f) => (f + 1) % frames.length);
-      setElapsed(Date.now() - startTime);
+      setFrame((f) => f + 1);
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [startTime, frames.length, intervalMs]);
+  }, [intervalMs]);
 
+  const elapsed = Date.now() - startTimeRef.current;
+  const frameIdx = frame % frames.length;
   const elapsedSuffix = elapsed >= ELAPSED_DISPLAY_THRESHOLD_MS
     ? ` ${formatDuration(elapsed)}`
     : "";
 
   return (
     <Text>
-      <Text color={resolvedColor}>{frames[frame % frames.length]} </Text>
+      <Text color={resolvedColor}>{frames[frameIdx]} </Text>
       <Text color={PALETTE.muted}>{label}…</Text>
       {elapsedSuffix && <Text color={PALETTE.dim}>{elapsedSuffix}</Text>}
     </Text>

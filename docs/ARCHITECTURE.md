@@ -275,7 +275,7 @@ Step 11:   Load plugins         ~/.jeriko/plugins/
 Step 12:   Start trigger engine  Activate enabled cron/webhook/file/http triggers
 Step 13:   Connect channels      Establish platform connections
 Step 14:   Start socket IPC     Unix domain socket at ~/.jeriko/daemon.sock
-Step 15:   Start HTTP server     Hono on Bun.serve(), port 3000 (or JERIKO_PORT)
+Step 15:   Start HTTP server     Hono on Bun.serve(), port 7741 (or JERIKO_PORT)
 ```
 
 **Shutdown sequence** (reverse order):
@@ -667,13 +667,13 @@ interface ChannelAdapter {
 
 #### Connectors (`src/daemon/services/connectors/`)
 
-10 external service integrations with lazy initialization and health caching.
+14 external service integrations with lazy initialization and health caching.
 
 **Two base classes:**
 - `ConnectorBase` — API key authentication (Stripe, PayPal, Twilio)
-- `BearerConnector` — OAuth2 token flow (GitHub, X, GDrive, OneDrive, Gmail, Outlook, Vercel)
+- `BearerConnector` — OAuth2 token flow (GitHub, X, GDrive, OneDrive, Gmail, Outlook, Vercel, Instagram, Threads, HubSpot, Shopify)
 
-**10 connectors:**
+**14 connectors:**
 
 | Connector | Type | Required Env |
 |-----------|------|-------------|
@@ -687,6 +687,10 @@ interface ChannelAdapter {
 | `gmail` | OAuth | GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET |
 | `outlook` | OAuth | MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET |
 | `vercel` | OAuth | VERCEL_TOKEN |
+| `hubspot` | OAuth | HUBSPOT_CLIENT_ID, HUBSPOT_CLIENT_SECRET |
+| `shopify` | OAuth | SHOPIFY_API_KEY, SHOPIFY_API_SECRET |
+| `instagram` | OAuth | INSTAGRAM_APP_ID, INSTAGRAM_APP_SECRET |
+| `threads` | OAuth | THREADS_APP_ID, THREADS_APP_SECRET |
 
 **ConnectorManager API:**
 - `get(name)` — lazy init + cache

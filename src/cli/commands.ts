@@ -34,6 +34,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/share",          "Share current session"],
       ["/kill",           "Destroy session and start fresh"],
       ["/archive",        "Archive session and start fresh"],
+      ["/delete <slug>",  "Delete a specific session"],
     ],
   },
   {
@@ -112,6 +113,7 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/share",          "Share current session"],
   ["/kill",           "Destroy session and start fresh"],
   ["/archive",        "Archive session and start fresh"],
+  ["/delete",         "Delete a specific session"],
 
   // Models
   ["/model",          "Switch model, add/remove provider"],

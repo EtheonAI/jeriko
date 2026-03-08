@@ -283,6 +283,105 @@ describe("renderMarkdown — code fence edge cases", () => {
 // Mixed content
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Horizontal rules
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — horizontal rules", () => {
+  test("renders --- as horizontal rule", () => {
+    const result = stripAnsi(renderMarkdown("Before\n---\nAfter"));
+    expect(result).toContain("\u2500");
+    expect(result).toContain("Before");
+    expect(result).toContain("After");
+  });
+
+  test("renders *** as horizontal rule", () => {
+    const result = stripAnsi(renderMarkdown("***"));
+    expect(result).toContain("\u2500");
+  });
+
+  test("renders ___ as horizontal rule", () => {
+    const result = stripAnsi(renderMarkdown("___"));
+    expect(result).toContain("\u2500");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task lists
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — task lists", () => {
+  test("renders unchecked task - [ ]", () => {
+    const result = stripAnsi(renderMarkdown("- [ ] Todo item"));
+    expect(result).toContain("\u2610"); // empty checkbox
+    expect(result).toContain("Todo item");
+  });
+
+  test("renders checked task - [x]", () => {
+    const result = stripAnsi(renderMarkdown("- [x] Done item"));
+    expect(result).toContain("\u2611"); // checked checkbox
+    expect(result).toContain("Done item");
+  });
+
+  test("renders checked task - [X] (uppercase)", () => {
+    const result = stripAnsi(renderMarkdown("- [X] Also done"));
+    expect(result).toContain("\u2611");
+    expect(result).toContain("Also done");
+  });
+
+  test("mixed task list", () => {
+    const input = "- [x] First\n- [ ] Second\n- [x] Third";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("First");
+    expect(result).toContain("Second");
+    expect(result).toContain("Third");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tables
+// ---------------------------------------------------------------------------
+
+describe("renderMarkdown — tables", () => {
+  test("renders simple table", () => {
+    const input = "| Name | Age |\n|------|-----|\n| Alice | 30 |\n| Bob | 25 |";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("Name");
+    expect(result).toContain("Age");
+    expect(result).toContain("Alice");
+    expect(result).toContain("30");
+    expect(result).toContain("Bob");
+    expect(result).toContain("25");
+  });
+
+  test("renders table with alignment", () => {
+    const input = "| Left | Center | Right |\n|:-----|:------:|------:|\n| a | b | c |";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("Left");
+    expect(result).toContain("Center");
+    expect(result).toContain("Right");
+    expect(result).toContain("a");
+  });
+
+  test("renders table with separator line", () => {
+    const input = "| Col1 | Col2 |\n|------|------|\n| val1 | val2 |";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("\u2500"); // horizontal line in separator
+  });
+
+  test("text before table is preserved", () => {
+    const input = "Some text\n\n| A | B |\n|---|---|\n| 1 | 2 |";
+    const result = stripAnsi(renderMarkdown(input));
+    expect(result).toContain("Some text");
+    expect(result).toContain("A");
+    expect(result).toContain("1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mixed content
+// ---------------------------------------------------------------------------
+
 describe("renderMarkdown — mixed content", () => {
   test("complete markdown document", () => {
     const input = [

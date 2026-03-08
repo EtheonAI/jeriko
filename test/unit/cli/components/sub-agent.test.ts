@@ -151,7 +151,8 @@ describe("SubAgentList", () => {
     const { lastFrame } = render(
       React.createElement(SubAgentList, { agents }),
     );
-    expect(lastFrame()).toContain("read_file");
+    // Tool names are mapped to activity labels (e.g. read_file → "reading")
+    expect(lastFrame()).toContain("reading");
   });
 
   test("renders 'working' when no current tool", () => {
@@ -175,7 +176,8 @@ describe("LiveSubAgent", () => {
     );
     const frame = lastFrame();
     expect(frame).toContain("Explore");
-    expect(frame).toContain("grep");
+    // Tool names are mapped to activity labels (e.g. grep → "searching")
+    expect(frame).toContain("searching");
   });
 
   test("renders tool call count", () => {

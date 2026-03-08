@@ -7,7 +7,7 @@
 //   - Append-only event log for audit trail
 
 import { getDatabase } from "../storage/db.js";
-import type { BillingTier } from "./config.js";
+import { TIER_LIMITS, type BillingTier } from "./config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -233,8 +233,8 @@ const DEFAULT_LICENSE: BillingLicense = {
   customer_id: null,
   valid_until: null,
   verified_at: null,
-  connector_limit: 2,
-  trigger_limit: 3,
+  connector_limit: TIER_LIMITS.free.connectors,
+  trigger_limit: TIER_LIMITS.free.triggers,
 };
 
 /**

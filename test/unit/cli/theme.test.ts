@@ -28,12 +28,12 @@ describe("PALETTE", () => {
     }
   });
 
-  test("brand is lightning blue (#38bdf8)", () => {
-    expect(PALETTE.brand).toBe("#38bdf8");
+  test("brand is purple (#c084fc)", () => {
+    expect(PALETTE.brand).toBe("#c084fc");
   });
 
-  test("blue is lightning blue (#38bdf8)", () => {
-    expect(PALETTE.blue).toBe("#38bdf8");
+  test("blue alias matches brand", () => {
+    expect(PALETTE.blue).toBe(PALETTE.tool);
   });
 
   test("red is error red (#f87171)", () => {

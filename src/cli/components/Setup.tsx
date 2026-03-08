@@ -136,49 +136,80 @@ export const Setup: React.FC<SetupProps> = ({ onComplete, onCancel }) => {
   }
 
   if (phase === "apikey" && selectedProvider) {
-    const masked = "•".repeat(apiKeyBuffer.length);
+    const masked = "\u25CF".repeat(apiKeyBuffer.length);
 
     return (
-      <Box flexDirection="column">
-        <Text />
-        <Text color={PALETTE.muted}>  Enter your {selectedProvider.name} API key:</Text>
-        <Text />
-        <Text>
-          <Text color={PALETTE.brand} bold>{">"} </Text>
-          <Text>{masked}</Text>
-          <Text inverse> </Text>
-        </Text>
+      <Box
+        flexDirection="column"
+        borderStyle="round"
+        borderColor={PALETTE.dim}
+        paddingX={1}
+        paddingY={1}
+      >
+        {/* Title */}
+        <Box marginBottom={1}>
+          <Text color={PALETTE.brand} bold>{selectedProvider.name} API Key</Text>
+        </Box>
+
+        <Text color={PALETTE.muted}>Enter your {selectedProvider.name} API key:</Text>
+        <Text>{""}</Text>
+
+        {/* Masked input */}
+        <Box>
+          <Text color={PALETTE.brand} bold>{"  \u276F "}</Text>
+          {apiKeyBuffer ? (
+            <>
+              <Text>{masked}</Text>
+              <Text inverse>{" "}</Text>
+            </>
+          ) : (
+            <>
+              <Text color={PALETTE.faint}>paste your key here</Text>
+              <Text inverse>{" "}</Text>
+            </>
+          )}
+        </Box>
+
+        {/* Error */}
         {error && (
-          <Box marginTop={1}>
-            <Text color={PALETTE.red}>  {error}</Text>
-          </Box>
+          <Text color={PALETTE.error}>{error}</Text>
         )}
-        <Text />
-        <Text color={PALETTE.dim}>  Enter to confirm · Esc back</Text>
+
+        {/* Hint line */}
+        <Text>{""}</Text>
+        <Text color={PALETTE.dim}>Enter to confirm · Esc back</Text>
       </Box>
     );
   }
 
   // Provider selection
   return (
-    <Box flexDirection="column">
-      <Text />
-      <Text color={PALETTE.brand} bold>  Welcome to Jeriko</Text>
-      <Text />
-      <Text color={PALETTE.muted}>  Choose your AI provider:</Text>
-      <Text />
+    <Box
+      flexDirection="column"
+      borderStyle="round"
+      borderColor={PALETTE.dim}
+      paddingX={1}
+      paddingY={1}
+    >
+      {/* Title */}
+      <Box marginBottom={1}>
+        <Text color={PALETTE.brand} bold>Welcome to Jeriko</Text>
+      </Box>
+
+      <Text color={PALETTE.muted}>Choose your AI provider:</Text>
+      <Text>{""}</Text>
 
       {providers.map((p, i) => {
         const isSelected = i === selectedIndex;
-        const marker = isSelected ? "  ▸ " : "    ";
+        const num = `${i + 1}`.padStart(2);
+        const marker = isSelected ? " \u276F " : "   ";
         const recommended = i === 0 ? " (recommended)" : "";
         const noKey = !p.needsApiKey ? " — no API key needed" : "";
 
         return (
           <Text key={p.id}>
-            <Text color={isSelected ? PALETTE.brand : undefined}>
-              {marker}
-            </Text>
+            <Text color={PALETTE.dim}>{`  ${num}`}</Text>
+            <Text color={isSelected ? PALETTE.brand : PALETTE.dim}>{marker}</Text>
             <Text color={isSelected ? PALETTE.brand : PALETTE.text} bold={isSelected}>
               {p.name}
             </Text>
@@ -188,8 +219,9 @@ export const Setup: React.FC<SetupProps> = ({ onComplete, onCancel }) => {
         );
       })}
 
-      <Text />
-      <Text color={PALETTE.dim}>  ↑↓ navigate · Enter select · Esc cancel</Text>
+      {/* Hint line */}
+      <Text>{""}</Text>
+      <Text color={PALETTE.dim}>↑↓ navigate · Enter select · Esc cancel</Text>
     </Box>
   );
 };

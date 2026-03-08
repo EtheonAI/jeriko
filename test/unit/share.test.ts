@@ -303,7 +303,8 @@ describe("share", () => {
 
   it("buildShareLink produces correct URL format", () => {
     const url = buildShareLink("abc123");
-    expect(url).toMatch(/\/s\/abc123$/);
+    // URL includes userId when JERIKO_USER_ID is set: /s/:userId/:shareId
+    expect(url).toMatch(/\/s\/.*abc123$/);
   });
 
   it("getPublicUrl returns default when env not set", () => {

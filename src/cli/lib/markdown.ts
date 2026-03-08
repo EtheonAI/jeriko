@@ -29,6 +29,7 @@ import { highlightCode } from "./syntax.js";
 /** A parsed block from the markdown source. */
 type MarkdownBlock =
   | { type: "code"; language: string; content: string }
+  | { type: "table"; rows: string[][]; alignments: Array<"left" | "center" | "right"> }
   | { type: "text"; lines: string[] };
 
 // ---------------------------------------------------------------------------
@@ -52,8 +53,9 @@ export function renderMarkdown(text: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Split raw text into alternating text/code blocks.
+ * Split raw text into alternating text/code/table blocks.
  * Code fences are recognized by ``` with an optional language tag.
+ * Tables are recognized by pipe-delimited rows with a separator line.
  */
 function parseBlocks(text: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
@@ -63,15 +65,29 @@ function parseBlocks(text: string): MarkdownBlock[] {
   let codeLang = "";
   let codeLines: string[] = [];
 
+  /** Flush text lines, extracting any trailing table. */
+  const flushText = () => {
+    if (currentTextLines.length === 0) return;
+
+    // Check if the trailing lines form a table
+    const tableResult = extractTable(currentTextLines);
+    if (tableResult) {
+      if (tableResult.before.length > 0) {
+        blocks.push({ type: "text", lines: tableResult.before });
+      }
+      blocks.push(tableResult.table);
+      currentTextLines = [];
+    } else {
+      blocks.push({ type: "text", lines: currentTextLines });
+      currentTextLines = [];
+    }
+  };
+
   for (const line of lines) {
     if (!inCodeBlock) {
       const fenceMatch = line.match(/^```(\w*).*$/);
       if (fenceMatch && line.startsWith("```")) {
-        // Flush accumulated text
-        if (currentTextLines.length > 0) {
-          blocks.push({ type: "text", lines: currentTextLines });
-          currentTextLines = [];
-        }
+        flushText();
         inCodeBlock = true;
         codeLang = fenceMatch[1] ?? "";
         codeLines = [];
@@ -80,7 +96,6 @@ function parseBlocks(text: string): MarkdownBlock[] {
       currentTextLines.push(line);
     } else {
       if (line.match(/^```$/)) {
-        // Close code block
         blocks.push({ type: "code", language: codeLang, content: codeLines.join("\n") });
         inCodeBlock = false;
         codeLang = "";
@@ -93,14 +108,80 @@ function parseBlocks(text: string): MarkdownBlock[] {
 
   // Flush remaining
   if (inCodeBlock) {
-    // Unclosed code block — treat as code anyway
     blocks.push({ type: "code", language: codeLang, content: codeLines.join("\n") });
   }
-  if (currentTextLines.length > 0) {
-    blocks.push({ type: "text", lines: currentTextLines });
-  }
+  flushText();
 
   return blocks;
+}
+
+/** Parse a pipe-delimited row into cells. */
+function parseTableRow(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/\|$/, "")
+    .split("|")
+    .map((c) => c.trim());
+}
+
+/** Check if a line is a table separator (e.g., |---|:---:|---:|). */
+function isTableSeparator(line: string): boolean {
+  return /^\|?[\s:]*-{2,}[\s:]*(\|[\s:]*-{2,}[\s:]*)*\|?$/.test(line.trim());
+}
+
+/** Parse alignment from separator cells. */
+function parseAlignments(sep: string): Array<"left" | "center" | "right"> {
+  return parseTableRow(sep).map((cell) => {
+    const trimmed = cell.trim();
+    if (trimmed.startsWith(":") && trimmed.endsWith(":")) return "center";
+    if (trimmed.endsWith(":")) return "right";
+    return "left";
+  });
+}
+
+/**
+ * Extract a markdown table from the end of a text lines array.
+ * Returns the table block and any preceding text lines, or null if no table.
+ */
+function extractTable(
+  lines: string[],
+): { before: string[]; table: MarkdownBlock & { type: "table" } } | null {
+  // Need at least 3 lines: header, separator, data row
+  // Find the separator line
+  for (let sepIdx = 1; sepIdx < lines.length; sepIdx++) {
+    if (!isTableSeparator(lines[sepIdx]!)) continue;
+
+    // Header is the line before separator
+    const headerLine = lines[sepIdx - 1]!;
+    if (!headerLine.includes("|")) continue;
+
+    // Count how many contiguous pipe-rows follow the separator
+    let endIdx = sepIdx + 1;
+    while (endIdx < lines.length && lines[endIdx]!.includes("|")) {
+      endIdx++;
+    }
+
+    // Must have at least 1 data row
+    if (endIdx <= sepIdx + 1 && endIdx < lines.length) continue;
+
+    const header = parseTableRow(headerLine);
+    const alignments = parseAlignments(lines[sepIdx]!);
+    const rows: string[][] = [header];
+
+    for (let i = sepIdx + 1; i < endIdx; i++) {
+      rows.push(parseTableRow(lines[i]!));
+    }
+
+    // Everything before the header is regular text, everything after table is ignored (handled by next block)
+    const before = lines.slice(0, sepIdx - 1);
+
+    return {
+      before,
+      table: { type: "table", rows, alignments },
+    };
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +192,71 @@ function renderBlock(block: MarkdownBlock): string {
   if (block.type === "code") {
     return renderCodeBlock(block.language, block.content);
   }
+  if (block.type === "table") {
+    return renderTable(block.rows, block.alignments);
+  }
   return block.lines.map(renderInlineLine).join("\n");
+}
+
+/**
+ * Render a markdown table with box-drawing borders.
+ */
+function renderTable(
+  rows: string[][],
+  alignments: Array<"left" | "center" | "right">,
+): string {
+  if (rows.length === 0) return "";
+
+  // Compute column widths
+  const colCount = Math.max(...rows.map((r) => r.length));
+  const colWidths: number[] = Array(colCount).fill(0);
+  for (const row of rows) {
+    for (let c = 0; c < colCount; c++) {
+      colWidths[c] = Math.max(colWidths[c]!, (row[c] ?? "").length);
+    }
+  }
+
+  const border = chalk.hex(PALETTE.dim);
+
+  /** Pad a cell to its column width respecting alignment. */
+  const padCell = (text: string, colIdx: number): string => {
+    const width = colWidths[colIdx] ?? text.length;
+    const align = alignments[colIdx] ?? "left";
+    if (align === "right") return text.padStart(width);
+    if (align === "center") {
+      const total = width - text.length;
+      const left = Math.floor(total / 2);
+      return " ".repeat(left) + text + " ".repeat(total - left);
+    }
+    return text.padEnd(width);
+  };
+
+  const renderRow = (row: string[], isHeader: boolean): string => {
+    const cells = Array.from({ length: colCount }, (_, c) => {
+      const text = padCell(row[c] ?? "", c);
+      return isHeader ? chalk.bold(text) : text;
+    });
+    return border(" ") + cells.join(border(" | ")) + border(" ");
+  };
+
+  const separator = border(" ") +
+    colWidths.map((w) => border("\u2500".repeat(w))).join(border("\u2500+\u2500")) +
+    border(" ");
+
+  const result: string[] = [];
+
+  // Header
+  if (rows.length > 0) {
+    result.push(renderRow(rows[0]!, true));
+    result.push(separator);
+  }
+
+  // Data rows
+  for (let i = 1; i < rows.length; i++) {
+    result.push(renderRow(rows[i]!, false));
+  }
+
+  return result.join("\n");
 }
 
 /**
@@ -147,6 +292,11 @@ function renderCodeBlock(language: string, content: string): string {
  * Applies patterns in order: headers, blockquotes, lists, then inline spans.
  */
 function renderInlineLine(line: string): string {
+  // Horizontal rule: ---, ***, ___
+  if (/^(\s*[-*_]\s*){3,}$/.test(line)) {
+    return chalk.hex(PALETTE.dim)("\u2500".repeat(40));
+  }
+
   // Headers: # ## ###
   const headerMatch = line.match(/^(#{1,3})\s+(.+)$/);
   if (headerMatch) {
@@ -156,14 +306,25 @@ function renderInlineLine(line: string): string {
   // Blockquote: > text
   const quoteMatch = line.match(/^>\s?(.*)$/);
   if (quoteMatch) {
-    return chalk.hex(PALETTE.dim)("│ ") + chalk.hex(PALETTE.muted)(quoteMatch[1]);
+    return chalk.hex(PALETTE.dim)("\u2502 ") + chalk.hex(PALETTE.muted)(quoteMatch[1]);
+  }
+
+  // Task list: - [ ] or - [x]
+  const taskMatch = line.match(/^(\s*)[-*]\s+\[([ xX])\]\s+(.+)$/);
+  if (taskMatch) {
+    const indent = taskMatch[1] ?? "";
+    const checked = taskMatch[2] !== " ";
+    const icon = checked
+      ? chalk.hex(PALETTE.success)("\u2611")
+      : chalk.hex(PALETTE.dim)("\u2610");
+    return `${indent}${icon} ${renderInlineSpans(taskMatch[3]!)}`;
   }
 
   // Unordered list: - item or * item
   const listMatch = line.match(/^(\s*)[-*]\s+(.+)$/);
   if (listMatch) {
     const indent = listMatch[1] ?? "";
-    return `${indent}${chalk.hex(PALETTE.dim)("•")} ${renderInlineSpans(listMatch[2]!)}`;
+    return `${indent}${chalk.hex(PALETTE.dim)("\u2022")} ${renderInlineSpans(listMatch[2]!)}`;
   }
 
   // Ordered list: 1. item

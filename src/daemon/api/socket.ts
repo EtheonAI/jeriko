@@ -75,9 +75,12 @@ export interface IpcRequest {
     | "billing.portal"
     | "billing.events"
     | "update_session"
+    | "delete_session"
     | "providers.list"
     | "providers.add"
-    | "providers.remove";
+    | "providers.remove"
+    | "oauth.await_callback"
+    | "provider_auth.poll";
   params?: Record<string, unknown>;
 }
 

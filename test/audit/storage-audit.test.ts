@@ -1167,8 +1167,10 @@ describe("storage-audit", () => {
 
   describe("database lifecycle", () => {
     it("closeDatabase is safe to call multiple times", () => {
-      // We can't actually close the main db in the middle of tests,
-      // but we can test the pattern with a separate instance.
+      // Close the existing singleton (TEST_DB) first to avoid orphaned connections
+      closeDatabase();
+
+      // Open a fresh temp DB as the singleton
       const tmpPath = join(tmpdir(), `jeriko-lifecycle-${Date.now()}.db`);
       const tmpDb = initDatabase(tmpPath);
 

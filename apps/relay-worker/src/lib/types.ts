@@ -132,6 +132,27 @@ export interface Env {
   SALESFORCE_OAUTH_CLIENT_ID?: string;
   /** Salesforce OAuth client secret. */
   SALESFORCE_OAUTH_CLIENT_SECRET?: string;
+
+  /** Discord OAuth client ID. */
+  DISCORD_OAUTH_CLIENT_ID?: string;
+  /** Discord OAuth client secret. */
+  DISCORD_OAUTH_CLIENT_SECRET?: string;
+
+  /** Instagram OAuth client ID. */
+  INSTAGRAM_OAUTH_CLIENT_ID?: string;
+  /** Instagram OAuth client secret. */
+  INSTAGRAM_OAUTH_CLIENT_SECRET?: string;
+
+  /** Threads OAuth client ID. */
+  THREADS_OAUTH_CLIENT_ID?: string;
+  /** Threads OAuth client secret. */
+  THREADS_OAUTH_CLIENT_SECRET?: string;
+
+  /** Instagram webhook verify token (for Meta webhook subscription verification). */
+  INSTAGRAM_WEBHOOK_VERIFY_TOKEN?: string;
+
+  /** Threads webhook verify token (for Meta webhook subscription verification). */
+  THREADS_WEBHOOK_VERIFY_TOKEN?: string;
 }
 
 // ---------------------------------------------------------------------------

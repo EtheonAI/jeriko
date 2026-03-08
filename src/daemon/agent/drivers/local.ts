@@ -27,6 +27,8 @@ const DEFAULT_BASE_URL = "http://localhost:11434";
 interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  /** Base64-encoded images for vision models. */
+  images?: string[];
   tool_calls?: Array<{
     id: string;
     type: "function";
@@ -59,10 +61,26 @@ export class LocalDriver implements LLMDriver {
 
   private convertMessages(messages: DriverMessage[]): OllamaMessage[] {
     return messages.map((msg) => {
-      const base: OllamaMessage = {
-        role: msg.role,
-        content: msg.content,
-      };
+      // Handle multi-modal content blocks (vision).
+      // Extract text and images separately — Ollama uses a dedicated `images` field.
+      let content: string;
+      let images: string[] | undefined;
+
+      if (Array.isArray(msg.content)) {
+        const textParts: string[] = [];
+        const imageParts: string[] = [];
+        for (const block of msg.content) {
+          if (block.type === "text") textParts.push(block.text);
+          else if (block.type === "image") imageParts.push(block.data);
+        }
+        content = textParts.join("\n");
+        if (imageParts.length > 0) images = imageParts;
+      } else {
+        content = msg.content;
+      }
+
+      const base: OllamaMessage = { role: msg.role, content };
+      if (images) base.images = images;
 
       if (msg.tool_calls?.length) {
         base.tool_calls = msg.tool_calls.map((tc) => ({

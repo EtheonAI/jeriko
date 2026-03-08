@@ -456,10 +456,9 @@ describe("formatWelcome", () => {
     expect(result).toContain("v2.0.0");
   });
 
-  test("contains cat mascot block characters", () => {
+  test("contains cat mascot", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("█");
-    expect(result).toContain("▀");
+    expect(result).toContain("⣿");
   });
 
   test("shows model", () => {
@@ -473,11 +472,14 @@ describe("formatWelcome", () => {
     expect(result).toContain("cwd");
   });
 
-  test("has bordered box layout", () => {
+  test("has stacked layout with mascot and info panel", () => {
     const result = stripAnsi(formatWelcome("2.0.0", "claude", "/tmp"));
-    expect(result).toContain("╭");
-    expect(result).toContain("╰");
-    expect(result).toContain("│");
+    // Mascot on top, info panel below
+    expect(result).toContain("Jeriko");
+    expect(result).toContain("model");
+    expect(result).toContain("claude");
+    // Bordered info panel with separator lines
+    expect(result).toContain("─");
   });
 
   test("shows help hints", () => {
@@ -572,8 +574,8 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 36 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(36);
+  test("has all 37 slash commands", () => {
+    expect(SLASH_COMMANDS.size).toBe(37);
   });
 
   test("contains new v3 commands", () => {

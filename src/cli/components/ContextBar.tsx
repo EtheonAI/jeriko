@@ -90,8 +90,8 @@ export const ContextBar: React.FC<ContextBarProps> = ({ totalUsed, context }) =>
   if (!bar.visible) return null;
 
   return (
-    <Box marginLeft={2}>
-      <Text>
+    <Box marginLeft={2} overflowX="hidden">
+      <Text wrap="truncate-end">
         <Text color={PALETTE.dim}>{ICONS.empty.repeat(bar.emptyWidth)}</Text>
         <Text color={bar.color}>{ICONS.filled.repeat(bar.filledWidth)}</Text>
         <Text color={PALETTE.muted}> {bar.label}</Text>

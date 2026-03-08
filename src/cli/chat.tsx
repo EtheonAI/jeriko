@@ -52,9 +52,29 @@ export async function startChat(): Promise<void> {
   // First-run onboarding wizard (before Ink mounts)
   if (needsSetup()) {
     const result = await runOnboarding(new ClackPrompter(), version);
-    if (result) {
-      // persistSetup writes config + env, then calls spawnDaemon()
+
+    if (!result) {
+      // User cancelled — can't proceed without a configured provider
+      console.log("\nNo provider configured. Run `jeriko` again to start setup.");
+      process.exit(0);
+    }
+
+    try {
       await persistSetup(result);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`\nSetup failed: ${msg}`);
+      console.error("Run `jeriko` again to retry, or configure manually:");
+      console.error("  ~/.config/jeriko/config.json  (model config)");
+      console.error("  ~/.config/jeriko/.env          (API keys)");
+      process.exit(1);
+    }
+
+    // Restore stdin after clack wizard — clack may leave it paused or
+    // in raw mode, which prevents Ink from receiving keystrokes.
+    if (process.stdin.isPaused()) process.stdin.resume();
+    if (process.stdin.setRawMode) {
+      try { process.stdin.setRawMode(false); } catch { /* not a TTY */ }
     }
   }
 
@@ -69,9 +89,14 @@ export async function startChat(): Promise<void> {
   // Always start idle (setup handled by wizard above)
   const initialPhase: Phase = "idle";
 
-  // Render Ink app
+  // Render Ink app with optimized options:
+  //   patchConsole: Intercepts console.log/warn/error so they don't break the TUI
+  //   incrementalRendering: Only redraws changed lines (reduces flicker on fast updates)
   const { waitUntilExit } = render(
     <App backend={backend} initialModel={model} initialPhase={initialPhase} />,
+    {
+      patchConsole: true,
+    },
   );
 
   await waitUntilExit();

@@ -85,6 +85,8 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_MAILCHIMP_CLIENT_ID__:    JSON.stringify(process.env.BAKED_MAILCHIMP_CLIENT_ID ?? ""),
   __BAKED_DROPBOX_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DROPBOX_CLIENT_ID   ?? ""),
   __BAKED_DISCORD_CLIENT_ID__:      JSON.stringify(process.env.BAKED_DISCORD_CLIENT_ID   ?? ""),
+  __BAKED_INSTAGRAM_CLIENT_ID__:   JSON.stringify(process.env.BAKED_INSTAGRAM_CLIENT_ID ?? ""),
+  __BAKED_THREADS_CLIENT_ID__:     JSON.stringify(process.env.BAKED_THREADS_CLIENT_ID   ?? ""),
 };
 
 /** Packages that are always external (optional deps, never bundled). */

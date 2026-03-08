@@ -93,7 +93,7 @@ The wizard verifies the bot token against the Telegram API and confirms the bot'
 This step runs automatically (no prompts):
 
 - **NODE_AUTH_SECRET**: If not already set, generates a cryptographically random 64-character hex string (`crypto.randomBytes(32)`). This secret is used for HMAC token authentication between the server and remote agents.
-- **PROXY_PORT**: Defaults to `3000` if not set.
+- **JERIKO_PORT**: Defaults to `7741` if not set.
 - **.env permissions**: Sets `chmod 600` on the `.env` file so only the owner can read it.
 
 ### Step 4/6: Tunnel
@@ -113,7 +113,7 @@ The tunnel URL is saved to `TUNNEL_URL` in `.env` once the tunnel starts.
 
 Optionally starts the Jeriko server in the background using `jeriko server --start`. If a tunnel was configured in Step 4, the tunnel is also started and the wizard waits up to 30 seconds for the tunnel URL to become available.
 
-The server runs on the port specified by `PROXY_PORT` (default: 3000).
+The server runs on the port specified by `JERIKO_PORT` (default: 7741).
 
 ### Step 6/6: Verify
 
@@ -176,7 +176,7 @@ chmod 600 .env
 | `LOCAL_API_KEY` | No | -- | API key for secured local model endpoints (optional) |
 | `TELEGRAM_BOT_TOKEN` | For Telegram | -- | Bot token from [@BotFather](https://t.me/BotFather) |
 | `ADMIN_TELEGRAM_IDS` | For Telegram | -- | Comma-separated Telegram user IDs allowed to use the bot |
-| `PROXY_PORT` | No | `3000` | Server listen port |
+| `JERIKO_PORT` | No | `7741` | Daemon HTTP server port |
 | `NODE_AUTH_SECRET` | Yes (for server) | -- | 64-char hex secret for HMAC auth. **Must be set; server refuses to start without it.** |
 | `DEFAULT_NODE` | No | `local` | Default machine name for commands without `@prefix` |
 | `WHATSAPP_ADMIN_PHONE` | For WhatsApp | -- | Admin phone number with country code, no `+` (e.g., `1234567890`) |
@@ -421,7 +421,7 @@ sudo systemctl status Jeriko
 
 ### Server Architecture
 
-The server listens on `PROXY_PORT` (default: 3000) and provides:
+The server listens on `JERIKO_PORT` (default: 7741) and provides:
 
 - **Express HTTP API**: REST endpoints with HMAC token authentication.
 - **Telegram Bot**: Long-polling via Telegraf. All `jeriko` commands available as slash commands.

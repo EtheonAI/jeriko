@@ -133,7 +133,6 @@ export interface Backend {
   getPlan(): Promise<PlanInfo>;
   startUpgrade(email: string): Promise<{ url: string }>;
   openBillingPortal(): Promise<{ url: string }>;
-  cancelSubscription(): Promise<{ cancelled?: boolean; already_cancelling?: boolean; cancel_at: string }>;
 
   // Session lifecycle
   killSession(): Promise<SessionInfo>;
@@ -282,15 +281,9 @@ export async function createDaemonBackend(): Promise<Backend> {
 
     async deleteSessionById(slugOrId) {
       try {
-        // Resume to validate it exists, then we'd need a delete method.
-        // For now, use the session list to verify existence.
-        const sessions = await backend.listSessions(100);
-        const target = sessions.find((s) => s.slug === slugOrId || s.id === slugOrId);
-        if (!target) return false;
-        if (target.id === currentSessionId) return false;
-        // Delete via update_session with archived flag
-        await sendRequest("update_session", { session_id: target.id, title: "[deleted]" });
-        return true;
+        if (slugOrId === currentSessionId) return false;
+        const response = await sendRequest("delete_session" as any, { slug_or_id: slugOrId });
+        return response.ok === true;
       } catch { return false; }
     },
 
@@ -403,7 +396,7 @@ export async function createDaemonBackend(): Promise<Backend> {
       try {
         const response = await sendRequest("connectors" as any, {});
         if (response.ok && Array.isArray(response.data)) {
-          return response.data as ConnectorInfo[];
+          return (response.data as DaemonConnectorStatus[]).map(mapConnectorStatus);
         }
       } catch { /* daemon may not support */ }
       return [];
@@ -440,7 +433,9 @@ export async function createDaemonBackend(): Promise<Backend> {
       try {
         const response = await sendRequest("connector_health" as any, { name });
         if (response.ok && Array.isArray(response.data)) {
-          return response.data as Array<{ name: string; healthy: boolean; latencyMs: number; error?: string }>;
+          return (response.data as DaemonConnectorStatus[])
+            .filter((r) => r.configured)
+            .map(mapHealthResult);
         }
       } catch { /* daemon may not support */ }
       return [];
@@ -579,12 +574,6 @@ export async function createDaemonBackend(): Promise<Backend> {
       return response.data as { url: string };
     },
 
-    async cancelSubscription() {
-      const response = await sendRequest("billing.cancel" as any, {});
-      if (!response.ok) throw new Error(response.error ?? "Failed to cancel subscription");
-      return response.data as { cancelled?: boolean; already_cancelling?: boolean; cancel_at: string };
-    },
-
     // Session lifecycle
     async killSession() {
       if (!currentSessionId) throw new Error("No active session");
@@ -712,6 +701,10 @@ export async function createDaemonBackend(): Promise<Backend> {
 // ---------------------------------------------------------------------------
 
 export async function createInProcessBackend(): Promise<Backend> {
+  // Load secrets from .env so JERIKO_USER_ID and API keys are available
+  const { loadSecrets } = await import("../shared/secrets.js");
+  loadSecrets();
+
   // Initialize database
   const { getDatabase } = await import("../daemon/storage/db.js");
   getDatabase();
@@ -1062,10 +1055,6 @@ export async function createInProcessBackend(): Promise<Backend> {
       throw new Error("Billing portal requires the daemon. Start with: jeriko server start");
     },
 
-    async cancelSubscription() {
-      throw new Error("Cancellation requires the daemon. Start with: jeriko server start");
-    },
-
     // Session lifecycle — direct DB access
     async killSession() {
       const { deleteSession: dbDelete, createSession: dbCreate } = await import("../daemon/agent/session/session.js");
@@ -1132,10 +1121,22 @@ export async function createInProcessBackend(): Promise<Backend> {
 
 /** Create the appropriate backend based on daemon availability. */
 export async function createBackend(): Promise<Backend> {
-  if (existsSync(SOCKET_PATH)) {
-    return createDaemonBackend();
+  const { isDaemonRunning, waitForSocket } = await import("./lib/daemon.js");
+
+  // Check if the daemon process is actually alive (not just stale files).
+  // isDaemonRunning() verifies the PID and cleans up stale socket/pid files.
+  if (!isDaemonRunning()) {
+    return createInProcessBackend();
   }
-  return createInProcessBackend();
+
+  // Daemon is running — wait for the socket if it's not ready yet
+  // (PID file is written before the socket during boot).
+  if (!existsSync(SOCKET_PATH)) {
+    const ready = await waitForSocket(10_000);
+    if (!ready) return createInProcessBackend();
+  }
+
+  return createDaemonBackend();
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,49 +1145,19 @@ export async function createBackend(): Promise<Backend> {
 
 /**
  * Persist provider + API key from the in-REPL Setup component.
- * Writes a full config (matching JerikoConfig schema), saves the API key,
- * and starts the daemon — same outcome as the onboarding wizard.
+ * Delegates to the shared persistSetup from onboarding.ts to avoid duplication.
  */
 export async function persistSetup(
-  provider: { envKey: string; model: string },
+  provider: { id: string; envKey: string; model: string },
   apiKey: string,
 ): Promise<void> {
-  const { getConfigDir } = await import("../shared/config.js");
-  const { spawnDaemon } = await import("./lib/daemon.js");
-
-  const configDir = getConfigDir();
-  if (!existsSync(configDir)) {
-    mkdirSync(configDir, { recursive: true });
-  }
-
-  // Write full config matching JerikoConfig schema
-  const configPath = join(configDir, "config.json");
-  const config = {
-    agent: { model: provider.model },
-    channels: {
-      telegram: { token: "", adminIds: [] },
-      whatsapp: { enabled: false },
-    },
-    connectors: {},
-    logging: { level: "info" },
-  };
-  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-
-  // Save API key to .env
-  if (apiKey && provider.envKey) {
-    const envPath = join(configDir, ".env");
-    const envLine = `${provider.envKey}=${apiKey}\n`;
-    const existing = existsSync(envPath)
-      ? readFileSync(envPath, "utf-8")
-      : "";
-    if (!existing.includes(`${provider.envKey}=`)) {
-      writeFileSync(envPath, existing + envLine);
-    }
-    process.env[provider.envKey] = apiKey;
-  }
-
-  // Start daemon so channels and triggers are ready
-  await spawnDaemon();
+  const { persistSetup: sharedPersistSetup } = await import("./wizard/onboarding.js");
+  await sharedPersistSetup({
+    provider: provider.id,
+    model: provider.model,
+    apiKey,
+    envKey: provider.envKey,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1228,6 +1199,47 @@ function mapDaemonChannel(row: DaemonChannelRow): ChannelInfo {
     status: row.status,
     error: row.error,
     connectedAt: row.connected_at,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Connector status mapping — daemon → CLI types
+// ---------------------------------------------------------------------------
+
+/** Shape returned by ConnectorManager.healthAll() / health(). */
+interface DaemonConnectorStatus {
+  name: string;
+  label: string;
+  configured: boolean;
+  initialized: boolean;
+  healthy: boolean;
+  latency_ms?: number;
+  last_check?: string;
+  error?: string;
+}
+
+/** Map daemon ConnectorStatus → CLI ConnectorInfo for /connectors display. */
+function mapConnectorStatus(raw: DaemonConnectorStatus): ConnectorInfo {
+  let status: ConnectorInfo["status"];
+  if (!raw.configured) status = "disconnected";
+  else if (raw.healthy) status = "connected";
+  else status = "error";
+
+  return {
+    name: raw.name,
+    type: raw.label,
+    status,
+    error: raw.error,
+  };
+}
+
+/** Map daemon ConnectorStatus → health check result for /health display. */
+function mapHealthResult(raw: DaemonConnectorStatus): { name: string; healthy: boolean; latencyMs: number; error?: string } {
+  return {
+    name: raw.name,
+    healthy: raw.healthy,
+    latencyMs: raw.latency_ms ?? 0,
+    error: raw.error,
   };
 }
 
@@ -1370,6 +1382,7 @@ async function registerTools(): Promise<void> {
     import("../daemon/agent/tools/skill.js"),
     import("../daemon/agent/tools/webdev.js"),
     import("../daemon/agent/tools/memory-tool.js"),
+    import("../daemon/agent/tools/generate-image.js"),
   ]);
 }
 
@@ -1471,15 +1484,36 @@ async function loadConfigDirect(): Promise<Record<string, unknown>> {
  * Uses the model registry if available, falls back to well-known defaults.
  */
 function getStaticModelList(_currentModel: string): ModelInfo[] {
+  // Determine which built-in providers are configured (API key set).
+  const builtInEnvKeys: Record<string, string | undefined> = {
+    anthropic: "ANTHROPIC_API_KEY",
+    openai: "OPENAI_API_KEY",
+    local: undefined, // always available
+    ollama: undefined,
+  };
+  const configuredProviders = new Set<string>();
+  for (const [provider, envKey] of Object.entries(builtInEnvKeys)) {
+    if (!envKey || process.env[envKey]) configuredProviders.add(provider);
+  }
+
+  // Add custom providers from config
   try {
-    const { listModels: registryListModels, getCapabilities } = require("../daemon/agent/drivers/models.js");
+    const { loadConfig: loadCfg } = require("../shared/config.js");
+    const cfg = loadCfg();
+    for (const p of cfg.providers ?? []) {
+      configuredProviders.add(p.id);
+    }
+  } catch { /* config may not exist yet */ }
+
+  try {
+    const { listModels: registryListModels } = require("../daemon/agent/drivers/models.js");
     const all = registryListModels() as import("../daemon/agent/drivers/models.js").ModelCapabilities[];
 
     if (all.length > 0) {
-      // Return a subset (top models per provider) to keep the list manageable
       const seen = new Set<string>();
       const results: ModelInfo[] = [];
       for (const caps of all) {
+        if (!configuredProviders.has(caps.provider)) continue;
         const key = `${caps.provider}:${caps.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -1501,11 +1535,18 @@ function getStaticModelList(_currentModel: string): ModelInfo[] {
     // Registry not loaded — fall through to defaults
   }
 
-  return [
-    { id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true },
-    { id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true },
-    { id: "local", name: "Local (Ollama)", provider: "ollama" },
-  ];
+  // Fallback defaults — only return configured providers
+  const defaults: ModelInfo[] = [];
+  if (configuredProviders.has("anthropic")) {
+    defaults.push({ id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true });
+  }
+  if (configuredProviders.has("openai")) {
+    defaults.push({ id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true });
+  }
+  if (configuredProviders.has("local") || configuredProviders.has("ollama")) {
+    defaults.push({ id: "local", name: "Local (Ollama)", provider: "ollama" });
+  }
+  return defaults;
 }
 
 /**
@@ -1523,13 +1564,22 @@ function loadProvidersDirect(): ProviderInfo[] {
     const registered = new Set<string>();
     const providers: ProviderInfo[] = [];
 
-    // Built-in drivers
-    for (const id of ["anthropic", "openai", "local"] as const) {
-      registered.add(id);
+    // Built-in drivers — only mark as "built-in" if API key is set.
+    // Without the key, show as "available" so users can add via /model add.
+    const builtInMeta: Array<{ id: string; name: string; envKey?: string; defaultModel?: string }> = [
+      { id: "anthropic", name: "Anthropic", envKey: "ANTHROPIC_API_KEY", defaultModel: "claude" },
+      { id: "openai",    name: "OpenAI",    envKey: "OPENAI_API_KEY",    defaultModel: "gpt4" },
+      { id: "local",     name: "Local (Ollama)", defaultModel: "local" },
+    ];
+    for (const meta of builtInMeta) {
+      registered.add(meta.id);
+      const isConfigured = !meta.envKey || !!process.env[meta.envKey];
       providers.push({
-        id,
-        name: id.charAt(0).toUpperCase() + id.slice(1),
-        type: "built-in",
+        id: meta.id,
+        name: meta.name,
+        type: isConfigured ? "built-in" : "available",
+        envKey: meta.envKey,
+        defaultModel: meta.defaultModel,
       });
     }
 

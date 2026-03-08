@@ -3,7 +3,7 @@
 // Used by both AnthropicDriver (native) and AnthropicCompatibleDriver (custom providers).
 // Extracts the protocol-specific logic so both drivers share the same conversion code.
 
-import type { DriverConfig, DriverMessage } from "./index.js";
+import type { DriverConfig, DriverMessage, ContentBlock } from "./index.js";
 
 /** Parse tool call arguments safely — malformed JSON becomes empty object. */
 function safeParseArgs(json: string): Record<string, unknown> {
@@ -19,7 +19,7 @@ function safeParseArgs(json: string): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 export interface AnthropicContentBlock {
-  type: "text" | "tool_use" | "tool_result" | "thinking";
+  type: "text" | "tool_use" | "tool_result" | "thinking" | "image";
   text?: string;
   thinking?: string;
   id?: string;
@@ -27,6 +27,8 @@ export interface AnthropicContentBlock {
   input?: unknown;
   tool_use_id?: string;
   content?: string;
+  /** Image source — Anthropic's native vision format. */
+  source?: { type: "base64"; media_type: string; data: string };
 }
 
 export interface AnthropicToolDef {
@@ -65,7 +67,8 @@ export function convertToAnthropicMessages(messages: DriverMessage[]): {
 
   for (const msg of messages) {
     if (msg.role === "system") {
-      system = msg.content;
+      // System messages are always plain strings.
+      system = typeof msg.content === "string" ? msg.content : "";
       continue;
     }
 
@@ -76,7 +79,7 @@ export function convertToAnthropicMessages(messages: DriverMessage[]): {
           {
             type: "tool_result",
             tool_use_id: msg.tool_call_id,
-            content: msg.content,
+            content: typeof msg.content === "string" ? msg.content : "",
           },
         ],
       });
@@ -85,8 +88,9 @@ export function convertToAnthropicMessages(messages: DriverMessage[]): {
 
     if (msg.role === "assistant" && msg.tool_calls?.length) {
       const blocks: AnthropicContentBlock[] = [];
-      if (msg.content) {
-        blocks.push({ type: "text", text: msg.content });
+      const text = typeof msg.content === "string" ? msg.content : "";
+      if (text) {
+        blocks.push({ type: "text", text });
       }
       for (const tc of msg.tool_calls) {
         blocks.push({
@@ -97,6 +101,27 @@ export function convertToAnthropicMessages(messages: DriverMessage[]): {
         });
       }
       converted.push({ role: "assistant", content: blocks });
+      continue;
+    }
+
+    // User messages may carry multi-modal content blocks (vision).
+    if (Array.isArray(msg.content)) {
+      const blocks: AnthropicContentBlock[] = [];
+      for (const block of msg.content as ContentBlock[]) {
+        if (block.type === "text") {
+          blocks.push({ type: "text", text: block.text });
+        } else if (block.type === "image") {
+          blocks.push({
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: block.mediaType,
+              data: block.data,
+            },
+          });
+        }
+      }
+      converted.push({ role: msg.role as "user" | "assistant", content: blocks });
       continue;
     }
 

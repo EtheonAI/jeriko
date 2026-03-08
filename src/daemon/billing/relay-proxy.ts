@@ -179,8 +179,23 @@ async function getRelayContext(): Promise<RelayContext | null> {
   const userId = getUserId();
   if (!userId || isSelfHosted()) return null;
 
-  const authToken = process.env.RELAY_AUTH_SECRET ?? process.env.NODE_AUTH_SECRET;
-  if (!authToken) return null;
+  // Auth token resolution order:
+  // 1. RELAY_AUTH_SECRET env var — explicit override (self-hosted relay)
+  // 2. Baked-in relay secret — compiled into the binary for distributed users
+  // 3. NODE_AUTH_SECRET — daemon's own auth secret (dev mode fallback)
+  // 4. null — no auth available, relay calls will be skipped
+  let authToken = process.env.RELAY_AUTH_SECRET;
+  if (!authToken) {
+    const { BAKED_RELAY_AUTH_SECRET } = await import("../../shared/baked-oauth-ids.js");
+    authToken = BAKED_RELAY_AUTH_SECRET;
+  }
+  if (!authToken) {
+    authToken = process.env.NODE_AUTH_SECRET;
+  }
+  if (!authToken) {
+    log.debug("No relay auth token available (RELAY_AUTH_SECRET, baked secret, or NODE_AUTH_SECRET)");
+    return null;
+  }
 
   return {
     relayUrl: getRelayApiUrl(),

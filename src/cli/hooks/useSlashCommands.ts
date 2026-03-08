@@ -15,6 +15,7 @@ import { createSessionHandlers } from "../handlers/session.js";
 import { createModelHandlers } from "../handlers/model.js";
 import { createConnectorHandlers } from "../handlers/connector.js";
 import { createSystemHandlers } from "../handlers/system.js";
+import { withTimeout, TimeoutError } from "../lib/timeout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -91,6 +92,7 @@ export function useSlashCommands({
         "/cost":          () => session.cost(),
         "/kill":          () => session.kill(),
         "/archive":       () => session.archive(),
+        "/delete":        () => session.delete(args),
 
         // Model (includes provider management)
         "/model":         () => model.model(args),
@@ -106,6 +108,8 @@ export function useSlashCommands({
 
         // Tasks (unified: trigger, schedule, cron)
         "/task":          () => system.task(args),
+        "/tasks":         () => system.task(""),       // alias → /task hub
+        "/triggers":      () => system.triggers(),
 
         // Skills
         "/skills":        () => system.skills(),
@@ -136,15 +140,28 @@ export function useSlashCommands({
       const handler = handlers[name];
       if (!handler) return false;
 
+      // Guard: don't overwrite an active wizard
+      if (state.phase === "wizard" && wizardConfigRef.current) {
+        addSystemMessage("A wizard is already active. Complete or cancel it first.");
+        return true;
+      }
+
+      /** Max time for a slash command before we declare the backend unresponsive. */
+      const COMMAND_TIMEOUT_MS = 30_000;
+
       try {
-        await handler(args);
+        await withTimeout(handler(args), COMMAND_TIMEOUT_MS, name);
       } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addSystemMessage(`Error: ${msg}`);
+        if (err instanceof TimeoutError) {
+          addSystemMessage(`${name} timed out. The daemon may be unresponsive — try /status.`);
+        } else {
+          const msg = err instanceof Error ? err.message : String(err);
+          addSystemMessage(`Error: ${msg}`);
+        }
       }
       return true;
     },
-    [backend, state.model, state.stats, addSystemMessage, dispatch],
+    [backend, state.model, state.stats, state.phase, addSystemMessage, dispatch],
   );
 
   return { handleSlashCommand, wizardConfigRef };

@@ -123,3 +123,22 @@ async function waitForDaemonPid(timeoutMs: number): Promise<number | null> {
   }
   return null;
 }
+
+/**
+ * Wait for the daemon socket to become available.
+ *
+ * The daemon writes its PID file early in boot (before migrations and HTTP
+ * server binding). The socket only appears once the HTTP server is listening.
+ * After onboarding, the CLI needs to wait for the socket before creating a
+ * daemon backend — otherwise it falls back to in-process mode permanently.
+ */
+export async function waitForSocket(timeoutMs: number = 10_000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (existsSync(SOCKET_PATH)) return true;
+    // Stop waiting if the daemon process died
+    if (!isDaemonRunning()) return false;
+    await Bun.sleep(100);
+  }
+  return false;
+}

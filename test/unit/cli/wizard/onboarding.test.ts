@@ -1,12 +1,25 @@
 /**
  * Tests for the onboarding wizard — uses mock prompter to test flow.
  *
- * Flow: Channel → (token) → Provider → (API key + verify) → done
+ * Flow (provider-first):
+ *   1. Provider selection (anthropic, openai, local, lmstudio, presets)
+ *   2. API key input + verification (retry on failure)
+ *   3. Persist config + start daemon
+ *
+ * Local providers (Ollama, LM Studio) block until detected or user goes back.
+ * Channels are added post-setup via /connect.
+ *
+ * NOTE: Mock API keys fail real verification, so tests always hit the
+ * "verification failed" path and select "use-anyway" to proceed.
  */
 
-import { describe, test, expect } from "bun:test";
-import { runOnboarding } from "../../../../src/cli/wizard/onboarding.js";
+import { describe, test, expect, afterEach, mock } from "bun:test";
+import { runOnboarding, writeEnvBatch } from "../../../../src/cli/wizard/onboarding.js";
 import type { WizardPrompter } from "../../../../src/cli/wizard/prompter.js";
+import * as verify from "../../../../src/cli/wizard/verify.js";
+import { mkdirSync, readFileSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 // ---------------------------------------------------------------------------
 // Mock prompter
@@ -25,6 +38,12 @@ function createMockPrompter(responses: unknown[]): {
   let responseIndex = 0;
 
   const nextResponse = () => {
+    if (responseIndex >= responses.length) {
+      throw new Error(
+        `Mock prompter ran out of responses at index ${responseIndex}. ` +
+        `Calls so far: ${calls.map((c) => c.method).join(", ")}`,
+      );
+    }
     const value = responses[responseIndex];
     responseIndex++;
     return value;
@@ -72,88 +91,123 @@ function createMockPrompter(responses: unknown[]): {
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Tests — cloud providers (API key flow)
+//
+// Mock keys fail verification → hits "verification failed" prompt →
+// user selects "use-anyway" to proceed.
 // ---------------------------------------------------------------------------
 
 describe("runOnboarding", () => {
-  test("channel first: Telegram token → Claude provider with API key", async () => {
+  test("Anthropic provider with API key (use-anyway on verify fail)", async () => {
     const { prompter } = createMockPrompter([
-      "telegram",                // select channel
-      "123456:ABC-DEF-GHI",     // text (telegram token)
       "anthropic",              // select provider
       "sk-test-key-1234567890", // password (API key)
+      "use-anyway",             // verification fails → use anyway
+      false,                    // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
 
     expect(result).not.toBeNull();
-    expect(result!.channel).toBe("telegram");
-    expect(result!.telegramToken).toBe("123456:ABC-DEF-GHI");
     expect(result!.provider).toBe("anthropic");
     expect(result!.model).toBe("claude");
     expect(result!.apiKey).toBe("sk-test-key-1234567890");
     expect(result!.envKey).toBe("ANTHROPIC_API_KEY");
   });
 
-  test("channel first: WhatsApp → local provider (no API key)", async () => {
-    const { prompter, calls } = createMockPrompter([
-      "whatsapp", // select channel
-      "local",    // select provider
-    ]);
-
-    const result = await runOnboarding(prompter, "2.0.0");
-
-    expect(result).not.toBeNull();
-    expect(result!.channel).toBe("whatsapp");
-    expect(result!.whatsappEnabled).toBe(true);
-    expect(result!.provider).toBe("local");
-    expect(result!.apiKey).toBe("");
-
-    // WhatsApp should show a note about QR pairing
-    const noteCall = calls.find((c) => c.method === "note");
-    expect(noteCall).toBeDefined();
-  });
-
-  test("skip channel → OpenAI provider with API key", async () => {
+  test("OpenAI provider with API key (use-anyway on verify fail)", async () => {
     const { prompter } = createMockPrompter([
-      "skip",                      // select channel
       "openai",                    // select provider
       "sk-openai-test-key-12345",  // password (API key)
+      "use-anyway",                // verification fails → use anyway
+      false,                       // skip channel setup
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
 
     expect(result).not.toBeNull();
-    expect(result!.channel).toBe("skip");
-    expect(result!.telegramToken).toBeUndefined();
-    expect(result!.whatsappEnabled).toBe(false);
     expect(result!.provider).toBe("openai");
+    expect(result!.model).toBe("gpt4");
     expect(result!.apiKey).toBe("sk-openai-test-key-12345");
+    expect(result!.envKey).toBe("OPENAI_API_KEY");
   });
 
-  test("returns null when user cancels at channel selection", async () => {
+  test("API key verification failure — user retries with new key", async () => {
     const { prompter } = createMockPrompter([
-      Symbol("cancel"), // cancel at channel select
+      "anthropic",              // select provider
+      "bad-key-1234567890",     // first API key
+      "retry",                  // verification fails → retry
+      "sk-good-key-1234567890", // second API key
+      "use-anyway",             // verification fails again (mock) → use anyway
+      false,                    // skip channel setup
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+
+    expect(result).not.toBeNull();
+    expect(result!.apiKey).toBe("sk-good-key-1234567890");
+  });
+
+  test("API key verification failure — user cancels", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",              // select provider
+      "bad-key-1234567890",     // API key
+      "cancel",                 // verification fails → cancel
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).toBeNull();
   });
 
-  test("returns null when user cancels at telegram token", async () => {
+  // ── Local provider ──────────────────────────────────────────────
+
+  test("local provider — Ollama not running, user goes back to pick Anthropic", async () => {
+    // Mock verifyOllamaRunning to return false regardless of environment
+    const ollamaSpy = mock.module("../../../../src/cli/wizard/verify.js", () => ({
+      ...verify,
+      verifyOllamaRunning: async () => false,
+    }));
+
     const { prompter } = createMockPrompter([
-      "telegram",        // select channel
-      Symbol("cancel"),  // cancel at token input
+      "local",                    // 1. select local provider
+      "back",                     // 2. Ollama not detected → go back
+      "anthropic",                // 3. re-select provider
+      "sk-test-key-1234567890",   // 4. enter API key
+      "use-anyway",               // 5. verification fails → use anyway
+      false,                      // 6. skip channel setup
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+
+    expect(result).not.toBeNull();
+    expect(result!.provider).toBe("anthropic");
+    expect(result!.apiKey).toBe("sk-test-key-1234567890");
+
+    mock.restore();
+  });
+
+  test("local provider — Ollama not running, user cancels", async () => {
+    const ollamaSpy = mock.module("../../../../src/cli/wizard/verify.js", () => ({
+      ...verify,
+      verifyOllamaRunning: async () => false,
+    }));
+
+    const { prompter } = createMockPrompter([
+      "local",              // select local provider
+      Symbol("cancel"),     // cancel at "Ollama not detected" prompt
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
     expect(result).toBeNull();
+
+    mock.restore();
   });
+
+  // ── Cancellation ────────────────────────────────────────────────
 
   test("returns null when user cancels at provider selection", async () => {
     const { prompter } = createMockPrompter([
-      "skip",            // select channel
-      Symbol("cancel"),  // cancel at provider select
+      Symbol("cancel"), // cancel at provider select
     ]);
 
     const result = await runOnboarding(prompter, "2.0.0");
@@ -162,7 +216,6 @@ describe("runOnboarding", () => {
 
   test("returns null when user cancels at API key input", async () => {
     const { prompter } = createMockPrompter([
-      "skip",            // select channel
       "anthropic",       // select provider
       Symbol("cancel"),  // cancel at API key
     ]);
@@ -171,10 +224,14 @@ describe("runOnboarding", () => {
     expect(result).toBeNull();
   });
 
+  // ── UI lifecycle ────────────────────────────────────────────────
+
   test("calls intro and outro", async () => {
     const { prompter, calls } = createMockPrompter([
-      "skip",  // select channel
-      "local", // select provider
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+      false,                    // skip channel setup
     ]);
 
     await runOnboarding(prompter, "2.0.0");
@@ -189,17 +246,156 @@ describe("runOnboarding", () => {
 
   test("shows spinner during API key verification", async () => {
     const { prompter, calls } = createMockPrompter([
-      "skip",                      // select channel
-      "openai",                    // select provider
-      "sk-openai-test-key-12345",  // password (API key)
+      "openai",
+      "sk-openai-test-key-12345",
+      "use-anyway",
+      false,                    // skip channel setup
     ]);
 
     await runOnboarding(prompter, "2.0.0");
 
-    const spinnerStart = calls.find((c) => c.method === "spinner.start");
+    const spinnerStart = calls.find(
+      (c) => c.method === "spinner.start" && String(c.args[0]).includes("Verifying"),
+    );
     expect(spinnerStart).toBeDefined();
 
-    const spinnerStop = calls.find((c) => c.method === "spinner.stop");
+    const spinnerStop = calls.find(
+      (c) => c.method === "spinner.stop" && String(c.args[0]).includes("failed"),
+    );
     expect(spinnerStop).toBeDefined();
+  });
+
+  test("skipping channels returns undefined channels field", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+      false,                    // skip channel setup
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).not.toBeNull();
+    expect(result!.channels).toBeUndefined();
+  });
+
+  // ── Channel setup ────────────────────────────────────────────────
+
+  test("WhatsApp channel setup sets whatsapp flag", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+      true,                     // yes, add channel
+      "whatsapp",               // select WhatsApp
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).not.toBeNull();
+    expect(result!.channels).toBeDefined();
+    expect(result!.channels!.whatsapp).toBe(true);
+    expect(result!.channels!.telegram).toBeUndefined();
+  });
+
+  test("channel setup skip returns undefined channels", async () => {
+    const { prompter } = createMockPrompter([
+      "anthropic",
+      "sk-test-key-1234567890",
+      "use-anyway",
+      true,                     // yes, add channel
+      "skip",                   // then skip at channel picker
+    ]);
+
+    const result = await runOnboarding(prompter, "2.0.0");
+    expect(result).not.toBeNull();
+    expect(result!.channels).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeEnvBatch — atomic .env writes
+// ---------------------------------------------------------------------------
+
+describe("writeEnvBatch", () => {
+  const testDir = join(tmpdir(), `jeriko-test-envbatch-${Date.now()}`);
+  const envPath = join(testDir, ".env");
+
+  // Clean up before each test
+  afterEach(() => {
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  function setup(content?: string): void {
+    mkdirSync(testDir, { recursive: true });
+    if (content !== undefined) {
+      writeFileSync(envPath, content);
+    }
+  }
+
+  test("creates new .env file with all vars", () => {
+    setup();
+    writeEnvBatch(envPath, {
+      API_KEY: "sk-123",
+      SECRET: "s3cret",
+    });
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toContain("API_KEY=sk-123");
+    expect(content).toContain("SECRET=s3cret");
+    // Should end with newline
+    expect(content.endsWith("\n")).toBe(true);
+  });
+
+  test("does not duplicate existing keys", () => {
+    setup("API_KEY=old-value\n");
+    writeEnvBatch(envPath, { API_KEY: "new-value" });
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toContain("API_KEY=new-value");
+    // Should NOT contain old value
+    expect(content).not.toContain("old-value");
+    // Should only have one occurrence of API_KEY=
+    const matches = content.match(/API_KEY=/g);
+    expect(matches).toHaveLength(1);
+  });
+
+  test("appends new keys without overwriting existing", () => {
+    setup("EXISTING=value1\n");
+    writeEnvBatch(envPath, { NEW_KEY: "value2" });
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toContain("EXISTING=value1");
+    expect(content).toContain("NEW_KEY=value2");
+  });
+
+  test("handles values containing = characters", () => {
+    setup();
+    writeEnvBatch(envPath, { DATABASE_URL: "postgres://user:pass@host/db?sslmode=require" });
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toContain("DATABASE_URL=postgres://user:pass@host/db?sslmode=require");
+  });
+
+  test("handles empty vars (no-op)", () => {
+    setup("EXISTING=value\n");
+    writeEnvBatch(envPath, {});
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toBe("EXISTING=value\n");
+  });
+
+  test("handles missing file (creates it)", () => {
+    setup(); // creates dir but not file
+    writeEnvBatch(envPath, { KEY: "val" });
+    expect(existsSync(envPath)).toBe(true);
+    const content = readFileSync(envPath, "utf-8");
+    expect(content).toContain("KEY=val");
+  });
+
+  test("does not match substrings (MY_API_KEY vs MY_API_KEY_SECRET)", () => {
+    setup("MY_API_KEY_SECRET=secret1\n");
+    writeEnvBatch(envPath, { MY_API_KEY: "key1" });
+    const content = readFileSync(envPath, "utf-8");
+    // Should have both keys with their correct values
+    expect(content).toContain("MY_API_KEY_SECRET=secret1");
+    expect(content).toContain("MY_API_KEY=key1");
+    // MY_API_KEY_SECRET should NOT be overwritten
+    expect(content).not.toContain("MY_API_KEY_SECRET=key1");
   });
 });

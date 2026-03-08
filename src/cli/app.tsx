@@ -119,6 +119,9 @@ export const App: React.FC<AppProps> = ({
       if (parsed) {
         const handled = await handleSlashCommand(parsed.name, parsed.args);
         if (handled) return;
+        // Unknown command — show error instead of sending to AI
+        addSystemMessage(t.yellow(`Unknown command: ${parsed.name}. Type /help for available commands.`));
+        return;
       }
 
       // Normal message → send to backend
@@ -210,6 +213,7 @@ export const App: React.FC<AppProps> = ({
         },
 
         onCompaction(before, after) {
+          if (abortedRef.current) return;
           dispatch({ type: "CONTEXT_COMPACTED", before, after });
           addSystemMessage(
             `✻ Context compacted (${before} → ${after} tokens)`,
@@ -217,6 +221,7 @@ export const App: React.FC<AppProps> = ({
         },
 
         onError(message) {
+          if (abortedRef.current) return;
           addSystemMessage(formatError(message));
         },
 
@@ -274,7 +279,7 @@ export const App: React.FC<AppProps> = ({
   // ----- Interrupt handler -----
 
   const handleInterrupt = useCallback(() => {
-    const { phase } = state;
+    const { phase, streamText } = state;
     if (
       phase === "thinking" ||
       phase === "streaming" ||
@@ -283,6 +288,17 @@ export const App: React.FC<AppProps> = ({
     ) {
       abortedRef.current = true;
       backend.abort();
+
+      // Preserve partial response so the user doesn't lose what was streamed
+      if (streamText.length > 0) {
+        dispatch({
+          type: "FREEZE_ASSISTANT_MESSAGE",
+          id: randomUUID(),
+          text: streamText + "\n\n_(interrupted)_",
+          toolCalls: [],
+        });
+      }
+
       dispatch({ type: "RESET_TURN" });
       addSystemMessage("⏎ Interrupted.");
     } else if (phase === "idle") {
@@ -325,7 +341,7 @@ export const App: React.FC<AppProps> = ({
 
   return (
     <ErrorBoundary>
-      <Box flexDirection="column">
+      <Box flexDirection="column" gap={0}>
         {/* Static message history */}
         <Messages messages={state.messages} />
 

@@ -8,10 +8,10 @@
 // ---------------------------------------------------------------------------
 
 export const TIER_LIMITS = {
-  free:       { connectors: 2,  triggers: 3,        label: "Community" },
-  pro:        { connectors: 10, triggers: Infinity,  label: "Pro" },
-  team:       { connectors: 10, triggers: Infinity,  label: "Team" },
-  enterprise: { connectors: 10, triggers: Infinity,  label: "Enterprise" },
+  free:       { connectors: 5,        triggers: 10,       label: "Community" },
+  pro:        { connectors: Infinity,  triggers: Infinity,  label: "Pro" },
+  team:       { connectors: Infinity,  triggers: Infinity,  label: "Team" },
+  enterprise: { connectors: Infinity,  triggers: Infinity,  label: "Enterprise" },
 } as const;
 
 /** Human-readable Pro plan price for display in CLI, channels, and docs. */

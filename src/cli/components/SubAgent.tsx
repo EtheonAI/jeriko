@@ -99,10 +99,65 @@ function resolveStatusIcon(
   }
 }
 
+/**
+ * Maps tool names to descriptive activity verbs (Claude Code style).
+ * Shows what the sub-agent is *doing*, not just the tool name.
+ */
+const TOOL_ACTIVITY_LABELS: Record<string, string> = {
+  // File operations
+  read_file:        "reading",
+  read:             "reading",
+  write_file:       "writing",
+  write:            "writing",
+  edit_file:        "editing",
+  edit:             "editing",
+
+  // Search & exploration
+  search_files:     "searching",
+  grep:             "searching",
+  search:           "searching",
+  glob:             "searching",
+  list_files:       "browsing",
+  list_directory:   "browsing",
+
+  // Code analysis
+  analyze:          "analyzing",
+  lint:             "analyzing",
+  type_check:       "analyzing",
+
+  // Execution
+  bash:             "executing",
+  exec:             "executing",
+  run_command:      "executing",
+  shell:            "executing",
+
+  // Web
+  web_search:       "searching web",
+  web_fetch:        "fetching",
+  browse:           "browsing",
+
+  // Planning & memory
+  plan:             "planning",
+  memory:           "remembering",
+  use_skill:        "using skill",
+
+  // Sub-delegation
+  delegate:         "delegating",
+  parallel_tasks:   "orchestrating",
+};
+
+function resolveToolActivity(toolName: string | null): string {
+  if (!toolName) return "working";
+  // Check exact match first, then lowercase
+  return TOOL_ACTIVITY_LABELS[toolName]
+    ?? TOOL_ACTIVITY_LABELS[toolName.toLowerCase()]
+    ?? toolName;
+}
+
 function resolveToolLabel(phase: SubAgentState["phase"], currentTool: string | null): string {
   switch (phase) {
     case "running":
-      return currentTool ?? "working";
+      return resolveToolActivity(currentTool);
     case "completed":
       return "done";
     case "error":
@@ -137,15 +192,20 @@ const AgentNode: React.FC<AgentNodeProps> = ({
   const statusIcon = resolveStatusIcon(agent.phase, badgeColor);
   const toolStr = resolveToolLabel(agent.phase, agent.currentTool);
 
-  // Only show preview for running agents with content
+  // Show stream preview for running agents, or the task label as fallback
   const previewText = showPreview && agent.phase === "running" && agent.streamPreview.length > 0
     ? truncatePreview(agent.streamPreview, 60)
     : null;
 
+  // Show task label when no stream preview available (provides context on what agent is doing)
+  const taskLabel = !previewText && agent.label && agent.label !== agent.agentType
+    ? truncatePreview(agent.label, 60)
+    : null;
+
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" overflowX="hidden">
       {/* Main agent line */}
-      <Text>
+      <Text wrap="truncate-end">
         <Text color={PALETTE.dim}>{connector}</Text>
         {statusIcon}
         <Text color={badgeColor} bold> {label}</Text>
@@ -154,11 +214,11 @@ const AgentNode: React.FC<AgentNodeProps> = ({
         <Text color={PALETTE.dim}>{"  "}{formatDuration(elapsed)}</Text>
       </Text>
 
-      {/* Stream preview sub-line */}
-      {previewText && (
-        <Text>
+      {/* Stream preview or task label sub-line */}
+      {(previewText || taskLabel) && (
+        <Text wrap="truncate-end">
           <Text color={PALETTE.dim}>{continuation}{TREE.preview}</Text>
-          <Text color={PALETTE.faint}>{previewText}</Text>
+          <Text color={PALETTE.faint}>{previewText ?? taskLabel}</Text>
         </Text>
       )}
     </Box>

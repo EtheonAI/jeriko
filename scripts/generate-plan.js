@@ -1074,7 +1074,7 @@ sections.push(
       ['TELEGRAM_BOT_TOKEN', 'For Telegram', 'Telegram Bot API token'],
       ['ADMIN_TELEGRAM_IDS', 'For Telegram', 'Comma-separated admin user IDs'],
       ['NODE_AUTH_SECRET', 'Yes', 'HMAC secret for auth (must be strong)'],
-      ['PROXY_PORT', 'No', 'Server port (default: 3000)'],
+      ['JERIKO_PORT', 'No', 'Daemon HTTP port (default: 7741)'],
       ['STRIPE_SECRET_KEY', 'For payments', 'Stripe API secret key'],
       ['TWILIO_ACCOUNT_SID', 'For calls/SMS', 'Twilio account SID'],
       ['TWILIO_AUTH_TOKEN', 'For calls/SMS', 'Twilio auth token'],

@@ -10,8 +10,7 @@ import { createSessionHandlers } from "../../../src/cli/handlers/session.js";
 import { createModelHandlers } from "../../../src/cli/handlers/model.js";
 import { createConnectorHandlers } from "../../../src/cli/handlers/connector.js";
 import { createSystemHandlers } from "../../../src/cli/handlers/system.js";
-import { setActiveTheme } from "../../../src/cli/theme.js";
-import type { ThemePreset } from "../../../src/cli/themes.js";
+// Theme imports (single-theme now — no switching needed)
 import type { Backend } from "../../../src/cli/backend.js";
 
 // ---------------------------------------------------------------------------
@@ -158,9 +157,6 @@ function createMockBackend(overrides: Partial<Backend> = {}): Backend {
     openBillingPortal: mock(() =>
       Promise.resolve({ url: "https://billing.example.com" }),
     ),
-    cancelSubscription: mock(() =>
-      Promise.resolve({ already_cancelling: false, cancel_at: "2026-04-06" }),
-    ),
 
     // Tasks & Notifications
     listTasks: mock(() => Promise.resolve([])),
@@ -264,11 +260,34 @@ describe("Session handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/clear clears messages", async () => {
+  test("/clear launches confirmation wizard", async () => {
     const ctx = createTestCtx();
     const h = createSessionHandlers(ctx);
     await h.clear();
+    // Should launch a wizard with confirmation prompt
+    expect(ctx.wizardConfigRef.current).not.toBeNull();
+    expect(ctx.wizardConfigRef.current!.title).toContain("Clear");
+    expect(ctx.dispatched).toContainEqual({ type: "SET_PHASE", phase: "wizard" });
+  });
+
+  test("/clear wizard 'yes' clears messages", async () => {
+    const ctx = createTestCtx();
+    const h = createSessionHandlers(ctx);
+    await h.clear();
+    // Simulate wizard completing with "yes"
+    const wizard = ctx.wizardConfigRef.current!;
+    await wizard.onComplete(["yes"]);
     expect(ctx.dispatched).toContainEqual({ type: "CLEAR_MESSAGES" });
+  });
+
+  test("/clear wizard 'no' cancels without clearing", async () => {
+    const ctx = createTestCtx();
+    const h = createSessionHandlers(ctx);
+    await h.clear();
+    const wizard = ctx.wizardConfigRef.current!;
+    await wizard.onComplete(["no"]);
+    expect(ctx.dispatched).not.toContainEqual({ type: "CLEAR_MESSAGES" });
+    expect(ctx.messages.some((m) => m.includes("cancelled"))).toBe(true);
   });
 
   test("/compact compacts context", async () => {
@@ -312,6 +331,18 @@ describe("Session handlers", () => {
     await h.kill();
     expect(ctx.dispatched).toContainEqual({ type: "RESET_STATS" });
     expect(ctx.dispatched).toContainEqual({ type: "CLEAR_MESSAGES" });
+  });
+
+  test("/kill on error does not change local state", async () => {
+    const ctx = createTestCtx({
+      killSession: (() => Promise.reject(new Error("backend failure"))) as any,
+    });
+    const h = createSessionHandlers(ctx);
+    await h.kill();
+    // Should show error, not dispatch state changes
+    expect(ctx.messages.some((m) => m.includes("backend failure"))).toBe(true);
+    expect(ctx.dispatched).not.toContainEqual({ type: "RESET_STATS" });
+    expect(ctx.dispatched).not.toContainEqual({ type: "CLEAR_MESSAGES" });
   });
 
   test("/archive archives session", async () => {
@@ -501,12 +532,21 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/upgrade without email launches email wizard", async () => {
+  test("/upgrade without email launches email wizard with proper validation", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.upgrade("");
     expect(ctx.wizardConfigRef.current).not.toBeNull();
     expect(ctx.wizardConfigRef.current!.title).toContain("Upgrade");
+
+    // Test the email validation function
+    const step = ctx.wizardConfigRef.current!.steps[0]!;
+    const validate = step.validate!;
+    expect(validate("not-an-email")).toBeDefined();        // invalid
+    expect(validate("foo@")).toBeDefined();                 // invalid
+    expect(validate("user@example.com")).toBeUndefined();   // valid
+    expect(validate("a@b.c")).toBeUndefined();              // valid minimal
+    expect(validate("with spaces@bad.com")).toBeDefined();  // invalid
   });
 
   test("/upgrade with email starts checkout", async () => {
@@ -523,11 +563,12 @@ describe("System handlers", () => {
     expect(ctx.messages[0]).toContain("portal");
   });
 
-  test("/cancel requires daemon", async () => {
+  test("/cancel redirects to billing portal", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.cancel();
-    expect(ctx.messages[0]).toContain("daemon");
+    expect(ctx.messages[0]).toContain("subscription");
+    expect(ctx.messages[0]).toContain("billing.example.com");
   });
 
   test("/task shows task hub", async () => {
@@ -558,27 +599,17 @@ describe("System handlers", () => {
     expect(ctx.messages.length).toBeGreaterThan(0);
   });
 
-  test("/theme with no args launches theme picker wizard", async () => {
+  test("/theme shows active theme", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.theme("");
-    expect(ctx.wizardConfigRef.current).not.toBeNull();
-    expect(ctx.wizardConfigRef.current!.title).toContain("Theme");
+    expect(ctx.messages[0]).toContain("jeriko");
   });
 
-  test("/theme with invalid name shows error", async () => {
+  test("/theme with args still shows active theme", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
-    await h.theme("nonexistent-theme");
-    expect(ctx.messages[0]).toContain("Unknown theme");
-  });
-
-  test("/theme with valid name switches theme", async () => {
-    const ctx = createTestCtx();
-    const h = createSystemHandlers(ctx);
-    await h.theme("dracula");
-    expect(ctx.messages[0]).toContain("switched");
-    // Reset to default so other tests aren't affected
-    setActiveTheme("jeriko" as ThemePreset);
+    await h.theme("anything");
+    expect(ctx.messages[0]).toContain("jeriko");
   });
 });

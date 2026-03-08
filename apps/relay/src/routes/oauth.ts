@@ -14,6 +14,7 @@ import {
   TOKEN_EXCHANGE_PROVIDERS,
   exchangeCodeForTokens,
   refreshAccessToken,
+  buildAuthorizationUrl,
 } from "../../../../src/shared/oauth-exchange.js";
 import type {
   RelayOAuthCallbackMessage,
@@ -73,6 +74,7 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: string; client
   ["onedrive", { clientIdKey: "RELAY_MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "RELAY_MICROSOFT_OAUTH_CLIENT_SECRET" }],
   ["outlook",  { clientIdKey: "RELAY_MICROSOFT_OAUTH_CLIENT_ID", clientSecretKey: "RELAY_MICROSOFT_OAUTH_CLIENT_SECRET" }],
   ["vercel",   { clientIdKey: "RELAY_VERCEL_OAUTH_CLIENT_ID",    clientSecretKey: "RELAY_VERCEL_OAUTH_CLIENT_SECRET" }],
+  ["discord",  { clientIdKey: "RELAY_DISCORD_OAUTH_CLIENT_ID",   clientSecretKey: "RELAY_DISCORD_OAUTH_CLIENT_SECRET" }],
 ]);
 
 function getRelayCredentials(provider: string): RelayOAuthCredentials | undefined {
@@ -211,19 +213,49 @@ export function oauthRoutes(): Hono {
   });
 
   /**
-   * GET /oauth/:provider/start — Forward to daemon.
-   * Daemon builds auth URL with PKCE, relay stores verifier for callback.
+   * GET /oauth/:provider/start — Build auth URL and redirect.
+   *
+   * Two modes:
+   *   1. Relay-side (default): Relay has credentials → builds auth URL directly,
+   *      stores PKCE verifier if needed, redirects to provider's consent page.
+   *   2. Daemon-side (fallback): No relay credentials → forwards to daemon.
    */
   router.get("/:provider/start", async (c) => {
     const provider = c.req.param("provider");
     const userId = extractUserId(c);
     const stateToken = extractStateToken(c);
+    const compositeState = new URL(c.req.url).searchParams.get("state") ?? "";
 
     if (!userId) {
       return c.html(errorHtml("Missing or invalid state parameter."), 400);
     }
 
-    // Collect all query parameters
+    // Attempt relay-side auth URL building
+    const credentials = getRelayCredentials(provider);
+    const providerConfig = TOKEN_EXCHANGE_PROVIDERS.get(provider);
+
+    if (credentials && providerConfig) {
+      // Relay has credentials — build the auth URL directly
+      const reqUrl = new URL(c.req.url);
+      const redirectUri = `${reqUrl.protocol}//${reqUrl.host}/oauth/${provider}/callback`;
+      // Build provider-specific context from query params (e.g. ?shop=mystore for Shopify)
+      const startContext: Record<string, string> = {};
+      for (const [key, value] of reqUrl.searchParams) {
+        if (key !== "state") startContext[key] = value;
+      }
+      const result = await buildAuthorizationUrl(providerConfig, credentials.clientId, redirectUri, compositeState, Object.keys(startContext).length > 0 ? startContext : undefined);
+
+      if (result.codeVerifier && stateToken) {
+        pendingPKCE.set(stateToken, {
+          codeVerifier: result.codeVerifier,
+          createdAt: Date.now(),
+        });
+      }
+
+      return c.redirect(result.url, 302);
+    }
+
+    // Fallback: forward to daemon
     const params: Record<string, string> = {};
     for (const [key, value] of new URL(c.req.url).searchParams) {
       params[key] = value;
@@ -242,13 +274,11 @@ export function oauthRoutes(): Hono {
       return c.html(errorHtml(ERROR_MESSAGES[result.error]!), result.statusCode);
     }
 
-    // Store PKCE verifier keyed by state token
     if (result.codeVerifier && stateToken) {
       pendingPKCE.set(stateToken, {
         codeVerifier: result.codeVerifier,
         createdAt: Date.now(),
       });
-      // Clean up requestId-keyed entry
       pendingPKCE.delete(result.requestId);
     }
 
@@ -305,6 +335,15 @@ export function oauthRoutes(): Hono {
         }
       }
 
+      // Build provider-specific context from query params (e.g. ?shop=mystore for Shopify)
+      const callbackContext: Record<string, string> = {};
+      for (const [key, value] of url.searchParams) {
+        if (key !== "state" && key !== "code" && key !== "error" && key !== "error_description") {
+          callbackContext[key] = value;
+        }
+      }
+      const exchangeContext = Object.keys(callbackContext).length > 0 ? callbackContext : undefined;
+
       // Build redirect URI — must match what was used in /start
       // The Bun relay uses a configurable base URL for dev
       const relayBaseUrl = process.env.RELAY_PUBLIC_URL ?? `http://127.0.0.1:${process.env.RELAY_PORT ?? "8080"}`;
@@ -318,6 +357,7 @@ export function oauthRoutes(): Hono {
           clientId: credentials.clientId,
           clientSecret: credentials.clientSecret,
           codeVerifier,
+          context: exchangeContext,
         });
 
         // Send tokens to daemon via WebSocket

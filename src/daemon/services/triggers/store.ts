@@ -1,7 +1,7 @@
 // Trigger persistence — SQLite-backed store for trigger configurations.
 
 import { getDatabase } from "../../storage/db.js";
-import type { TriggerConfig } from "./engine.js";
+import type { TriggerConfig, TriggerAction } from "./engine.js";
 import { getLogger } from "../../../shared/logger.js";
 
 const log = getLogger();
@@ -252,7 +252,7 @@ export class TriggerStore {
       type: row.type as TriggerConfig["type"],
       enabled: row.enabled === 1,
       config: safeParse(row.config),
-      action: safeParse(row.action),
+      action: safeParse(row.action) as unknown as TriggerAction,
       label: row.label ?? undefined,
       run_count: row.run_count ?? 0,
       error_count: row.error_count ?? 0,
