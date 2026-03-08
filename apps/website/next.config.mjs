@@ -1,5 +1,6 @@
 /** @type {import('next').NextConfig} */
 
+const CDN = "https://releases.jeriko.ai";
 const GITHUB_RAW =
   "https://raw.githubusercontent.com/EtheonAI/jeriko/main/scripts";
 
@@ -10,7 +11,7 @@ const nextConfig = {
       // curl -fsSL https://jeriko.ai/install.sh | bash
       {
         source: "/install.sh",
-        destination: `${GITHUB_RAW}/install.sh`,
+        destination: `${CDN}/install.sh`,
         permanent: false,
       },
       // irm https://jeriko.ai/install.ps1 | iex
@@ -28,7 +29,7 @@ const nextConfig = {
       // Convenience alias: curl -fsSL https://jeriko.ai/install | bash
       {
         source: "/install",
-        destination: `${GITHUB_RAW}/install.sh`,
+        destination: `${CDN}/install.sh`,
         permanent: false,
       },
     ];
