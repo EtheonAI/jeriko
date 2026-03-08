@@ -39,7 +39,7 @@ fi
 
 info()  { echo -e "${BLUE}→${NC} $1"; }
 ok()    { echo -e "${GREEN}✓${NC} $1"; }
-warn()  { echo -e "${YELLOW}!${NC} $1"; }
+warn()  { echo -e "${YELLOW}⚠${NC} $1"; }
 err()   { echo -e "${RED}✗${NC} $1" >&2; }
 die()   { err "$1"; exit 1; }
 
@@ -343,7 +343,7 @@ case ":$PATH:" in
 esac
 
 echo ""
-echo -e "${GREEN}${BOLD}  Installation complete!${NC}"
+echo -e "${GREEN}${BOLD}  Installation complete${NC}"
 echo ""
 if [ -n "$EXISTING_VERSION" ]; then
     echo -e "  ${DIM}Upgraded:${NC} ${EXISTING_VERSION} → ${VERSION}"
