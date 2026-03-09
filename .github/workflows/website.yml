@@ -1,0 +1,46 @@
+name: Website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/website/**"
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/website/**"
+  workflow_dispatch:
+
+concurrency:
+  group: website-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Website
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-bun
+
+      - name: Build Next.js
+        run: bun run website:build
+
+      - name: Verify build output
+        run: |
+          test -d apps/website/.next || (echo "Build output missing" && exit 1)
+          echo "Website build verified"
+
+  # Deploy is gated behind a placeholder until hosting is configured.
+  # See docs/SECRETS-SETUP.md for Vercel/CF Pages configuration.
+  deploy:
+    name: Deploy Website
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy
+        run: echo "Website deploy target not yet configured. See docs/SECRETS-SETUP.md"

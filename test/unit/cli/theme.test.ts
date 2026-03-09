@@ -28,8 +28,8 @@ describe("PALETTE", () => {
     }
   });
 
-  test("brand is steel blue (#5b9bd5)", () => {
-    expect(PALETTE.brand).toBe("#5b9bd5");
+  test("brand is electric indigo (#7C5AFF)", () => {
+    expect(PALETTE.brand).toBe("#7C5AFF");
   });
 
   test("blue alias matches tool", () => {

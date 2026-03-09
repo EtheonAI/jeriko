@@ -549,14 +549,14 @@ describe("Command: /connect", () => {
     expect(text).toContain("auth twilio");
   });
 
-  it("with non-OAuth connector: paypal (API-key only)", async () => {
+  it("with OAuth connector: paypal generates connect URL", async () => {
     resetCapture();
     emitCommand("/connect paypal");
     await settle();
 
     const text = lastSent();
-    expect(text).toContain("doesn't support OAuth");
-    expect(text).toContain("auth paypal");
+    expect(text).toContain("Connect PayPal");
+    expect(text).toContain("/oauth/paypal/start");
   });
 
   it("with unknown connector shows oauth list", async () => {

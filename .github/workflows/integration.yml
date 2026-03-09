@@ -24,22 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Relay E2E tests
         run: bun test test/integration/relay-e2e.test.ts --timeout 60000
 
@@ -48,22 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Channel connector integration
         run: bun test test/integration/channel-connectors.test.ts --timeout 60000
 
@@ -72,22 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Command integration tests
         run: bun test test/integration/commands.test.ts --timeout 60000
 
@@ -96,22 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: E2E channel commands
         run: bun test test/e2e/ --timeout 60000
 
@@ -120,22 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Billing unit tests
         run: bun test test/unit/billing/ --timeout 30000
 
@@ -144,22 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Connector tests
         run: bun test test/unit/connectors.test.ts test/unit/oauth.test.ts --timeout 30000
 
@@ -168,21 +78,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
-
+      - uses: ./.github/actions/setup-bun
       - name: Trigger tests
         run: bun test test/unit/trigger-engine.test.ts test/unit/trigger-routes.test.ts test/unit/email-trigger.test.ts --timeout 30000

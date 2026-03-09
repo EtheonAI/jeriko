@@ -18,21 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Typecheck
         run: bun run check
@@ -52,21 +38,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-
-      - run: bun install
+      - uses: ./.github/actions/setup-bun
 
       - name: Extract version
         id: version

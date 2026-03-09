@@ -3,13 +3,13 @@ name: CI
 # ─────────────────────────────────────────────────────────────────────────────
 # Pipeline Architecture (5 stages, progressive gates):
 #
-#   Stage 1: Typecheck + Smoke (~30s)     ← fail fast
-#   Stage 2: Unit tests by subsystem      ← parallel matrix, isolated failures
-#   Stage 3: Integration tests            ← real servers, WebSockets, HTTP
-#   Stage 4: E2E tests                    ← full system flow
-#   Stage 5: Build verification           ← binary compiles + output contract
+#   Stage 1: Typecheck + Smoke (~30s)     <- fail fast
+#   Stage 2: Unit tests by subsystem      <- parallel matrix, isolated failures
+#   Stage 3: Integration tests            <- real servers, WebSockets, HTTP
+#   Stage 4: E2E tests                    <- full system flow
+#   Stage 5: Build verification           <- binary compiles + output contract
 #
-# Each stage gates the next. If billing unit tests fail, you know in 30s —
+# Each stage gates the next. If billing unit tests fail, you know in 30s --
 # not after waiting 5 minutes for camera/browser/channel tests to finish.
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -37,18 +37,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - run: bun run check
 
   smoke:
@@ -56,18 +47,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - run: bun run test:smoke
 
   # ─── Stage 2: Unit tests by subsystem ───────────────────────────────────
@@ -97,24 +79,22 @@ jobs:
           - streaming
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - name: Configure git for tests
         run: |
           git config --global user.email "ci@test.com"
           git config --global user.name "CI"
       - name: "Run ${{ matrix.suite }} unit tests"
-        run: bun run test:unit:${{ matrix.suite }} --timeout 30000
+        run: bun run test:unit:${{ matrix.suite }} --timeout 30000 2>&1 | tee test-output.txt
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.suite }}
+          path: test-output.txt
+          retention-days: 5
 
   # ─── Stage 3: Integration tests ─────────────────────────────────────────
   # Real servers, WebSocket connections, HTTP requests.
@@ -134,20 +114,18 @@ jobs:
           - connectors
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - name: "Run ${{ matrix.suite }} integration tests"
-        run: bun run test:integration:${{ matrix.suite }} --timeout 60000
+        run: bun run test:integration:${{ matrix.suite }} --timeout 60000 2>&1 | tee test-output.txt
+      - name: Upload test output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-integration-${{ matrix.suite }}
+          path: test-output.txt
+          retention-days: 5
 
   # ─── Stage 4: End-to-end tests ──────────────────────────────────────────
   # Full system flow: ChannelRegistry + Router + DB + all commands.
@@ -159,18 +137,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - name: Run E2E tests
         run: bun run test:e2e --timeout 60000
 
@@ -183,18 +152,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - uses: ./.github/actions/setup-bun
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - name: Cache dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.bun/install/cache
-            node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('bun.lock') }}
-          restore-keys: deps-${{ runner.os }}-
-      - run: bun install
       - name: Build binary (Linux x64)
         run: bun run build:linux-x64
       - name: Verify binary runs
@@ -212,3 +172,42 @@ jobs:
           assert 'ok' in data, 'Missing ok field'
           print('Output contract verified')
           " || echo "Output contract check skipped (sys may need OS features)"
+
+  # ─── CI Summary ─────────────────────────────────────────────────────────
+  # Always runs, reports pass/fail for each stage in the GitHub Actions summary.
+
+  ci-summary:
+    name: CI Summary
+    if: always()
+    needs: [typecheck, smoke, unit-tests, integration-tests, e2e-tests, build-verify]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const needs = ${{ toJSON(needs) }};
+            const stageOrder = [
+              ['typecheck', 'Typecheck'],
+              ['smoke', 'Smoke Tests'],
+              ['unit-tests', 'Unit Tests (12 suites)'],
+              ['integration-tests', 'Integration Tests'],
+              ['e2e-tests', 'E2E Tests'],
+              ['build-verify', 'Build Verification'],
+            ];
+            let summary = '## CI Pipeline Results\n\n';
+            let allPassed = true;
+            for (const [key, label] of stageOrder) {
+              const result = needs[key]?.result || 'unknown';
+              const icon = result === 'success' ? '\u2705' :
+                           result === 'skipped' ? '\u23ed\ufe0f' : '\u274c';
+              if (result !== 'success' && result !== 'skipped') allPassed = false;
+              summary += `| ${icon} | **${label}** | \`${result}\` |\n`;
+            }
+            summary = '| | Stage | Result |\n|---|---|---|\n' + summary;
+            if (allPassed) {
+              summary = '### \u2705 All stages passed\n\n' + summary;
+            } else {
+              summary = '### \u274c Pipeline failed\n\n' + summary;
+            }
+            core.summary.addRaw(summary).write();

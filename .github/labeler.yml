@@ -1,0 +1,59 @@
+cli:
+  - changed-files:
+      - any-glob-to-any-file: 'src/cli/**'
+daemon:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/**'
+agent:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/agent/**'
+billing:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/billing/**'
+relay:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'apps/relay/**'
+          - 'apps/relay-worker/**'
+          - 'src/daemon/services/relay/**'
+          - 'src/shared/relay-protocol.ts'
+website:
+  - changed-files:
+      - any-glob-to-any-file: 'apps/website/**'
+connectors:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/services/connectors/**'
+channels:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/services/channels/**'
+tests:
+  - changed-files:
+      - any-glob-to-any-file: 'test/**'
+ci:
+  - changed-files:
+      - any-glob-to-any-file: '.github/**'
+docs:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'docs/**'
+          - '*.md'
+security:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/shared/secrets.ts'
+          - 'src/daemon/exec/gateway.ts'
+          - 'src/daemon/plugin/sandbox.ts'
+platform:
+  - changed-files:
+      - any-glob-to-any-file: 'src/platform/**'
+shared:
+  - changed-files:
+      - any-glob-to-any-file: 'src/shared/**'
+triggers:
+  - changed-files:
+      - any-glob-to-any-file: 'src/daemon/services/triggers/**'
+skills:
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/shared/skill*.ts'
+          - 'src/daemon/agent/tools/skill.ts'

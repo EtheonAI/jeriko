@@ -21,3 +21,66 @@ updates:
     open-pull-requests-limit: 10
     labels:
       - ci
+
+  # Relay Worker (Cloudflare Worker, production)
+  - package-ecosystem: npm
+    directory: /apps/relay-worker
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - relay
+
+  # Website (Next.js)
+  - package-ecosystem: npm
+    directory: /apps/website
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - website
+
+  # Relay (Bun dev server)
+  - package-ecosystem: npm
+    directory: /apps/relay
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - relay
+
+  # Protocol package
+  - package-ecosystem: npm
+    directory: /packages/protocol
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  # SDK package
+  - package-ecosystem: npm
+    directory: /packages/sdk
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+
+  # Plugin SDK package
+  - package-ecosystem: npm
+    directory: /packages/plugin-sdk
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
