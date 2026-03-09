@@ -625,12 +625,12 @@ describe("System handlers", () => {
     expect(ctx.messages[0]).toContain("Checkout");
   });
 
-  test("/billing opens portal with manage/cancel message", async () => {
+  test("/billing opens portal", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.billing();
     expect(ctx.messages[0]).toContain("portal");
-    expect(ctx.messages[0]).toContain("cancel");
+    expect(ctx.messages[0]).toContain("billing.stripe.com");
   });
 
   test("/tasks no args launches wizard picker", async () => {

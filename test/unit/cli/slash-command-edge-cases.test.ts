@@ -1144,19 +1144,19 @@ describe("System handlers — edge cases", () => {
   // ── /billing ──
 
   describe("/billing", () => {
-    test("opens billing portal", async () => {
+    test("opens static billing portal", async () => {
       const ctx = createTestCtx();
       const h = createSystemHandlers(ctx);
       await h.billing();
-      expect(ctx.backend.openBillingPortal).toHaveBeenCalledTimes(1);
       expect(ctx.messages[0]).toContain("portal");
+      expect(ctx.messages[0]).toContain("billing.stripe.com");
     });
 
-    test("error propagates", async () => {
-      const ctx = createTestCtx({ openBillingPortal: () => Promise.reject(new Error("auth failed")) } as any);
+    test("manage subcommand opens static portal", async () => {
+      const ctx = createTestCtx();
       const h = createSystemHandlers(ctx);
-      await h.billing();
-      expect(ctx.messages.some((m) => m.includes("auth failed"))).toBe(true);
+      await h.billing("manage");
+      expect(ctx.messages[0]).toContain("billing.stripe.com");
     });
   });
 
