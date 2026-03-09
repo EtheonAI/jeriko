@@ -76,16 +76,15 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "stripe",
     label: "Stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
-    tokenUrl: "https://api.stripe.com/v1/oauth/token",
-    scopes: [],
+    authUrl: "https://connect.stripe.com/oauth/authorize",
+    tokenUrl: "https://connect.stripe.com/oauth/token",
+    scopes: ["read_write"],
     bakedIdKey: "stripe",
     clientIdVar: "STRIPE_OAUTH_CLIENT_ID",
     clientSecretVar: "STRIPE_SECRET_KEY",
     tokenEnvVar: "STRIPE_ACCESS_TOKEN",
     refreshTokenEnvVar: "STRIPE_REFRESH_TOKEN",
     tokenExchangeAuth: "basic-apikey",
-    skipResponseType: true,
   },
   {
     name: "github",
@@ -425,7 +424,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "paypal",
     label: "PayPal",
-    authUrl: "https://www.paypal.com/signin/authorize",
+    authUrl: "https://www.paypal.com/connect",
     tokenUrl: "https://api-m.paypal.com/v1/oauth2/token",
     scopes: ["openid", "profile", "email"],
     bakedIdKey: "paypal",
