@@ -76,7 +76,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "stripe",
     label: "Stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/chnlink_61UIOdwbUoGWqyNMT41CxYSOxDrnsCbY/authorize",
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
     scopes: [],
     bakedIdKey: "stripe",
@@ -427,13 +427,20 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     label: "PayPal",
     authUrl: "https://www.paypal.com/connect",
     tokenUrl: "https://api-m.paypal.com/v1/oauth2/token",
-    scopes: ["openid", "profile", "email"],
+    scopes: [
+      "openid",
+      "https://uri.paypal.com/services/payments/payment/authcapture",
+      "https://uri.paypal.com/services/payments/refund",
+      "https://uri.paypal.com/services/invoicing",
+      "https://uri.paypal.com/services/subscriptions",
+    ],
     bakedIdKey: "paypal",
     clientIdVar: "PAYPAL_OAUTH_CLIENT_ID",
     clientSecretVar: "PAYPAL_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "PAYPAL_ACCESS_TOKEN",
     refreshTokenEnvVar: "PAYPAL_REFRESH_TOKEN",
     tokenExchangeAuth: "basic",
+    extraAuthParams: { flowEntry: "static" },
   },
 ] as const;
 
