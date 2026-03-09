@@ -2929,6 +2929,20 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       case "billing": {
         const subCommand = rest[0]?.toLowerCase();
 
+        // /billing manage — open static billing portal
+        if (subCommand === "manage") {
+          const { BILLING_PORTAL_URL } = await import("../../billing/config.js");
+          await safeKeyboard(
+            metadata,
+            "Manage your account, payment method, and invoices:",
+            [
+              [{ label: "Open Billing Portal", url: BILLING_PORTAL_URL }],
+              [{ label: "« Billing", data: "/billing" }],
+            ],
+          );
+          return;
+        }
+
         // /billing events — show recent billing event log
         if (subCommand === "events") {
           const { getRecentEvents } = await import("../../billing/store.js");
@@ -3026,6 +3040,7 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           [{ label: "View Plan", data: "/plan" }],
         ];
 
+        buttons.push([{ label: "Manage Account", data: "/billing manage" }]);
         if (licState.tier === "free") {
           buttons.push([{ label: "Upgrade to Pro", data: "/upgrade" }]);
         } else {

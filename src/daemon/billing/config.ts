@@ -17,6 +17,9 @@ export const TIER_LIMITS = {
 /** Human-readable Pro plan price for display in CLI, channels, and docs. */
 export const PRO_PRICE_DISPLAY = "$19.99/mo";
 
+/** Static Stripe Customer Portal login link — always accessible, no API call needed. */
+export const BILLING_PORTAL_URL = "https://billing.stripe.com/p/login/4gM4gy6eafOm1Bo5FYe3e00";
+
 export type BillingTier = keyof typeof TIER_LIMITS;
 
 /** Type guard for validating a string as a BillingTier. */

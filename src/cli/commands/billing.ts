@@ -11,7 +11,7 @@
 import type { CommandHandler } from "../dispatcher.js";
 import { parseArgs, flagBool, flagStr } from "../../shared/args.js";
 import { ok, fail } from "../../shared/output.js";
-import { PRO_PRICE_DISPLAY } from "../../daemon/billing/config.js";
+import { PRO_PRICE_DISPLAY, BILLING_PORTAL_URL } from "../../daemon/billing/config.js";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -190,14 +190,21 @@ export const billingCommand: CommandHandler = {
     const subcommand = parsed.positional[0];
 
     if (flagBool(parsed, "help")) {
-      console.log("Usage: jeriko billing [events]");
+      console.log("Usage: jeriko billing [manage|events]");
       console.log("\nManage your billing, subscription, and invoices.");
-      console.log("Opens the Stripe Customer Portal in your browser.");
       console.log("\nSubcommands:");
+      console.log("  manage    Open the billing portal to manage your account");
       console.log("  events    List recent billing events (audit trail)");
       console.log("\nFlags:");
       console.log("  --help    Show this help");
       process.exit(0);
+    }
+
+    // Subcommand: manage — open static billing portal
+    if (subcommand === "manage") {
+      await openInBrowser(BILLING_PORTAL_URL);
+      ok({ url: BILLING_PORTAL_URL, message: "Billing portal opened in browser" });
+      return;
     }
 
     // Subcommand: events

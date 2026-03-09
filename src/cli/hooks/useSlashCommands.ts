@@ -119,7 +119,7 @@ export function useSlashCommands({
         // Billing
         "/plan":            () => system.plan(),
         "/upgrade":         () => system.upgrade(args),
-        "/billing":         () => system.billing(),
+        "/billing":         () => system.billing(args),
 
         // Theme
         "/theme":           () => system.theme(args),

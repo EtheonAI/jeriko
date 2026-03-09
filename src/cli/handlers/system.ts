@@ -792,7 +792,14 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
       }
     },
 
-    async billing(): Promise<void> {
+    async billing(args = ""): Promise<void> {
+      const sub = args.trim().toLowerCase();
+      if (sub === "manage") {
+        const { BILLING_PORTAL_URL } = await import("../../daemon/billing/config.js");
+        openInBrowser(BILLING_PORTAL_URL);
+        addSystemMessage(t.green(`\u2713 Billing portal opened: ${BILLING_PORTAL_URL}`));
+        return;
+      }
       try {
         const result = await backend.openBillingPortal();
         openInBrowser(result.url);
