@@ -13,7 +13,8 @@
  *   6. Add to PATH
  *   7. Install templates (if found)
  *   8. Verify installation
- *   9. Print success
+ *   9. Stop stale daemon
+ *  10. Print success
  */
 
 import {
@@ -30,6 +31,7 @@ import {
   VERSION_TARGET_RE,
 } from "./install-utils.js";
 import { execSync } from "node:child_process";
+import { isDaemonRunning, readPid, cleanupPidFile } from "../../lib/daemon.js";
 
 /**
  * Detect the version of the currently running binary.
@@ -57,6 +59,31 @@ function resolveVersion(target: string): string {
   } catch { /* ignore */ }
 
   return "unknown";
+}
+
+/**
+ * Stop any running daemon so it restarts fresh on next `jeriko` invocation.
+ *
+ * Reuses PID/socket management from `src/cli/lib/daemon.ts` to avoid
+ * reimplementing daemon lifecycle logic. Without this, a daemon started
+ * with an empty/corrupt agent.md retains its boot-time (empty) system
+ * prompt indefinitely — subsequent CLI connections via IPC inherit the
+ * stale prompt.
+ */
+function stopStaleDaemon(): void {
+  if (!isDaemonRunning()) return;
+
+  const pid = readPid();
+  if (!pid) return;
+
+  try {
+    process.kill(pid, "SIGTERM");
+    info("Stopped existing daemon (will restart fresh on next launch)");
+  } catch {
+    // Process already gone
+  }
+
+  cleanupPidFile();
 }
 
 /**
@@ -94,6 +121,11 @@ export async function runSelfInstall(target: string): Promise<void> {
 
   // 7. Verify
   verifyInstallation();
+
+  // 8. Stop any running daemon so it restarts fresh with the new binary
+  // and agent prompt. A stale daemon retains its boot-time system prompt —
+  // if agent.md was empty/missing at that boot, the agent has no identity.
+  stopStaleDaemon();
 
   // Done — daemon is NOT started here. It starts automatically when the user
   // runs `jeriko` — createBackend() calls ensureDaemon() which auto-starts

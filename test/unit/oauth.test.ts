@@ -24,8 +24,8 @@ import {
 // ---------------------------------------------------------------------------
 
 describe("OAuth providers", () => {
-  it("defines exactly 20 providers", () => {
-    expect(OAUTH_PROVIDERS.length).toBe(20);
+  it("defines exactly 22 providers", () => {
+    expect(OAUTH_PROVIDERS.length).toBe(22);
   });
 
   it("has all required fields on every provider", () => {
@@ -52,11 +52,11 @@ describe("OAuth providers", () => {
     expect(getOAuthProvider("nonexistent")).toBeUndefined();
   });
 
-  it("getOAuthProvider returns Stripe with Basic auth exchange", () => {
+  it("getOAuthProvider returns Stripe with API-key Basic auth exchange", () => {
     const stripe = getOAuthProvider("stripe");
     expect(stripe).toBeDefined();
     expect(stripe!.label).toBe("Stripe");
-    expect(stripe!.tokenExchangeAuth).toBe("basic");
+    expect(stripe!.tokenExchangeAuth).toBe("basic-apikey");
     expect(stripe!.clientSecretVar).toBe("STRIPE_SECRET_KEY");
     expect(stripe!.tokenEnvVar).toBe("STRIPE_ACCESS_TOKEN");
     expect(stripe!.refreshTokenEnvVar).toBe("STRIPE_REFRESH_TOKEN");
@@ -70,8 +70,9 @@ describe("OAuth providers", () => {
     expect(isOAuthCapable("gdrive")).toBe(true);
     expect(isOAuthCapable("vercel")).toBe(true);
     expect(isOAuthCapable("gmail")).toBe(true);
+    expect(isOAuthCapable("paypal")).toBe(true);
+    expect(isOAuthCapable("slack")).toBe(true);
     // API-key only
-    expect(isOAuthCapable("paypal")).toBe(false);
     expect(isOAuthCapable("twilio")).toBe(false);
   });
 

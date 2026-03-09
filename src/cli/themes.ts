@@ -1,11 +1,11 @@
 /**
  * Themes — Color theme definition for the CLI.
  *
- * Single "jeriko" theme — Dark Blue palette.
+ * Single "jeriko" theme — Electric Indigo palette.
  *
  * Design rationale:
- *   - Dark blue (#1e3a5f) as brand: deep, authoritative, professional
- *   - Steel blue (#4a8cc7) as accent: lighter complement for interactive elements
+ *   - Electric Indigo (#7C5AFF) as brand: vivid violet-blue, alive and futuristic
+ *   - Deep indigo (#3B2D80) as brandDim: muted complement for headers/chrome
  *   - Cool-toned slate hierarchy: cohesive temperature across all grays
  *   - All semantic colors maintain WCAG AAA (7:1+) on dark backgrounds
  *
@@ -65,12 +65,12 @@ export type ThemePreset = "jeriko";
 export const THEMES: Record<ThemePreset, Theme> = {
   jeriko: {
     name: "jeriko",
-    displayName: "Jeriko",
+    displayName: "Jeriko (Electric Indigo)",
     type: "dark",
     colors: {
-      // Brand — dark blue / steel blue
-      brand:    "#5b9bd5",     // steel blue: readable on dark, professional
-      brandDim: "#1e3a5f",     // deep navy: headers, subtle accents
+      // Brand — Electric Indigo
+      brand:    "#7C5AFF",     // electric indigo: vivid violet-blue, alive
+      brandDim: "#3B2D80",     // deep indigo: headers, subtle accents
 
       // Text hierarchy — cool slate
       text:     "#e2e8f0",     // slate-200: bright, easy to read
@@ -79,13 +79,13 @@ export const THEMES: Record<ThemePreset, Theme> = {
       faint:    "#334155",     // slate-700: very subtle chrome
 
       // Semantic — tool calls
-      tool:     "#5b9bd5",     // matches brand for consistency
+      tool:     "#9B7DFF",     // lighter indigo: distinguishable from brand
 
       // Status — universal colors
       success:  "#4ade80",     // green-400: universally understood
       error:    "#f87171",     // red-400: high-urgency
       warning:  "#fbbf24",     // amber-400: caution
-      info:     "#7dd3fc",     // sky-300: light blue, complements brand
+      info:     "#818CF8",     // indigo-400: cool complement to brand
 
       // Accent palette
       purple:   "#a78bfa",     // violet-400: sub-agents

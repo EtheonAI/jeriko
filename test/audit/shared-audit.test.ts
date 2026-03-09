@@ -1006,10 +1006,10 @@ describe("oauth-exchange", () => {
     expect(TOKEN_EXCHANGE_PROVIDERS.size).toBeGreaterThan(10);
   });
 
-  test("stripe uses basic auth", () => {
+  test("stripe uses basic-apikey auth", () => {
     const stripe = TOKEN_EXCHANGE_PROVIDERS.get("stripe");
     expect(stripe).toBeDefined();
-    expect(stripe!.tokenExchangeAuth).toBe("basic");
+    expect(stripe!.tokenExchangeAuth).toBe("basic-apikey");
   });
 
   test("github uses body auth", () => {

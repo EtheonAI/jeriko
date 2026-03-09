@@ -1,13 +1,13 @@
 /**
  * Instagram connector — posts, stories, reels, comments, and insights.
  *
- * Extends BearerConnector for OAuth2 Bearer token auth via Meta's Graph API.
- * Uses the Instagram Graph API v21.0 for business/creator accounts.
+ * Extends BearerConnector for OAuth2 Bearer token auth via the Instagram
+ * Platform API (graph.instagram.com). Uses the Instagram API v22.0 for
+ * business/creator accounts.
  *
- * Important: The Instagram Graph API lives on graph.facebook.com (NOT
- * graph.instagram.com, which is the deprecated Basic Display API).
- * Most endpoints require the Instagram Business Account ID, not "me".
- * The account ID is discovered via /me/accounts?fields=instagram_business_account.
+ * The Instagram Platform API uses `me` for the authenticated user — no need
+ * to discover an Instagram Business Account ID via Facebook Pages. Tokens
+ * obtained from the instagram_business_* OAuth scopes work directly.
  */
 
 import { BearerConnector } from "../base.js";
@@ -18,11 +18,11 @@ export class InstagramConnector extends BearerConnector {
   readonly version = "1.0.0";
 
   protected readonly auth = {
-    baseUrl: "https://graph.facebook.com/v21.0",
+    baseUrl: "https://graph.instagram.com/v22.0",
     tokenVar: "INSTAGRAM_ACCESS_TOKEN",
     clientIdVar: "INSTAGRAM_OAUTH_CLIENT_ID",
     clientSecretVar: "INSTAGRAM_OAUTH_CLIENT_SECRET",
-    healthPath: "/me?fields=id,name",
+    healthPath: "/me?fields=id,username",
     label: "Instagram",
   };
 
@@ -32,39 +32,33 @@ export class InstagramConnector extends BearerConnector {
 
   protected override aliases(): Record<string, string> {
     return {
-      me: "me",
-      accounts: "accounts",
+      me: "profile",
       media: "media.list",
       stories: "stories.list",
       comments: "comments.list",
       insights: "insights",
+      publish: "media.publish",
     };
   }
 
   // ---------------------------------------------------------------------------
-  // API method dispatch — Instagram Graph API v21.0 (via graph.facebook.com)
+  // API method dispatch — Instagram Platform API v22.0
   // ---------------------------------------------------------------------------
 
   protected handlers() {
     return {
-      // Facebook user profile (to discover linked IG accounts)
-      "me": (_p: Record<string, unknown>) =>
-        this.get("/me", { fields: "id,name" }),
-
-      // Discover Instagram Business Accounts linked to Facebook Pages
-      "accounts": (_p: Record<string, unknown>) =>
-        this.get("/me/accounts", { fields: "id,name,instagram_business_account{id,username,media_count,profile_picture_url}" }),
-
-      // Instagram Business Account profile (requires IG account ID)
-      "profile": (p: Record<string, unknown>) =>
-        this.get(`/${p.user_id}`, {
-          fields: p.fields ?? "id,username,media_count,profile_picture_url,biography,followers_count,follows_count",
-        }),
+      // Profile
+      "profile": (p: Record<string, unknown>) => {
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}`, {
+          fields: p.fields ?? "id,username,name,account_type,media_count,profile_picture_url,followers_count,follows_count,biography",
+        });
+      },
 
       // Media
       "media.list": (p: Record<string, unknown>) => {
-        if (!p.user_id) return Promise.resolve({ ok: false, error: "user_id is required (Instagram Business Account ID)" } as ConnectorResult);
-        return this.get(`/${p.user_id}/media`, {
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}/media`, {
           fields: p.fields ?? "id,caption,media_type,media_url,timestamp,permalink",
           limit: p.limit,
         });
@@ -80,8 +74,8 @@ export class InstagramConnector extends BearerConnector {
 
       // Stories
       "stories.list": (p: Record<string, unknown>) => {
-        if (!p.user_id) return Promise.resolve({ ok: false, error: "user_id is required (Instagram Business Account ID)" } as ConnectorResult);
-        return this.get(`/${p.user_id}/stories`, {
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}/stories`, {
           fields: p.fields ?? "id,media_type,media_url,timestamp",
         });
       },
@@ -97,11 +91,19 @@ export class InstagramConnector extends BearerConnector {
       "comments.delete": (p: Record<string, unknown>) =>
         this.del(`/${p.id}`),
 
+      // Tags
+      "tags": (p: Record<string, unknown>) => {
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}/tags`, {
+          fields: p.fields ?? "id,caption,media_type,timestamp,permalink",
+        });
+      },
+
       // Insights — account level
       "insights": (p: Record<string, unknown>) => {
-        if (!p.user_id) return Promise.resolve({ ok: false, error: "user_id is required (Instagram Business Account ID)" } as ConnectorResult);
-        return this.get(`/${p.user_id}/insights`, {
-          metric: p.metric ?? "impressions,reach,profile_views",
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}/insights`, {
+          metric: p.metric ?? "reach,accounts_engaged,total_interactions",
           period: p.period ?? "day",
         });
       },
@@ -109,8 +111,16 @@ export class InstagramConnector extends BearerConnector {
       // Insights — media level
       "insights.media": (p: Record<string, unknown>) =>
         this.get(`/${p.media_id}/insights`, {
-          metric: p.metric ?? "impressions,reach,engagement",
+          metric: p.metric ?? "reach,likes,comments,shares,saved",
         }),
+
+      // Content publishing limit
+      "publishing_limit": (p: Record<string, unknown>) => {
+        const userId = p.user_id ?? "me";
+        return this.get(`/${userId}/content_publishing_limit`, {
+          fields: "config,quota_usage",
+        });
+      },
     };
   }
 
@@ -119,17 +129,12 @@ export class InstagramConnector extends BearerConnector {
   // ---------------------------------------------------------------------------
 
   /**
-   * Instagram Graph API requires a two-step publish flow:
+   * Instagram Platform API requires a two-step publish flow:
    *   1. POST /{user_id}/media — create a media container
    *   2. POST /{user_id}/media_publish — publish the container
-   *
-   * user_id must be the Instagram Business Account ID.
    */
   private async publishMedia(p: Record<string, unknown>): Promise<ConnectorResult> {
-    if (!p.user_id) {
-      return { ok: false, error: "user_id is required (Instagram Business Account ID)" };
-    }
-    const userId = p.user_id;
+    const userId = p.user_id ?? "me";
 
     // Step 1: Create container
     const containerBody: Record<string, unknown> = {};

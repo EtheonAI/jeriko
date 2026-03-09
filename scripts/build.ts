@@ -87,6 +87,7 @@ const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_INSTAGRAM_CLIENT_ID__:   JSON.stringify(process.env.BAKED_INSTAGRAM_CLIENT_ID ?? ""),
   __BAKED_THREADS_CLIENT_ID__:     JSON.stringify(process.env.BAKED_THREADS_CLIENT_ID   ?? ""),
   __BAKED_PAYPAL_CLIENT_ID__:      JSON.stringify(process.env.BAKED_PAYPAL_CLIENT_ID    ?? ""),
+  __BAKED_SLACK_CLIENT_ID__:       JSON.stringify(process.env.BAKED_SLACK_CLIENT_ID     ?? ""),
 };
 
 /** Packages that are always external (optional deps, never bundled). */

@@ -46,6 +46,8 @@ const PROVIDER_CREDENTIAL_MAP: ReadonlyMap<string, { clientIdKey: keyof Env; cli
   ["discord",      { clientIdKey: "DISCORD_OAUTH_CLIENT_ID",      clientSecretKey: "DISCORD_OAUTH_CLIENT_SECRET" }],
   ["instagram",    { clientIdKey: "INSTAGRAM_OAUTH_CLIENT_ID",    clientSecretKey: "INSTAGRAM_OAUTH_CLIENT_SECRET" }],
   ["threads",      { clientIdKey: "THREADS_OAUTH_CLIENT_ID",      clientSecretKey: "THREADS_OAUTH_CLIENT_SECRET" }],
+  ["slack",        { clientIdKey: "SLACK_OAUTH_CLIENT_ID",        clientSecretKey: "SLACK_OAUTH_CLIENT_SECRET" }],
+  ["paypal",       { clientIdKey: "PAYPAL_OAUTH_CLIENT_ID",       clientSecretKey: "PAYPAL_OAUTH_CLIENT_SECRET" }],
 ]);
 
 // ---------------------------------------------------------------------------

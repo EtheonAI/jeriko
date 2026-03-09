@@ -243,13 +243,24 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   // Falls back to AGENT.md in the repo root for dev mode.
   let systemPrompt = "";
   try {
-    const { readFileSync, existsSync } = await import("node:fs");
+    const { readFileSync, writeFileSync, existsSync } = await import("node:fs");
     const { join, dirname } = await import("node:path");
-    const { getConfigDir } = await import("../shared/config.js");
-    const promptPath = join(getConfigDir(), "agent.md");
+    const { getConfigDir, MIN_AGENT_PROMPT_LENGTH, AGENT_PROMPT_FILENAME } = await import("../shared/config.js");
+    const promptPath = join(getConfigDir(), AGENT_PROMPT_FILENAME);
     if (existsSync(promptPath)) {
-      systemPrompt = readFileSync(promptPath, "utf-8");
-      log.info(`Kernel boot: loaded system prompt from ${promptPath} (${systemPrompt.length} chars)`);
+      const raw = readFileSync(promptPath, "utf-8");
+      if (raw.length >= MIN_AGENT_PROMPT_LENGTH) {
+        systemPrompt = raw;
+        log.info(`Kernel boot: loaded system prompt from ${promptPath} (${systemPrompt.length} chars)`);
+      } else {
+        log.warn(`Kernel boot: agent.md at ${promptPath} is empty or corrupt (${raw.length} chars) — using bundled fallback`);
+        if (BUNDLED_AGENT_MD) {
+          systemPrompt = BUNDLED_AGENT_MD;
+          // Overwrite the corrupt file with the bundled version
+          try { writeFileSync(promptPath, BUNDLED_AGENT_MD, "utf-8"); } catch { /* best-effort */ }
+          log.info(`Kernel boot: using bundled AGENT.md fallback (${systemPrompt.length} chars)`);
+        }
+      }
     } else {
       // Dev fallback: walk up from cwd looking for AGENT.md in the repo root
       let dir = process.cwd();

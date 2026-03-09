@@ -36,6 +36,7 @@ declare const __BAKED_DISCORD_CLIENT_ID__: string | undefined;
 declare const __BAKED_INSTAGRAM_CLIENT_ID__: string | undefined;
 declare const __BAKED_THREADS_CLIENT_ID__: string | undefined;
 declare const __BAKED_PAYPAL_CLIENT_ID__: string | undefined;
+declare const __BAKED_SLACK_CLIENT_ID__: string | undefined;
 
 /**
  * Baked-in OAuth client IDs, keyed by a logical group name.
@@ -70,4 +71,5 @@ export const BAKED_OAUTH_CLIENT_IDS: Readonly<Record<string, string | undefined>
   instagram:    typeof __BAKED_INSTAGRAM_CLIENT_ID__    !== "undefined" ? __BAKED_INSTAGRAM_CLIENT_ID__    : undefined,
   threads:      typeof __BAKED_THREADS_CLIENT_ID__      !== "undefined" ? __BAKED_THREADS_CLIENT_ID__      : undefined,
   paypal:       typeof __BAKED_PAYPAL_CLIENT_ID__       !== "undefined" ? __BAKED_PAYPAL_CLIENT_ID__       : undefined,
+  slack:        typeof __BAKED_SLACK_CLIENT_ID__        !== "undefined" ? __BAKED_SLACK_CLIENT_ID__        : undefined,
 };

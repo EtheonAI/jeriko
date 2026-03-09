@@ -150,8 +150,59 @@ export function createWebhookRoutes(connections: ConnectionManager, env: Env): H
   // broadcasts to all connected daemons and each daemon verifies the
   // signature with its own secrets.
   //
+  // GET  /hooks/connector/x — X (Twitter) CRC challenge-response validation
   // POST /hooks/connector/:provider — forward to all connected daemons
   // -------------------------------------------------------------------------
+
+  /**
+   * GET /hooks/connector/x — X (Twitter) CRC webhook validation.
+   *
+   * X sends a GET request with a `crc_token` query param when registering
+   * or periodically validating the webhook URL. The relay must respond with
+   * an HMAC-SHA256 of the token signed with the app's secret.
+   *
+   * X API v2 webhooks use the OAuth 2.0 Client Secret for CRC.
+   * Falls back to X_API_SECRET (consumer secret) for the legacy Account Activity API.
+   *
+   * Response: {"response_token": "sha256=<base64-hmac>"}
+   */
+  router.get("/connector/x", async (c) => {
+    const crcToken = c.req.query("crc_token");
+    if (!crcToken) {
+      return c.json({ ok: false, error: "Missing crc_token parameter" }, 400);
+    }
+
+    // X docs specify consumer secret (API Secret Key) for CRC.
+    // Falls back to OAuth 2.0 Client Secret for v2 apps that only have OAuth 2.0 credentials.
+    const secret = env.X_API_SECRET ?? env.X_OAUTH_CLIENT_SECRET;
+    if (!secret) {
+      return c.json({ ok: false, error: "X webhook secret not configured on relay" }, 500);
+    }
+
+    // HMAC-SHA256 the crc_token with the secret
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey(
+      "raw",
+      encoder.encode(secret),
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"],
+    );
+    const signature = await crypto.subtle.sign("HMAC", key, encoder.encode(crcToken));
+
+    // Base64-encode the signature
+    const bytes = new Uint8Array(signature);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]!);
+    }
+    const base64 = btoa(binary);
+
+    const responseToken = `sha256=${base64}`;
+    console.log(`[CRC] crc_token=${crcToken.slice(0, 20)}... response_token=${responseToken.slice(0, 30)}... secret_prefix=${secret.slice(0, 5)}...`);
+
+    return c.json({ response_token: responseToken });
+  });
 
   router.post("/connector/:provider", async (c) => {
     const provider = c.req.param("provider");

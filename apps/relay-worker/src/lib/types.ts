@@ -143,6 +143,19 @@ export interface Env {
   /** Threads OAuth client secret. */
   THREADS_OAUTH_CLIENT_SECRET?: string;
 
+  /** Slack OAuth client ID. */
+  SLACK_OAUTH_CLIENT_ID?: string;
+  /** Slack OAuth client secret. */
+  SLACK_OAUTH_CLIENT_SECRET?: string;
+
+  /** PayPal OAuth client ID. */
+  PAYPAL_OAUTH_CLIENT_ID?: string;
+  /** PayPal OAuth client secret. */
+  PAYPAL_OAUTH_CLIENT_SECRET?: string;
+
+  /** X (Twitter) API consumer secret — used for CRC webhook validation. */
+  X_API_SECRET?: string;
+
   /** Instagram webhook verify token (for Meta webhook subscription verification). */
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN?: string;
 

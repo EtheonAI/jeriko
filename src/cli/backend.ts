@@ -1407,17 +1407,26 @@ async function registerTools(): Promise<void> {
  * skill summaries. Mirrors the kernel's boot sequence (steps 9-10).
  */
 async function loadSystemPrompt(): Promise<string> {
-  const { readFileSync, existsSync: exists } = await import("node:fs");
+  const { readFileSync, writeFileSync, existsSync: exists } = await import("node:fs");
   const { join: pathJoin } = await import("node:path");
-  const { getConfigDir } = await import("../shared/config.js");
+  const { getConfigDir, MIN_AGENT_PROMPT_LENGTH, AGENT_PROMPT_FILENAME } = await import("../shared/config.js");
   const os = await import("node:os");
 
   let systemPrompt = "";
 
-  // Try user's config copy first, then fall back to the bundled AGENT.md
-  const promptPath = pathJoin(getConfigDir(), "agent.md");
+  // Try user's config copy first, then fall back to the bundled AGENT.md.
+  // Content validation: an empty or truncated file (e.g. failed CDN download)
+  // must fall through to the bundled copy, not silently produce an empty prompt.
+  const promptPath = pathJoin(getConfigDir(), AGENT_PROMPT_FILENAME);
   if (exists(promptPath)) {
-    systemPrompt = readFileSync(promptPath, "utf-8");
+    const raw = readFileSync(promptPath, "utf-8");
+    if (raw.length >= MIN_AGENT_PROMPT_LENGTH) {
+      systemPrompt = raw;
+    } else if (BUNDLED_AGENT_MD) {
+      systemPrompt = BUNDLED_AGENT_MD;
+      // Overwrite corrupt file so future boots don't hit this path
+      try { writeFileSync(promptPath, BUNDLED_AGENT_MD, "utf-8"); } catch { /* best-effort */ }
+    }
   } else if (BUNDLED_AGENT_MD) {
     // Compiled into the binary at build time — always available
     systemPrompt = BUNDLED_AGENT_MD;

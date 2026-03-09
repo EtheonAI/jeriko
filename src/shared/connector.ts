@@ -54,6 +54,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Orders, subscriptions, payouts, invoices",
     required: ["PAYPAL_ACCESS_TOKEN"],
     optional: ["PAYPAL_REFRESH_TOKEN", "PAYPAL_WEBHOOK_ID", "PAYPAL_SANDBOX", "PAYPAL_MODE"],
+    oauth: { clientIdVar: "PAYPAL_OAUTH_CLIENT_ID", clientSecretVar: "PAYPAL_OAUTH_CLIENT_SECRET" },
     limitParam: "page_size",
   },
   {
@@ -87,7 +88,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     label: "X (Twitter)",
     description: "Tweets, users, DMs, timelines",
     required: [["X_BEARER_TOKEN", "TWITTER_BEARER_TOKEN"]],
-    optional: ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET"],
+    optional: ["X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET", "X_WEBHOOK_SECRET"],
     oauth: { clientIdVar: "X_OAUTH_CLIENT_ID", clientSecretVar: "X_OAUTH_CLIENT_SECRET" },
     limitParam: "max_results",
   },
@@ -147,6 +148,7 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     description: "Messages, channels, users, files, reactions",
     required: ["SLACK_BOT_TOKEN"],
     optional: ["SLACK_SIGNING_SECRET"],
+    oauth: { clientIdVar: "SLACK_OAUTH_CLIENT_ID", clientSecretVar: "SLACK_OAUTH_CLIENT_SECRET" },
   },
   {
     name: "discord",

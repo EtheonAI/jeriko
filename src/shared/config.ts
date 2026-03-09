@@ -278,6 +278,23 @@ export function reloadSecrets(): void {
 }
 
 // ---------------------------------------------------------------------------
+// Agent prompt constants
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum byte length for a valid agent.md system prompt.
+ *
+ * The real AGENT.md is ~25 KB. A file shorter than this threshold is treated as
+ * empty or corrupt (e.g. a failed CDN download that wrote 0 bytes or an HTML
+ * error page). Callers should fall back to the bundled AGENT.md when the on-disk
+ * copy is below this threshold.
+ */
+export const MIN_AGENT_PROMPT_LENGTH = 500;
+
+/** Canonical filename for the agent system prompt inside the config directory. */
+export const AGENT_PROMPT_FILENAME = "agent.md";
+
+// ---------------------------------------------------------------------------
 // Directory helpers
 // ---------------------------------------------------------------------------
 

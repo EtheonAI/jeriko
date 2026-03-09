@@ -21,7 +21,10 @@ fi
 CDN_URL="${JERIKO_CDN_URL:-https://releases.jeriko.ai}"
 DOWNLOAD_DIR="$HOME/.jeriko/downloads"
 
-# Check for required dependencies
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+
 DOWNLOADER=""
 if command -v curl >/dev/null 2>&1; then
     DOWNLOADER="curl"
@@ -32,13 +35,15 @@ else
     exit 1
 fi
 
-# Check if jq is available (optional)
 HAS_JQ=false
 if command -v jq >/dev/null 2>&1; then
     HAS_JQ=true
 fi
 
-# Download function that works with both curl and wget
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
 download_file() {
     local url="$1"
     local output="$2"
@@ -60,7 +65,8 @@ download_file() {
     fi
 }
 
-# Simple JSON parser for extracting checksum when jq is not available
+# Pure-bash JSON parser for extracting checksum when jq is not available.
+# Users on minimal installs (no jq, no developer tools) hit this path.
 get_checksum_from_manifest() {
     local json="$1"
     local platform="$2"
@@ -75,11 +81,14 @@ get_checksum_from_manifest() {
     return 1
 }
 
-# Detect platform
+# ---------------------------------------------------------------------------
+# Platform detection
+# ---------------------------------------------------------------------------
+
 case "$(uname -s)" in
     Darwin) os="darwin" ;;
     Linux) os="linux" ;;
-    MINGW*|MSYS*|CYGWIN*) echo "Windows is not supported by this script. Use the PowerShell installer instead." >&2; exit 1 ;;
+    MINGW*|MSYS*|CYGWIN*) echo "Windows is not supported by this script. Use WSL instead." >&2; exit 1 ;;
     *) echo "Unsupported operating system: $(uname -s)" >&2; exit 1 ;;
 esac
 
@@ -107,12 +116,14 @@ else
     platform="${os}-${arch}"
 fi
 
+# ---------------------------------------------------------------------------
+# Download and verify binary
+# ---------------------------------------------------------------------------
+
 mkdir -p "$DOWNLOAD_DIR"
 
-# Download latest version
 version=$(download_file "$CDN_URL/releases/latest" "")
 
-# Download manifest and extract checksum
 manifest_json=$(download_file "$CDN_URL/releases/$version/manifest.json" "")
 
 if [ "$HAS_JQ" = true ]; then
@@ -121,13 +132,11 @@ else
     checksum=$(get_checksum_from_manifest "$manifest_json" "$platform")
 fi
 
-# Validate checksum format (SHA256 = 64 hex characters)
 if [ -z "$checksum" ] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
     echo "Platform $platform not found in manifest" >&2
     exit 1
 fi
 
-# Download and verify
 binary_path="$DOWNLOAD_DIR/jeriko-$version-$platform"
 if ! download_file "$CDN_URL/releases/$version/jeriko-$platform" "$binary_path"; then
     echo "Download failed" >&2
@@ -135,11 +144,15 @@ if ! download_file "$CDN_URL/releases/$version/jeriko-$platform" "$binary_path";
     exit 1
 fi
 
-# Verify checksum
 if [ "$os" = "darwin" ]; then
     actual=$(shasum -a 256 "$binary_path" | cut -d' ' -f1)
-else
+elif command -v sha256sum >/dev/null 2>&1; then
     actual=$(sha256sum "$binary_path" | cut -d' ' -f1)
+elif command -v openssl >/dev/null 2>&1; then
+    actual=$(openssl dgst -sha256 "$binary_path" | awk '{print $NF}')
+else
+    echo "No SHA-256 tool found (need sha256sum or openssl)" >&2
+    exit 1
 fi
 
 if [ "$actual" != "$checksum" ]; then
@@ -150,13 +163,50 @@ fi
 
 chmod +x "$binary_path"
 
-# Run self-install — binary handles PATH, agent.md, templates, directories
+# ---------------------------------------------------------------------------
+# Download templates (optional — non-fatal if not published to CDN yet)
+# ---------------------------------------------------------------------------
+
+templates_dir="$HOME/.local/lib/jeriko/templates"
+if [ ! -d "$templates_dir" ]; then
+    templates_archive="$DOWNLOAD_DIR/templates-$version.tar.gz"
+    if download_file "$CDN_URL/releases/$version/templates.tar.gz" "$templates_archive" 2>/dev/null; then
+        # Only create the target directory if the archive is valid — an empty
+        # directory would cause self-install to report "Templates already installed"
+        if tar -tzf "$templates_archive" >/dev/null 2>&1; then
+            mkdir -p "$templates_dir"
+            tar -xzf "$templates_archive" -C "$templates_dir" 2>/dev/null
+        fi
+        rm -f "$templates_archive"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# Run self-install — binary handles PATH, agent.md, completions, directories
+# ---------------------------------------------------------------------------
+
 echo "Setting up Jeriko..."
 "$binary_path" install ${TARGET:+"$TARGET"}
 
-# Clean up downloaded file
 rm -f "$binary_path"
 
+# ---------------------------------------------------------------------------
+# Post-install
+# ---------------------------------------------------------------------------
+
+installed_version=$("$HOME/.local/bin/jeriko" --version 2>/dev/null || echo "")
 echo ""
 echo "Installation complete."
+if [ -n "$installed_version" ]; then
+    echo "Installed: $installed_version"
+fi
+echo "Documentation: https://jeriko.ai/docs"
+
+# This script runs in a child process (curl | bash), so PATH changes made by
+# self-install to the user's shell profile won't take effect here. Tell the
+# user exactly what to do so `jeriko` is available immediately.
+echo ""
+echo "  To get started, open a new terminal — or run:"
+echo ""
+echo "    exec \$SHELL"
 echo ""

@@ -27,7 +27,7 @@ describe("TOKEN_EXCHANGE_PROVIDERS", () => {
       "stripe", "github", "x", "gdrive", "vercel", "gmail",
       "hubspot", "shopify", "instagram", "threads", "square", "gitlab",
       "notion", "linear", "jira", "airtable", "asana", "mailchimp", "dropbox",
-      "discord",
+      "discord", "slack", "paypal",
     ];
     for (const name of expectedProviders) {
       expect(TOKEN_EXCHANGE_PROVIDERS.has(name)).toBe(true);
@@ -39,13 +39,13 @@ describe("TOKEN_EXCHANGE_PROVIDERS", () => {
     for (const [name, provider] of TOKEN_EXCHANGE_PROVIDERS) {
       expect(provider.name).toBe(name);
       expect(provider.tokenUrl).toMatch(/^https:\/\//);
-      expect(["body", "basic"]).toContain(provider.tokenExchangeAuth);
+      expect(["body", "basic", "basic-apikey"]).toContain(provider.tokenExchangeAuth);
     }
   });
 
-  it("stripe uses Basic auth for token exchange", () => {
+  it("stripe uses API-key Basic auth for token exchange", () => {
     const stripe = TOKEN_EXCHANGE_PROVIDERS.get("stripe")!;
-    expect(stripe.tokenExchangeAuth).toBe("basic");
+    expect(stripe.tokenExchangeAuth).toBe("basic-apikey");
   });
 
   it("github uses body auth for token exchange", () => {
@@ -337,7 +337,7 @@ describe("exchangeCodeForTokens", () => {
     }
   });
 
-  it("sends correct headers for basic auth exchange", async () => {
+  it("sends correct headers for standard basic auth exchange", async () => {
     let capturedHeaders: Record<string, string> = {};
     let capturedBody: string = "";
 
@@ -359,10 +359,46 @@ describe("exchangeCodeForTokens", () => {
         clientSecret: "test-secret-key",
       });
 
-      // Basic auth header should be present
+      // Standard Basic auth: base64(client_id:client_secret)
       expect(capturedHeaders.Authorization).toStartWith("Basic ");
       const decoded = atob(capturedHeaders.Authorization!.replace("Basic ", ""));
-      expect(decoded).toBe("test-secret-key:");
+      expect(decoded).toBe("test-client-id:test-secret-key");
+
+      // Body should NOT contain client_id/client_secret
+      const params = new URLSearchParams(capturedBody);
+      expect(params.has("client_id")).toBe(false);
+      expect(params.has("client_secret")).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("sends correct headers for basic-apikey auth exchange (Stripe)", async () => {
+    let capturedHeaders: Record<string, string> = {};
+    let capturedBody: string = "";
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, opts: RequestInit) => {
+      capturedHeaders = opts.headers as Record<string, string>;
+      capturedBody = opts.body as string;
+      return new Response(JSON.stringify({
+        access_token: "test-access-token",
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }) as typeof fetch;
+
+    try {
+      await exchangeCodeForTokens({
+        provider: { ...mockProvider, tokenExchangeAuth: "basic-apikey" },
+        code: "test-code",
+        redirectUri: "https://example.com/callback",
+        clientId: "test-client-id",
+        clientSecret: "sk_test_secretkey",
+      });
+
+      // API-key Basic auth: base64(secret_key:) — Stripe-style
+      expect(capturedHeaders.Authorization).toStartWith("Basic ");
+      const decoded = atob(capturedHeaders.Authorization!.replace("Basic ", ""));
+      expect(decoded).toBe("sk_test_secretkey:");
 
       // Body should NOT contain client_id/client_secret
       const params = new URLSearchParams(capturedBody);

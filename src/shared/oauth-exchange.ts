@@ -33,9 +33,11 @@ export interface TokenExchangeProvider {
   /**
    * How to authenticate the token exchange request.
    * - "body" (default): Send client_id + client_secret in the POST body.
-   * - "basic": Send client_secret as HTTP Basic auth (Stripe-style).
+   * - "basic": Standard Basic auth — base64(client_id:client_secret) in Authorization header.
+   * - "basic-apikey": API-key Basic auth — base64(client_secret:) in Authorization header.
+   *   Used by Stripe, where the API secret key is the username and password is empty.
    */
-  tokenExchangeAuth: "body" | "basic";
+  tokenExchangeAuth: "body" | "basic" | "basic-apikey";
   /** Extra params to include in the authorization URL (e.g. access_type, prompt). */
   extraAuthParams?: Record<string, string>;
   /** Extra params to include in the token exchange POST. */
@@ -83,10 +85,11 @@ export interface ExchangeOptions {
 export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider> = new Map<string, TokenExchangeProvider>([
   ["stripe", {
     name: "stripe",
-    authUrl: "https://connect.stripe.com/oauth/authorize",
-    tokenUrl: "https://connect.stripe.com/oauth/token",
-    scopes: ["read_write"],
-    tokenExchangeAuth: "basic",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
+    tokenUrl: "https://api.stripe.com/v1/oauth/token",
+    scopes: [],
+    tokenExchangeAuth: "basic-apikey",
+    skipResponseType: true,
   }],
   ["github", {
     name: "github",
@@ -98,10 +101,10 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
   ["x", {
     name: "x",
     authUrl: "https://twitter.com/i/oauth2/authorize",
-    tokenUrl: "https://api.twitter.com/2/oauth2/token",
+    tokenUrl: "https://api.x.com/2/oauth2/token",
     scopes: ["tweet.read", "tweet.write", "users.read", "dm.read", "dm.write", "offline.access"],
     usePKCE: true,
-    tokenExchangeAuth: "body",
+    tokenExchangeAuth: "basic",
   }],
   ["gdrive", {
     name: "gdrive",
@@ -133,7 +136,73 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     name: "hubspot",
     authUrl: "https://app.hubspot.com/oauth/authorize",
     tokenUrl: "https://api.hubapi.com/oauth/v1/token",
-    scopes: ["crm.objects.contacts.read", "crm.objects.contacts.write", "crm.objects.companies.read", "crm.objects.companies.write", "crm.objects.deals.read", "crm.objects.deals.write", "crm.objects.owners.read", "crm.objects.quotes.read", "crm.objects.quotes.write", "crm.objects.products.read", "crm.objects.products.write", "crm.objects.invoices.read", "crm.objects.invoices.write", "crm.objects.orders.read", "crm.objects.orders.write", "crm.lists.read", "crm.lists.write", "crm.import", "crm.export", "oauth", "conversations.read", "conversations.write"],
+    scopes: [
+      // Core CRM objects
+      "crm.objects.contacts.read", "crm.objects.contacts.write",
+      "crm.objects.companies.read", "crm.objects.companies.write",
+      "crm.objects.deals.read", "crm.objects.deals.write",
+      "crm.objects.owners.read",
+      "crm.objects.quotes.read", "crm.objects.quotes.write",
+      "crm.objects.products.read", "crm.objects.products.write",
+      "crm.objects.invoices.read", "crm.objects.invoices.write",
+      "crm.objects.orders.read", "crm.objects.orders.write",
+      "crm.objects.line_items.read", "crm.objects.line_items.write",
+      "crm.objects.subscriptions.read", "crm.objects.subscriptions.write",
+      "crm.objects.commercepayments.read", "crm.objects.commercepayments.write",
+      "crm.objects.goals.read", "crm.objects.goals.write",
+      "crm.objects.projects.read", "crm.objects.projects.write",
+      "crm.objects.leads.read", "crm.objects.leads.write",
+      "crm.objects.users.read", "crm.objects.users.write",
+      "crm.objects.forecasts.read",
+      "crm.objects.feedback_submissions.read",
+      "crm.objects.marketing_events.read", "crm.objects.marketing_events.write",
+      "crm.objects.custom.read", "crm.objects.custom.write",
+      "crm.objects.carts.read", "crm.objects.carts.write",
+      "crm.objects.partner-services.read", "crm.objects.partner-services.write",
+      "crm.objects.partner-clients.read", "crm.objects.partner-clients.write",
+      "crm.objects.courses.read", "crm.objects.courses.write",
+      "crm.objects.listings.read", "crm.objects.listings.write",
+      "crm.objects.services.read", "crm.objects.services.write",
+      "crm.objects.appointments.read", "crm.objects.appointments.write",
+      // CRM schemas
+      "crm.schemas.contacts.read", "crm.schemas.contacts.write",
+      "crm.schemas.companies.read", "crm.schemas.companies.write",
+      "crm.schemas.deals.read", "crm.schemas.deals.write",
+      "crm.schemas.quotes.read", "crm.schemas.quotes.write",
+      "crm.schemas.invoices.read", "crm.schemas.invoices.write",
+      "crm.schemas.orders.read", "crm.schemas.orders.write",
+      "crm.schemas.line_items.read",
+      "crm.schemas.subscriptions.read", "crm.schemas.subscriptions.write",
+      "crm.schemas.commercepayments.read", "crm.schemas.commercepayments.write",
+      "crm.schemas.projects.read", "crm.schemas.projects.write",
+      "crm.schemas.forecasts.read",
+      "crm.schemas.custom.read",
+      "crm.schemas.carts.read", "crm.schemas.carts.write",
+      "crm.schemas.services.read", "crm.schemas.services.write",
+      "crm.schemas.courses.read", "crm.schemas.courses.write",
+      "crm.schemas.listings.read", "crm.schemas.listings.write",
+      "crm.schemas.appointments.read", "crm.schemas.appointments.write",
+      // CRM pipelines & misc
+      "crm.pipelines.orders.read", "crm.pipelines.orders.write",
+      "crm.lists.read", "crm.lists.write",
+      "crm.import", "crm.export",
+      "crm.dealsplits.read_write",
+      "crm.extensions_calling_transcripts.read", "crm.extensions_calling_transcripts.write",
+      // Conversations
+      "conversations.read", "conversations.write",
+      "conversations.visitor_identification.tokens.create",
+      "conversations.custom_channels.read", "conversations.custom_channels.write",
+      // Communication preferences
+      "communication_preferences.read", "communication_preferences.write",
+      "communication_preferences.read_write",
+      "communication_preferences.statuses.batch.read", "communication_preferences.statuses.batch.write",
+      // Automation & marketing
+      "automation",
+      "automation.sequences.read", "automation.sequences.enrollments.write",
+      "marketing.campaigns.read", "marketing.campaigns.write", "marketing.campaigns.revenue.read",
+      // OAuth
+      "oauth",
+    ],
     tokenExchangeAuth: "body",
   }],
   ["shopify", {
@@ -192,7 +261,17 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     name: "jira",
     authUrl: "https://auth.atlassian.com/authorize",
     tokenUrl: "https://auth.atlassian.com/oauth/token",
-    scopes: ["read:jira-work", "write:jira-work", "read:jira-user", "offline_access"],
+    scopes: [
+      // Platform REST API
+      "read:jira-work", "write:jira-work", "read:jira-user",
+      "manage:jira-project", "manage:jira-configuration",
+      "manage:jira-webhook", "manage:jira-data-provider",
+      // Service Management API
+      "read:servicedesk-request", "manage:servicedesk-customer",
+      "write:servicedesk-request", "read:servicemanagement-insight-objects",
+      // Offline access (refresh tokens)
+      "offline_access",
+    ],
     tokenExchangeAuth: "body",
     extraAuthParams: { audience: "api.atlassian.com", prompt: "consent" },
   }],
@@ -232,6 +311,20 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     tokenUrl: "https://discord.com/api/oauth2/token",
     scopes: ["bot", "guilds", "guilds.members.read", "messages.read"],
     tokenExchangeAuth: "body",
+  }],
+  ["slack", {
+    name: "slack",
+    authUrl: "https://slack.com/oauth/v2/authorize",
+    tokenUrl: "https://slack.com/api/oauth.v2.access",
+    scopes: ["app_mentions:read", "assistant:write", "calls:write", "channels:history", "chat:write", "users:write"],
+    tokenExchangeAuth: "body",
+  }],
+  ["paypal", {
+    name: "paypal",
+    authUrl: "https://www.paypal.com/signin/authorize",
+    tokenUrl: "https://api-m.paypal.com/v1/oauth2/token",
+    scopes: ["openid", "profile", "email"],
+    tokenExchangeAuth: "basic",
   }],
 ]);
 
@@ -331,7 +424,7 @@ export async function buildAuthorizationUrl(
  */
 export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<TokenExchangeResult> {
   const { provider, code, redirectUri, clientId, clientSecret, codeVerifier } = opts;
-  const useBasicAuth = provider.tokenExchangeAuth === "basic";
+  const authMode = provider.tokenExchangeAuth;
 
   // Build token exchange parameters
   const params: Record<string, string> = {
@@ -340,7 +433,7 @@ export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<Toke
     redirect_uri: redirectUri,
   };
 
-  if (!useBasicAuth) {
+  if (authMode === "body") {
     params.client_id = clientId;
     params.client_secret = clientSecret;
   }
@@ -361,9 +454,13 @@ export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<Toke
     Accept: "application/json",
   };
 
-  if (useBasicAuth) {
-    // Stripe-style: secret key as Basic auth username, empty password.
-    // Use btoa() for cross-runtime compatibility (works in Node, Bun, and CF Workers).
+  if (authMode === "basic") {
+    // Standard Basic auth: base64(client_id:client_secret) per RFC 7617.
+    // Used by X/Twitter, Notion, PayPal.
+    headers.Authorization = `Basic ${btoa(clientId + ":" + clientSecret)}`;
+  } else if (authMode === "basic-apikey") {
+    // API-key Basic auth: base64(secret_key:) — Stripe-style.
+    // The API secret key is the username, password is empty.
     headers.Authorization = `Basic ${btoa(clientSecret + ":")}`;
   }
 
@@ -426,14 +523,14 @@ export interface RefreshOptions {
  */
 export async function refreshAccessToken(opts: RefreshOptions): Promise<TokenExchangeResult> {
   const { provider, refreshToken, clientId, clientSecret, scope } = opts;
-  const useBasicAuth = provider.tokenExchangeAuth === "basic";
+  const authMode = provider.tokenExchangeAuth;
 
   const params: Record<string, string> = {
     grant_type: "refresh_token",
     refresh_token: refreshToken,
   };
 
-  if (!useBasicAuth) {
+  if (authMode === "body") {
     params.client_id = clientId;
     params.client_secret = clientSecret;
   }
@@ -447,7 +544,9 @@ export async function refreshAccessToken(opts: RefreshOptions): Promise<TokenExc
     Accept: "application/json",
   };
 
-  if (useBasicAuth) {
+  if (authMode === "basic") {
+    headers.Authorization = `Basic ${btoa(clientId + ":" + clientSecret)}`;
+  } else if (authMode === "basic-apikey") {
     headers.Authorization = `Basic ${btoa(clientSecret + ":")}`;
   }
 

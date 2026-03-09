@@ -56,10 +56,11 @@ export interface OAuthProvider {
   /**
    * How to authenticate the token exchange request.
    * - "body" (default): Send client_id + client_secret in the POST body.
-   * - "basic": Send clientSecretVar as HTTP Basic auth (username:password format).
-   *   Stripe uses this — the secret API key is the username, password is empty.
+   * - "basic": Standard Basic auth — base64(client_id:client_secret) per RFC 7617.
+   * - "basic-apikey": API-key Basic auth — base64(client_secret:).
+   *   Stripe uses this — the API secret key is the username, password is empty.
    */
-  tokenExchangeAuth?: "body" | "basic";
+  tokenExchangeAuth?: "body" | "basic" | "basic-apikey";
   /**
    * If true, omit `response_type=code` from the authorization URL.
    * Stripe Apps doesn't use response_type — only client_id, redirect_uri, state.
@@ -75,15 +76,16 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "stripe",
     label: "Stripe",
-    authUrl: "https://connect.stripe.com/oauth/authorize",
-    tokenUrl: "https://connect.stripe.com/oauth/token",
-    scopes: ["read_write"],
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
+    tokenUrl: "https://api.stripe.com/v1/oauth/token",
+    scopes: [],
     bakedIdKey: "stripe",
     clientIdVar: "STRIPE_OAUTH_CLIENT_ID",
     clientSecretVar: "STRIPE_SECRET_KEY",
     tokenEnvVar: "STRIPE_ACCESS_TOKEN",
     refreshTokenEnvVar: "STRIPE_REFRESH_TOKEN",
-    tokenExchangeAuth: "basic",
+    tokenExchangeAuth: "basic-apikey",
+    skipResponseType: true,
   },
   {
     name: "github",
@@ -100,7 +102,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     name: "x",
     label: "X (Twitter)",
     authUrl: "https://twitter.com/i/oauth2/authorize",
-    tokenUrl: "https://api.twitter.com/2/oauth2/token",
+    tokenUrl: "https://api.x.com/2/oauth2/token",
     scopes: ["tweet.read", "tweet.write", "users.read", "dm.read", "dm.write", "offline.access"],
     bakedIdKey: "x",
     clientIdVar: "X_OAUTH_CLIENT_ID",
@@ -108,6 +110,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     tokenEnvVar: "X_BEARER_TOKEN",
     refreshTokenEnvVar: "X_REFRESH_TOKEN",
     usePKCE: true,
+    tokenExchangeAuth: "basic",
   },
   {
     name: "gdrive",
@@ -154,14 +157,71 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     authUrl: "https://app.hubspot.com/oauth/authorize",
     tokenUrl: "https://api.hubapi.com/oauth/v1/token",
     scopes: [
-      "crm.objects.contacts.read",
-      "crm.objects.contacts.write",
-      "crm.objects.companies.read",
-      "crm.objects.companies.write",
-      "crm.objects.deals.read",
-      "crm.objects.deals.write",
+      // Core CRM objects
+      "crm.objects.contacts.read", "crm.objects.contacts.write",
+      "crm.objects.companies.read", "crm.objects.companies.write",
+      "crm.objects.deals.read", "crm.objects.deals.write",
       "crm.objects.owners.read",
-      "tickets",
+      "crm.objects.quotes.read", "crm.objects.quotes.write",
+      "crm.objects.products.read", "crm.objects.products.write",
+      "crm.objects.invoices.read", "crm.objects.invoices.write",
+      "crm.objects.orders.read", "crm.objects.orders.write",
+      "crm.objects.line_items.read", "crm.objects.line_items.write",
+      "crm.objects.subscriptions.read", "crm.objects.subscriptions.write",
+      "crm.objects.commercepayments.read", "crm.objects.commercepayments.write",
+      "crm.objects.goals.read", "crm.objects.goals.write",
+      "crm.objects.projects.read", "crm.objects.projects.write",
+      "crm.objects.leads.read", "crm.objects.leads.write",
+      "crm.objects.users.read", "crm.objects.users.write",
+      "crm.objects.forecasts.read",
+      "crm.objects.feedback_submissions.read",
+      "crm.objects.marketing_events.read", "crm.objects.marketing_events.write",
+      "crm.objects.custom.read", "crm.objects.custom.write",
+      "crm.objects.carts.read", "crm.objects.carts.write",
+      "crm.objects.partner-services.read", "crm.objects.partner-services.write",
+      "crm.objects.partner-clients.read", "crm.objects.partner-clients.write",
+      "crm.objects.courses.read", "crm.objects.courses.write",
+      "crm.objects.listings.read", "crm.objects.listings.write",
+      "crm.objects.services.read", "crm.objects.services.write",
+      "crm.objects.appointments.read", "crm.objects.appointments.write",
+      // CRM schemas
+      "crm.schemas.contacts.read", "crm.schemas.contacts.write",
+      "crm.schemas.companies.read", "crm.schemas.companies.write",
+      "crm.schemas.deals.read", "crm.schemas.deals.write",
+      "crm.schemas.quotes.read", "crm.schemas.quotes.write",
+      "crm.schemas.invoices.read", "crm.schemas.invoices.write",
+      "crm.schemas.orders.read", "crm.schemas.orders.write",
+      "crm.schemas.line_items.read",
+      "crm.schemas.subscriptions.read", "crm.schemas.subscriptions.write",
+      "crm.schemas.commercepayments.read", "crm.schemas.commercepayments.write",
+      "crm.schemas.projects.read", "crm.schemas.projects.write",
+      "crm.schemas.forecasts.read",
+      "crm.schemas.custom.read",
+      "crm.schemas.carts.read", "crm.schemas.carts.write",
+      "crm.schemas.services.read", "crm.schemas.services.write",
+      "crm.schemas.courses.read", "crm.schemas.courses.write",
+      "crm.schemas.listings.read", "crm.schemas.listings.write",
+      "crm.schemas.appointments.read", "crm.schemas.appointments.write",
+      // CRM pipelines & misc
+      "crm.pipelines.orders.read", "crm.pipelines.orders.write",
+      "crm.lists.read", "crm.lists.write",
+      "crm.import", "crm.export",
+      "crm.dealsplits.read_write",
+      "crm.extensions_calling_transcripts.read", "crm.extensions_calling_transcripts.write",
+      // Conversations
+      "conversations.read", "conversations.write",
+      "conversations.visitor_identification.tokens.create",
+      "conversations.custom_channels.read", "conversations.custom_channels.write",
+      // Communication preferences
+      "communication_preferences.read", "communication_preferences.write",
+      "communication_preferences.read_write",
+      "communication_preferences.statuses.batch.read", "communication_preferences.statuses.batch.write",
+      // Automation & marketing
+      "automation",
+      "automation.sequences.read", "automation.sequences.enrollments.write",
+      "marketing.campaigns.read", "marketing.campaigns.write", "marketing.campaigns.revenue.read",
+      // OAuth
+      "oauth",
     ],
     bakedIdKey: "hubspot",
     clientIdVar: "HUBSPOT_OAUTH_CLIENT_ID",
@@ -270,7 +330,17 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     label: "Jira",
     authUrl: "https://auth.atlassian.com/authorize",
     tokenUrl: "https://auth.atlassian.com/oauth/token",
-    scopes: ["read:jira-work", "write:jira-work", "read:jira-user", "offline_access"],
+    scopes: [
+      // Platform REST API
+      "read:jira-work", "write:jira-work", "read:jira-user",
+      "manage:jira-project", "manage:jira-configuration",
+      "manage:jira-webhook", "manage:jira-data-provider",
+      // Service Management API
+      "read:servicedesk-request", "manage:servicedesk-customer",
+      "write:servicedesk-request", "read:servicemanagement-insight-objects",
+      // Offline access (refresh tokens)
+      "offline_access",
+    ],
     bakedIdKey: "atlassian",
     clientIdVar: "JIRA_OAUTH_CLIENT_ID",
     clientSecretVar: "JIRA_OAUTH_CLIENT_SECRET",
@@ -339,6 +409,31 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
     clientSecretVar: "DISCORD_OAUTH_CLIENT_SECRET",
     tokenEnvVar: "DISCORD_BOT_TOKEN",
     refreshTokenEnvVar: "DISCORD_REFRESH_TOKEN",
+  },
+  {
+    name: "slack",
+    label: "Slack",
+    authUrl: "https://slack.com/oauth/v2/authorize",
+    tokenUrl: "https://slack.com/api/oauth.v2.access",
+    scopes: ["app_mentions:read", "assistant:write", "calls:write", "channels:history", "chat:write", "users:write"],
+    bakedIdKey: "slack",
+    clientIdVar: "SLACK_OAUTH_CLIENT_ID",
+    clientSecretVar: "SLACK_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "SLACK_BOT_TOKEN",
+    // Slack bot tokens are permanent — no refresh token.
+  },
+  {
+    name: "paypal",
+    label: "PayPal",
+    authUrl: "https://www.paypal.com/signin/authorize",
+    tokenUrl: "https://api-m.paypal.com/v1/oauth2/token",
+    scopes: ["openid", "profile", "email"],
+    bakedIdKey: "paypal",
+    clientIdVar: "PAYPAL_OAUTH_CLIENT_ID",
+    clientSecretVar: "PAYPAL_OAUTH_CLIENT_SECRET",
+    tokenEnvVar: "PAYPAL_ACCESS_TOKEN",
+    refreshTokenEnvVar: "PAYPAL_REFRESH_TOKEN",
+    tokenExchangeAuth: "basic",
   },
 ] as const;
 

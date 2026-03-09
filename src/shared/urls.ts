@@ -102,6 +102,22 @@ export function buildWebhookUrl(triggerId: string, localBaseUrl?: string): strin
 }
 
 /**
+ * Build the connector webhook URL for a specific provider.
+ *
+ * Connector webhooks are app-level (not per-user), so they broadcast
+ * to all connected daemons. Each daemon verifies signatures locally.
+ *
+ *   https://bot.jeriko.ai/hooks/connector/:provider
+ *
+ * When self-hosted (JERIKO_PUBLIC_URL set), goes directly to daemon:
+ *   https://my-tunnel.example.com/hooks/connector/:provider
+ */
+export function buildConnectorWebhookUrl(provider: string): string {
+  const publicUrl = getPublicUrl();
+  return `${publicUrl}/hooks/connector/${provider}`;
+}
+
+/**
  * Build the OAuth callback URL for a specific provider.
  *
  * Always a clean URL without userId in the path:

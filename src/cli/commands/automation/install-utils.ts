@@ -11,6 +11,8 @@ import { homedir, platform, userInfo } from "node:os";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+import { MIN_AGENT_PROMPT_LENGTH } from "../../../shared/config.js";
+
 // Bundled AGENT.md — inlined at compile time, always available
 import BUNDLED_AGENT_MD from "../../../../AGENT.md" with { type: "text" };
 
@@ -168,6 +170,7 @@ export function setupDirectories(): void {
     join(DATA_DIR, "plugins"),
     join(DATA_DIR, "prompts"),
     join(DATA_DIR, "skills"),
+    join(DATA_DIR, "workspace"),
     join(DATA_DIR, "downloads"),
     INSTALL_DIR,
     VERSIONS_DIR,
@@ -394,10 +397,20 @@ export function setupAgentPrompt(): void {
 
   const target = join(CONFIG_DIR, "agent.md");
 
-  // If already installed, skip (user may have customized it)
+  // If already installed AND has meaningful content, skip (user may have customized it).
+  // An empty or truncated file (e.g. failed download) must be overwritten with the
+  // bundled copy — otherwise the agent runs with no system prompt.
   if (existsSync(target)) {
-    success("Agent prompt exists → " + target);
-    return;
+    try {
+      const content = readFileSync(target, "utf-8");
+      if (content.length >= MIN_AGENT_PROMPT_LENGTH) {
+        success("Agent prompt exists → " + target);
+        return;
+      }
+      warn("Agent prompt file is empty or corrupt — reinstalling from bundle");
+    } catch {
+      warn("Agent prompt file unreadable — reinstalling from bundle");
+    }
   }
 
   const candidates = [

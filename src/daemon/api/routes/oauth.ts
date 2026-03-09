@@ -147,10 +147,11 @@ export async function handleOAuthCallback(
 
   // Exchange authorization code for access token.
   //
-  // Two auth modes for token exchange:
+  // Three auth modes for token exchange:
   // - "body" (default): client_id + client_secret in the POST body.
-  // - "basic": HTTP Basic auth (Stripe uses secret API key as username).
-  const useBasicAuth = provider.tokenExchangeAuth === "basic";
+  // - "basic": Standard Basic auth — base64(client_id:client_secret).
+  // - "basic-apikey": API-key Basic auth — base64(client_secret:) (Stripe-style).
+  const authMode = provider.tokenExchangeAuth ?? "body";
 
   const tokenParams: Record<string, string> = {
     grant_type: "authorization_code",
@@ -158,7 +159,7 @@ export async function handleOAuthCallback(
     redirect_uri: redirectUri,
   };
 
-  if (!useBasicAuth) {
+  if (authMode === "body") {
     tokenParams.client_id = clientId;
     tokenParams.client_secret = clientSecret;
   }
@@ -174,8 +175,11 @@ export async function handleOAuthCallback(
       Accept: "application/json",
     };
 
-    if (useBasicAuth) {
-      // Stripe-style: secret key as Basic auth username, empty password
+    if (authMode === "basic") {
+      // Standard Basic auth: base64(client_id:client_secret) per RFC 7617
+      headers.Authorization = `Basic ${Buffer.from(clientId + ":" + clientSecret).toString("base64")}`;
+    } else if (authMode === "basic-apikey") {
+      // API-key Basic auth: base64(secret_key:) — Stripe-style
       headers.Authorization = `Basic ${Buffer.from(clientSecret + ":").toString("base64")}`;
     }
 
