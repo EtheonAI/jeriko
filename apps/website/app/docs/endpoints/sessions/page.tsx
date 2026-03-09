@@ -37,8 +37,27 @@ export default function SessionsPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl "http://127.0.0.1:3000/session?limit=10&offset=0" \\
+            code: `curl "http://127.0.0.1:7741/session?limit=10&offset=0" \\
   -H "Authorization: Bearer $TOKEN"`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/session?limit=10", {
+  headers: { "Authorization": \`Bearer \${token}\` },
+});
+const { data } = await res.json();
+console.log(\`\${data.length} sessions\`);`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.get(
+    "http://127.0.0.1:7741/session",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    params={"limit": 10},
+)
+sessions = res.json()["data"]`,
           },
         ]}
       />
@@ -49,11 +68,13 @@ export default function SessionsPage() {
   "data": [
     {
       "id": "a1b2c3d4",
-      "model": "claude-sonnet-4-20250514",
       "title": "GitHub issue summary",
-      "status": "active",
-      "created_at": "2026-03-03T10:00:00Z",
-      "message_count": 8
+      "model": "claude-sonnet-4-20250514",
+      "created_at": 1709467200000,
+      "updated_at": 1709470800000,
+      "archived_at": null,
+      "parent_session_id": null,
+      "agent_type": "main"
     }
   ]
 }`}
@@ -74,13 +95,29 @@ export default function SessionsPage() {
   "data": {
     "session": {
       "id": "a1b2c3d4",
-      "model": "claude-sonnet-4-20250514",
       "title": "GitHub issue summary",
-      "status": "active"
+      "model": "claude-sonnet-4-20250514",
+      "created_at": 1709467200000,
+      "updated_at": 1709470800000,
+      "archived_at": null,
+      "parent_session_id": null,
+      "agent_type": "main"
     },
     "messages": [
-      { "role": "user", "content": "Summarize my issues" },
-      { "role": "assistant", "content": "You have 3 open issues..." }
+      {
+        "id": "m1",
+        "session_id": "a1b2c3d4",
+        "role": "user",
+        "content": "Summarize my issues",
+        "created_at": 1709467200000
+      },
+      {
+        "id": "m2",
+        "session_id": "a1b2c3d4",
+        "role": "assistant",
+        "content": "You have 3 open issues...",
+        "created_at": 1709467205000
+      }
     ]
   }
 }`}

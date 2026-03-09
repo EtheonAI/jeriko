@@ -47,7 +47,8 @@ export default function ErrorsPage() {
           <tr><td><code>404</code></td><td>Not Found</td><td>Resource or endpoint not found</td></tr>
           <tr><td><code>429</code></td><td>Too Many Requests</td><td>Rate limit exceeded</td></tr>
           <tr><td><code>500</code></td><td>Internal Server Error</td><td>Unhandled error</td></tr>
-          <tr><td><code>503</code></td><td>Service Unavailable</td><td>Auth secret not configured</td></tr>
+          <tr><td><code>502</code></td><td>Bad Gateway</td><td>External service or connector error</td></tr>
+          <tr><td><code>503</code></td><td>Service Unavailable</td><td>Auth secret not configured or component unavailable</td></tr>
         </tbody>
       </table>
 

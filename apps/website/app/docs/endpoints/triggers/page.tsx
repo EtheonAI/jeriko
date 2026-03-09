@@ -10,7 +10,7 @@ export const metadata: Metadata = {
 };
 
 const createParams = [
-  { name: "type", type: "string", required: true, description: "Trigger type: cron, webhook, file, http, or email" },
+  { name: "type", type: "string", required: true, description: "Trigger type: cron, webhook, file, http, email, or once" },
   { name: "config", type: "object", required: true, description: "Type-specific configuration (see below)" },
   { name: "action", type: "object", required: true, description: "Action to execute: { type: \"shell\"|\"agent\", command?, prompt?, notify? }" },
   { name: "label", type: "string", required: false, description: "Human-readable display name" },
@@ -24,8 +24,9 @@ export default function TriggersPage() {
       <h1>Triggers</h1>
       <p>
         Triggers are automated event handlers. They fire on cron schedules,
-        inbound webhooks, file changes, HTTP polling, or incoming email. Each
-        trigger executes a shell command or an agent prompt when it fires.
+        inbound webhooks, file changes, HTTP polling, incoming email, or at a
+        specific datetime (once). Each trigger executes a shell command or an
+        agent prompt when it fires.
       </p>
 
       {/* ----------------------------------------------------------------- */}
@@ -46,8 +47,26 @@ export default function TriggersPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl "http://127.0.0.1:3000/triggers?type=cron&enabled=true" \\
+            code: `curl "http://127.0.0.1:7741/triggers?type=cron&enabled=true" \\
   -H "Authorization: Bearer $TOKEN"`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/triggers?type=cron&enabled=true", {
+  headers: { "Authorization": \`Bearer \${token}\` },
+});
+const { data } = await res.json();`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.get(
+    "http://127.0.0.1:7741/triggers",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    params={"type": "cron", "enabled": "true"},
+)
+triggers = res.json()["data"]`,
           },
         ]}
       />
@@ -100,6 +119,10 @@ export default function TriggersPage() {
             <td><code>email</code></td>
             <td><code>connector?</code> (gmail, outlook), <code>user?</code>, <code>intervalMs?</code></td>
           </tr>
+          <tr>
+            <td><code>once</code></td>
+            <td><code>at</code> (ISO 8601 datetime string)</td>
+          </tr>
         </tbody>
       </table>
 
@@ -107,7 +130,7 @@ export default function TriggersPage() {
         tabs={[
           {
             label: "curl — Cron",
-            code: `curl -X POST http://127.0.0.1:3000/triggers \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -118,8 +141,20 @@ export default function TriggersPage() {
   }'`,
           },
           {
+            label: "curl — Once",
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{
+    "type": "once",
+    "config": { "at": "2026-03-15T09:00:00Z" },
+    "action": { "type": "agent", "prompt": "Send the quarterly report" },
+    "label": "Q1 report"
+  }'`,
+          },
+          {
             label: "curl — Webhook",
-            code: `curl -X POST http://127.0.0.1:3000/triggers \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{

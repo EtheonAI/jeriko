@@ -21,13 +21,13 @@ export default function WebSocketPage() {
         tabs={[
           {
             label: "JavaScript",
-            code: `const ws = new WebSocket("ws://127.0.0.1:3000/ws");
+            code: `const ws = new WebSocket("ws://127.0.0.1:7741/ws");
 
 ws.onopen = () => {
   // First message must be an auth message
   ws.send(JSON.stringify({
     type: "auth",
-    token: process.env.JERIKO_TOKEN,
+    token: process.env.NODE_AUTH_SECRET,
     name: "my-agent",  // optional display name
   }));
 };
@@ -42,10 +42,10 @@ ws.onmessage = (event) => {
             code: `import json, os, websockets, asyncio
 
 async def connect():
-    async with websockets.connect("ws://127.0.0.1:3000/ws") as ws:
+    async with websockets.connect("ws://127.0.0.1:7741/ws") as ws:
         await ws.send(json.dumps({
             "type": "auth",
-            "token": os.environ["JERIKO_TOKEN"],
+            "token": os.environ["NODE_AUTH_SECRET"],
             "name": "my-agent",
         }))
 

@@ -37,10 +37,38 @@ export default function SharesPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/share \\
+            code: `curl -X POST http://127.0.0.1:7741/share \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"session_id": "a1b2c3d4", "expires_in_ms": 86400000}'`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/share", {
+  method: "POST",
+  headers: {
+    "Authorization": \`Bearer \${token}\`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    session_id: "a1b2c3d4",
+    expires_in_ms: 86400000,  // 24 hours
+  }),
+});
+const { data } = await res.json();
+console.log("Share URL:", data.url);`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.post(
+    "http://127.0.0.1:7741/share",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    json={"session_id": "a1b2c3d4", "expires_in_ms": 86400000},
+)
+share = res.json()["data"]
+print(f"Share URL: {share['url']}")`,
           },
         ]}
       />
@@ -50,7 +78,7 @@ export default function SharesPage() {
   "ok": true,
   "data": {
     "share_id": "Xk9mQ2pL",
-    "url": "http://127.0.0.1:3000/s/Xk9mQ2pL",
+    "url": "http://127.0.0.1:7741/s/Xk9mQ2pL",
     "title": "GitHub issue summary",
     "model": "claude-sonnet-4-20250514",
     "message_count": 8,

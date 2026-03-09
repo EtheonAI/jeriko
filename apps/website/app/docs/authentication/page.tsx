@@ -43,14 +43,14 @@ echo $NODE_AUTH_SECRET`,
         tabs={[
           {
             label: "curl",
-            code: `curl http://127.0.0.1:3000/agent/chat \\
+            code: `curl http://127.0.0.1:7741/agent/chat \\
   -H "Authorization: Bearer YOUR_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"message": "hello"}'`,
           },
           {
             label: "JavaScript",
-            code: `fetch("http://127.0.0.1:3000/agent/chat", {
+            code: `fetch("http://127.0.0.1:7741/agent/chat", {
   method: "POST",
   headers: {
     "Authorization": \`Bearer \${token}\`,
@@ -62,7 +62,7 @@ echo $NODE_AUTH_SECRET`,
           {
             label: "Python",
             code: `requests.post(
-    "http://127.0.0.1:3000/agent/chat",
+    "http://127.0.0.1:7741/agent/chat",
     headers={"Authorization": f"Bearer {token}"},
     json={"message": "hello"},
 )`,
@@ -76,7 +76,9 @@ echo $NODE_AUTH_SECRET`,
         <li><code>GET /health</code> &mdash; health check</li>
         <li><code>POST /hooks/:triggerId</code> &mdash; inbound webhooks (verified by signature)</li>
         <li><code>GET /oauth/:provider/*</code> &mdash; OAuth flow</li>
+        <li><code>GET /callback</code> &mdash; legacy OAuth callback</li>
         <li><code>GET /s/:id</code> &mdash; public shared sessions</li>
+        <li><code>POST /billing/webhook</code> &mdash; Stripe webhooks (verified by signature)</li>
       </ul>
 
       <h2>Error Responses</h2>

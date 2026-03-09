@@ -11,7 +11,7 @@ export interface Platform {
 
 export const PLATFORMS: Platform[] = [
   {
-    label: "macOS / Linux",
+    label: "macOS / Linux / WSL",
     command: "curl -fsSL https://jeriko.ai/install.sh | bash",
     uninstall: "rm -f /usr/local/bin/jeriko && rm -rf ~/.jeriko ~/.config/jeriko",
   },

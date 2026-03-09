@@ -41,14 +41,14 @@ export default function AgentPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/agent/chat \\
+            code: `curl -X POST http://127.0.0.1:7741/agent/chat \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"message": "Summarize my open GitHub issues"}'`,
           },
           {
             label: "JavaScript",
-            code: `const res = await fetch("http://127.0.0.1:3000/agent/chat", {
+            code: `const res = await fetch("http://127.0.0.1:7741/agent/chat", {
   method: "POST",
   headers: {
     "Authorization": \`Bearer \${token}\`,
@@ -60,6 +60,19 @@ export default function AgentPage() {
 });
 const { data } = await res.json();
 console.log(data.response);`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.post(
+    "http://127.0.0.1:7741/agent/chat",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    json={"message": "Summarize my open GitHub issues"},
+)
+
+data = res.json()["data"]
+print(data["response"])`,
           },
         ]}
       />
@@ -102,6 +115,7 @@ console.log(data.response);`,
           <tr><td><code>tool_call</code></td><td><code>id</code>, <code>name</code>, <code>arguments</code></td><td>Agent invoking a tool</td></tr>
           <tr><td><code>tool_result</code></td><td><code>toolCallId</code>, <code>result</code>, <code>isError</code></td><td>Tool execution result</td></tr>
           <tr><td><code>thinking</code></td><td><code>content</code></td><td>Extended thinking output</td></tr>
+          <tr><td><code>compaction</code></td><td><code>beforeTokens</code>, <code>afterTokens</code></td><td>Context window was compacted</td></tr>
           <tr><td><code>turn_complete</code></td><td><code>tokensIn</code>, <code>tokensOut</code></td><td>Agent finished its turn</td></tr>
           <tr><td><code>done</code></td><td><code>sessionId</code></td><td>Stream complete</td></tr>
           <tr><td><code>error</code></td><td><code>message</code></td><td>Error occurred</td></tr>
@@ -110,8 +124,15 @@ console.log(data.response);`,
       <CodeBlock
         tabs={[
           {
+            label: "curl",
+            code: `curl -N -X POST http://127.0.0.1:7741/agent/stream \\
+  -H "Authorization: Bearer $TOKEN" \\
+  -H "Content-Type: application/json" \\
+  -d '{"message": "Hello"}'`,
+          },
+          {
             label: "JavaScript",
-            code: `const res = await fetch("http://127.0.0.1:3000/agent/stream", {
+            code: `const res = await fetch("http://127.0.0.1:7741/agent/stream", {
   method: "POST",
   headers: {
     "Authorization": \`Bearer \${token}\`,
@@ -141,6 +162,29 @@ while (true) {
     }
   }
 }`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.post(
+    "http://127.0.0.1:7741/agent/stream",
+    headers={
+        "Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}",
+        "Content-Type": "application/json",
+    },
+    json={"message": "Hello"},
+    stream=True,
+)
+
+for line in res.iter_lines():
+    if line:
+        text = line.decode()
+        if text.startswith("data: "):
+            import json
+            event = json.loads(text[6:])
+            if event.get("type") == "text_delta":
+                print(event["content"], end="", flush=True)`,
           },
         ]}
       />

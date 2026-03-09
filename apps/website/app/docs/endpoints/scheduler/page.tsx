@@ -47,7 +47,7 @@ export default function SchedulerPage() {
         tabs={[
           {
             label: "curl — Shell action",
-            code: `curl -X POST http://127.0.0.1:3000/triggers \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -59,7 +59,7 @@ export default function SchedulerPage() {
           },
           {
             label: "curl — Agent action",
-            code: `curl -X POST http://127.0.0.1:3000/triggers \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -106,7 +106,7 @@ export default function SchedulerPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl "http://127.0.0.1:3000/triggers?type=cron" \\
+            code: `curl "http://127.0.0.1:7741/triggers?type=cron" \\
   -H "Authorization: Bearer $TOKEN"`,
           },
         ]}
@@ -149,7 +149,7 @@ export default function SchedulerPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/triggers/a1b2c3d4/toggle \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers/a1b2c3d4/toggle \\
   -H "Authorization: Bearer $TOKEN"`,
           },
         ]}
@@ -169,7 +169,7 @@ export default function SchedulerPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X DELETE http://127.0.0.1:3000/triggers/a1b2c3d4 \\
+            code: `curl -X DELETE http://127.0.0.1:7741/triggers/a1b2c3d4 \\
   -H "Authorization: Bearer $TOKEN"`,
           },
         ]}

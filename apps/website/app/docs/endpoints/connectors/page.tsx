@@ -31,8 +31,27 @@ export default function ConnectorsPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl http://127.0.0.1:3000/connector \\
+            code: `curl http://127.0.0.1:7741/connector \\
   -H "Authorization: Bearer $TOKEN"`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/connector", {
+  headers: { "Authorization": \`Bearer \${token}\` },
+});
+const { data } = await res.json();
+data.forEach(c => console.log(\`\${c.name}: \${c.status}\`));`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.get(
+    "http://127.0.0.1:7741/connector",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+)
+for c in res.json()["data"]:
+    print(f"{c['name']}: {c['status']}")`,
           },
         ]}
       />
@@ -97,14 +116,14 @@ export default function ConnectorsPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/connector/stripe/call \\
+            code: `curl -X POST http://127.0.0.1:7741/connector/stripe/call \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{"method": "charges.list", "params": {"limit": 5}}'`,
           },
           {
             label: "JavaScript",
-            code: `const res = await fetch("http://127.0.0.1:3000/connector/stripe/call", {
+            code: `const res = await fetch("http://127.0.0.1:7741/connector/stripe/call", {
   method: "POST",
   headers: {
     "Authorization": \`Bearer \${token}\`,
@@ -115,6 +134,17 @@ export default function ConnectorsPage() {
     params: { limit: 5 },
   }),
 });`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.post(
+    "http://127.0.0.1:7741/connector/stripe/call",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    json={"method": "charges.list", "params": {"limit": 5}},
+)
+charges = res.json()["data"]["result"]`,
           },
         ]}
       />

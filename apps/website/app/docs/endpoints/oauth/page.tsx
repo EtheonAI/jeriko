@@ -79,6 +79,10 @@ jeriko connect github
           <tr><td>Gmail</td><td>OAuth</td><td>gmail.readonly, gmail.send</td></tr>
           <tr><td>Outlook</td><td>OAuth</td><td>Mail.ReadWrite, Mail.Send</td></tr>
           <tr><td>Vercel</td><td>OAuth</td><td>user, deployments</td></tr>
+          <tr><td>HubSpot</td><td>OAuth</td><td>crm.objects.contacts.read, crm.objects.deals.read</td></tr>
+          <tr><td>Shopify</td><td>OAuth</td><td>read_products, read_orders</td></tr>
+          <tr><td>Instagram</td><td>OAuth</td><td>instagram_basic, pages_show_list</td></tr>
+          <tr><td>Threads</td><td>OAuth</td><td>threads_basic, threads_content_publish</td></tr>
         </tbody>
       </table>
 

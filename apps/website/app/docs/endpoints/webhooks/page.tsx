@@ -68,7 +68,7 @@ export default function WebhooksPage() {
         tabs={[
           {
             label: "1. Create trigger",
-            code: `curl -X POST http://127.0.0.1:3000/triggers \\
+            code: `curl -X POST http://127.0.0.1:7741/triggers \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{

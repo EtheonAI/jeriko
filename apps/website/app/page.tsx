@@ -26,6 +26,9 @@ const FEATURES = [
   { icon: "model",     title: "Any AI Model",             desc: "OpenAI, Claude, Ollama, or 22+ custom providers. Swap models with a single flag. Zero vendor lock-in." },
   { icon: "shield",    title: "Secure & Private",         desc: "Runs 100% locally. Your API keys, your data, your machine. Nothing phones home. Full exec sandboxing." },
   { icon: "bolt",      title: "Lightweight & Fast",       desc: "Single 66MB binary. No dependencies, no Docker, no runtime. One command install, instant startup." },
+  { icon: "memory",    title: "Persistent Memory",        desc: "Your agent remembers preferences, decisions, and context across sessions. It learns your workflow and gets better over time." },
+  { icon: "eye",       title: "Vision & Screenshots",     desc: "Your agent can see your screen, analyze images, and use your camera. Debug UI bugs, read documents, or monitor visual changes." },
+  { icon: "api",       title: "Full HTTP API",            desc: "REST API and WebSocket for real-time streaming. Build dashboards, mobile apps, or custom integrations on top of Jeriko." },
 ];
 
 const INITIAL_COUNT = 9;
@@ -51,6 +54,9 @@ const ICON_MAP: Record<string, string> = {
   model:     "M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58s9.14-3.49 12.65 0L21 3v7.12z",
   shield:    "M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z",
   bolt:      "M11 21h-1l1-7H7.5c-.58 0-.57-.32-.38-.66.19-.34.05-.08.07-.12C8.48 10.94 10.42 7.54 13 3h1l-1 7h3.5c.49 0 .56.33.47.51l-.07.15C12.96 17.55 11 21 11 21z",
+  memory:    "M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z",
+  eye:       "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
+  api:       "M14 12l-2 2-2-2 2-2 2 2zm-2-6l2.12 2.12 2.5-2.5L12 1 7.38 5.62l2.5 2.5L12 6zm-6 6l2.12-2.12-2.5-2.5L1 12l4.62 4.62 2.5-2.5L6 12zm12 0l-2.12 2.12 2.5 2.5L23 12l-4.62-4.62-2.5 2.5L18 12zm-6 6l-2.12-2.12-2.5 2.5L12 23l4.62-4.62-2.5-2.5L12 18z",
 };
 
 function FeatureIcon({ name }: { name: string }) {

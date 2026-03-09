@@ -31,8 +31,27 @@ export default function BillingPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl http://127.0.0.1:3000/billing/plan \\
+            code: `curl http://127.0.0.1:7741/billing/plan \\
   -H "Authorization: Bearer $TOKEN"`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/billing/plan", {
+  headers: { "Authorization": \`Bearer \${token}\` },
+});
+const { data } = await res.json();
+console.log(\`Tier: \${data.tier}, Connectors: \${data.connectors.used}/\${data.connectors.limit}\`);`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.get(
+    "http://127.0.0.1:7741/billing/plan",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+)
+plan = res.json()["data"]
+print(f"Tier: {plan['tier']}, Status: {plan['status']}")`,
           },
         ]}
       />
@@ -42,14 +61,20 @@ export default function BillingPage() {
   "ok": true,
   "data": {
     "tier": "free",
-    "limits": {
-      "connectors": 2,
-      "triggers": 3
+    "label": "Free",
+    "status": "active",
+    "email": null,
+    "connectors": {
+      "used": 1,
+      "limit": 2
     },
-    "usage": {
-      "connectors": 1,
-      "triggers": 2
-    }
+    "triggers": {
+      "used": 2,
+      "limit": 3
+    },
+    "pastDue": false,
+    "gracePeriod": false,
+    "validUntil": null
   }
 }`}
       />
@@ -64,7 +89,7 @@ export default function BillingPage() {
       />
       <ParamTable
         params={[
-          { name: "email", type: "string", required: false, description: "Customer email for the checkout session" },
+          { name: "email", type: "string", required: true, description: "Customer email for the checkout session" },
           { name: "client_ip", type: "string", required: false, description: "Client IP address for tax calculation" },
           { name: "user_agent", type: "string", required: false, description: "Client user agent string" },
         ]}
@@ -73,12 +98,34 @@ export default function BillingPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/billing/checkout \\
+            code: `curl -X POST http://127.0.0.1:7741/billing/checkout \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{
-    "email": "user@example.com"
-  }'`,
+  -d '{"email": "user@example.com"}'`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/billing/checkout", {
+  method: "POST",
+  headers: {
+    "Authorization": \`Bearer \${token}\`,
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({ email: "user@example.com" }),
+});
+const { data } = await res.json();
+// Redirect the user to data.url for Stripe Checkout`,
+          },
+          {
+            label: "Python",
+            code: `import os, requests
+
+res = requests.post(
+    "http://127.0.0.1:7741/billing/checkout",
+    headers={"Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}"},
+    json={"email": "user@example.com"},
+)
+checkout_url = res.json()["data"]["url"]`,
           },
         ]}
       />
@@ -102,14 +149,14 @@ export default function BillingPage() {
       />
       <ParamTable
         params={[
-          { name: "customer_id", type: "string", required: true, description: "Stripe customer ID" },
+          { name: "customer_id", type: "string", required: false, description: "Stripe customer ID (uses current subscription if omitted)" },
         ]}
       />
       <CodeBlock
         tabs={[
           {
             label: "curl",
-            code: `curl -X POST http://127.0.0.1:3000/billing/portal \\
+            code: `curl -X POST http://127.0.0.1:7741/billing/portal \\
   -H "Authorization: Bearer $TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{
@@ -147,7 +194,7 @@ export default function BillingPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl "http://127.0.0.1:3000/billing/events?limit=10&type=checkout.session.completed" \\
+            code: `curl "http://127.0.0.1:7741/billing/events?limit=10&type=checkout.session.completed" \\
   -H "Authorization: Bearer $TOKEN"`,
           },
         ]}

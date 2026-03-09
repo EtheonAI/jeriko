@@ -18,9 +18,9 @@ export default function DocsOverview() {
 
       <h2>Base URL</h2>
       <p>
-        The daemon listens on <code>127.0.0.1:3000</code> by default. The port
+        The daemon listens on <code>127.0.0.1:7741</code> by default. The port
         is configurable via the <code>JERIKO_PORT</code> environment variable or
-        the <code>port</code> field in your config.
+        the <code>--port</code> flag.
       </p>
 
       <h2>Quick Start</h2>
@@ -29,20 +29,20 @@ export default function DocsOverview() {
           {
             label: "curl",
             code: `# Check daemon health
-curl http://127.0.0.1:3000/health
+curl http://127.0.0.1:7741/health
 
 # Send a message to the agent
-curl -X POST http://127.0.0.1:3000/agent/chat \\
-  -H "Authorization: Bearer $JERIKO_TOKEN" \\
+curl -X POST http://127.0.0.1:7741/agent/chat \\
+  -H "Authorization: Bearer $NODE_AUTH_SECRET" \\
   -H "Content-Type: application/json" \\
   -d '{"message": "What time is it?"}'`,
           },
           {
             label: "JavaScript",
-            code: `const res = await fetch("http://127.0.0.1:3000/agent/chat", {
+            code: `const res = await fetch("http://127.0.0.1:7741/agent/chat", {
   method: "POST",
   headers: {
-    "Authorization": \`Bearer \${process.env.JERIKO_TOKEN}\`,
+    "Authorization": \`Bearer \${process.env.NODE_AUTH_SECRET}\`,
     "Content-Type": "application/json",
   },
   body: JSON.stringify({ message: "What time is it?" }),
@@ -55,9 +55,9 @@ const { ok, data, error } = await res.json();`,
             code: `import os, requests
 
 res = requests.post(
-    "http://127.0.0.1:3000/agent/chat",
+    "http://127.0.0.1:7741/agent/chat",
     headers={
-        "Authorization": f"Bearer {os.environ['JERIKO_TOKEN']}",
+        "Authorization": f"Bearer {os.environ['NODE_AUTH_SECRET']}",
         "Content-Type": "application/json",
     },
     json={"message": "What time is it?"},
@@ -116,8 +116,9 @@ data = res.json()`,
           <tr><td>Sessions</td><td><code>/session</code></td><td>Session CRUD and history</td></tr>
           <tr><td>Channels</td><td><code>/channel</code></td><td>Telegram, WhatsApp management</td></tr>
           <tr><td>Connectors</td><td><code>/connector</code></td><td>OAuth and API key integrations</td></tr>
-          <tr><td>Triggers</td><td><code>/triggers</code></td><td>Cron, webhook, file, HTTP, email</td></tr>
+          <tr><td>Triggers</td><td><code>/triggers</code></td><td>Cron, webhook, file, HTTP, email, once</td></tr>
           <tr><td>Scheduler</td><td><code>/scheduler</code></td><td>Cron task facade</td></tr>
+          <tr><td>Billing</td><td><code>/billing</code></td><td>Plans, checkout, portal, events</td></tr>
           <tr><td>Shares</td><td><code>/share</code></td><td>Shareable session links</td></tr>
           <tr><td>Webhooks</td><td><code>/hooks</code></td><td>Inbound webhook receiver</td></tr>
           <tr><td>OAuth</td><td><code>/oauth</code></td><td>OAuth authorization flow</td></tr>

@@ -15,7 +15,7 @@ export default function HealthPage() {
       <p>
         The health endpoint provides daemon status information. It requires no
         authentication and is designed for load balancers, monitoring, and the{" "}
-        <code>jeriko service status</code> CLI command.
+        <code>jeriko health</code> CLI command.
       </p>
 
       <Endpoint
@@ -29,7 +29,21 @@ export default function HealthPage() {
         tabs={[
           {
             label: "curl",
-            code: `curl http://127.0.0.1:3000/health`,
+            code: `curl http://127.0.0.1:7741/health`,
+          },
+          {
+            label: "JavaScript",
+            code: `const res = await fetch("http://127.0.0.1:7741/health");
+const { data } = await res.json();
+console.log(\`Status: \${data.status}, Uptime: \${data.uptime_human}\`);`,
+          },
+          {
+            label: "Python",
+            code: `import requests
+
+res = requests.get("http://127.0.0.1:7741/health")
+data = res.json()["data"]
+print(f"Status: {data['status']}, Uptime: {data['uptime_human']}")`,
           },
         ]}
       />

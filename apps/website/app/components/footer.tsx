@@ -14,7 +14,7 @@ export function Footer() {
   return (
     <footer className="footer">
       <div className="footer-inner">
-        <p>&copy; {YEAR} Jeriko. All rights reserved.</p>
+        <p>&copy; {YEAR} Etheon, Inc. All rights reserved.</p>
         <nav>
           {LINKS.map((link) => (
             <a key={link.href} href={link.href}>
