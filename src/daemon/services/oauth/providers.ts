@@ -53,6 +53,8 @@ export interface OAuthProvider {
   usePKCE?: boolean;
   /** Extra params to include in the token exchange POST. */
   extraTokenParams?: Record<string, string>;
+  /** Extra query params to include in the authorization URL. */
+  extraAuthParams?: Record<string, string>;
   /**
    * How to authenticate the token exchange request.
    * - "body" (default): Send client_id + client_secret in the POST body.
