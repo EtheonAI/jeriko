@@ -2943,6 +2943,71 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
           return;
         }
 
+        // /billing plan — show plan info
+        if (subCommand === "plan") {
+          const { isBillingConfigured } = await import("../../billing/stripe.js");
+          if (!isBillingConfigured()) {
+            await safeSend(metadata, "Billing is not configured on this instance.");
+            return;
+          }
+          const { getLicenseState } = await import("../../billing/license.js");
+          const { getConfiguredConnectorCount } = await import("../../../shared/connector.js");
+          const ls = getLicenseState();
+          const cc = getConfiguredConnectorCount();
+          const te = opts.getTriggerEngine?.();
+          const tc = te?.listAll().filter((t) => t.enabled).length ?? 0;
+          const tl = ls.triggerLimit === Infinity ? "∞" : String(ls.triggerLimit);
+          const lines = [
+            `Plan: ${ls.label}`, `Status: ${ls.status}`,
+            `Connectors: ${cc}/${ls.connectorLimit}`, `Triggers: ${tc}/${tl}`,
+          ];
+          await safeKeyboard(metadata, lines.join("\n"), [[{ label: "« Billing", data: "/billing" }]]);
+          return;
+        }
+
+        // /billing upgrade — show upgrade info
+        if (subCommand === "upgrade") {
+          const { getLicenseState } = await import("../../billing/license.js");
+          const ls = getLicenseState();
+          if (ls.tier !== "free") {
+            await safeKeyboard(metadata, `You're already on the ${ls.label} plan.`, [[{ label: "« Billing", data: "/billing" }]]);
+            return;
+          }
+          const { PRO_PRICE_DISPLAY } = await import("../../billing/config.js");
+          const email = rest.slice(1).join(" ").trim();
+          if (!email) {
+            await safeKeyboard(metadata, `Upgrade to Pro — ${PRO_PRICE_DISPLAY}\n\nUsage: /billing upgrade your@email.com`, [[{ label: "« Billing", data: "/billing" }]]);
+            return;
+          }
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            await safeSend(metadata, "Invalid email. Usage: /billing upgrade your@email.com");
+            return;
+          }
+          try {
+            const { createCheckoutViaRelay } = await import("../../billing/relay-proxy.js");
+            const result = await createCheckoutViaRelay(email);
+            if (!result) { await safeSend(metadata, "Unable to create checkout. Try again."); return; }
+            await safeKeyboard(metadata, `Checkout ready for ${email}:`, [[{ label: "Open Checkout", url: result.url }]]);
+          } catch (err) {
+            await safeSend(metadata, `Checkout failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+          return;
+        }
+
+        // /billing cancel — open billing portal for cancellation
+        if (subCommand === "cancel") {
+          const { BILLING_PORTAL_URL } = await import("../../billing/config.js");
+          await safeKeyboard(
+            metadata,
+            "To cancel your subscription, use the billing portal:",
+            [
+              [{ label: "Open Billing Portal", url: BILLING_PORTAL_URL }],
+              [{ label: "« Billing", data: "/billing" }],
+            ],
+          );
+          return;
+        }
+
         // /billing events — show recent billing event log
         if (subCommand === "events") {
           const { getRecentEvents } = await import("../../billing/store.js");
@@ -3037,18 +3102,17 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         }
 
         const buttons: KeyboardLayout = [
-          [{ label: "View Plan", data: "/plan" }],
+          [{ label: "Manage Account", data: "/billing manage" }],
+          [{ label: "View Plan", data: "/billing plan" }],
         ];
 
-        buttons.push([{ label: "Manage Account", data: "/billing manage" }]);
         if (licState.tier === "free") {
-          buttons.push([{ label: "Upgrade to Pro", data: "/upgrade" }]);
+          buttons.push([{ label: "Upgrade to Pro", data: "/billing upgrade" }]);
         } else {
           buttons.push([
-            { label: "Manage Portal", data: "/billing portal" },
             { label: "Events", data: "/billing events" },
+            { label: "Cancel", data: "/billing cancel" },
           ]);
-          buttons.push([{ label: "Cancel", data: "/cancel" }]);
         }
 
         await safeKeyboard(metadata, planLines.join("\n"), buttons);

@@ -67,9 +67,9 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
   {
     label: "Billing",
     commands: [
+      ["/billing",         "Billing hub (manage, plan, upgrade, cancel)"],
       ["/plan",            "Show billing plan and usage"],
       ["/upgrade",         "Upgrade to Pro plan"],
-      ["/billing",         "Manage billing, invoices, or cancel"],
     ],
   },
   {
@@ -123,9 +123,9 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/notifications",  "Notification preferences"],
 
   // Billing
+  ["/billing",        "Billing hub (manage, plan, upgrade, cancel)"],
   ["/plan",           "Show billing plan and usage"],
   ["/upgrade",        "Upgrade to Pro plan"],
-  ["/billing",        "Manage billing, invoices, or cancel"],
 
   // System
   ["/onboard",        "Run setup wizard"],

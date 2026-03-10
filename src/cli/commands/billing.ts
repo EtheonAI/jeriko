@@ -190,20 +190,42 @@ export const billingCommand: CommandHandler = {
     const subcommand = parsed.positional[0];
 
     if (flagBool(parsed, "help")) {
-      console.log("Usage: jeriko billing [manage|events]");
+      console.log("Usage: jeriko billing [manage|plan|upgrade|cancel|events]");
       console.log("\nManage your billing, subscription, and invoices.");
       console.log("\nSubcommands:");
-      console.log("  manage    Open the billing portal to manage your account");
+      console.log("  manage    Open the billing portal to manage your account (default)");
+      console.log("  plan      Show current billing plan and usage");
+      console.log("  upgrade   Upgrade to Pro plan");
+      console.log("  cancel    Open the billing portal to cancel your subscription");
       console.log("  events    List recent billing events (audit trail)");
       console.log("\nFlags:");
       console.log("  --help    Show this help");
       process.exit(0);
     }
 
-    // Subcommand: manage — open static billing portal
-    if (subcommand === "manage") {
+    // Subcommand: manage (or no args) — open static billing portal
+    if (!subcommand || subcommand === "manage") {
       await openInBrowser(BILLING_PORTAL_URL);
       ok({ url: BILLING_PORTAL_URL, message: "Billing portal opened in browser" });
+      return;
+    }
+
+    // Subcommand: plan — delegate to plan command
+    if (subcommand === "plan") {
+      await planCommand.run(args.slice(1));
+      return;
+    }
+
+    // Subcommand: upgrade — delegate to upgrade command
+    if (subcommand === "upgrade") {
+      await upgradeCommand.run(args.slice(1));
+      return;
+    }
+
+    // Subcommand: cancel — open billing portal for cancellation
+    if (subcommand === "cancel") {
+      await openInBrowser(BILLING_PORTAL_URL);
+      ok({ url: BILLING_PORTAL_URL, message: "To cancel, use the billing portal" });
       return;
     }
 
@@ -213,7 +235,7 @@ export const billingCommand: CommandHandler = {
       return;
     }
 
-    // Default: open customer portal
+    // Unknown subcommand — open portal as default
     let url: string;
 
     if (isDaemonRunning()) {

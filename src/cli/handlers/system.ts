@@ -793,19 +793,31 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
     },
 
     async billing(args = ""): Promise<void> {
-      const sub = args.trim().toLowerCase();
-      if (sub === "manage" || sub === "") {
-        const { BILLING_PORTAL_URL } = await import("../../daemon/billing/config.js");
-        openInBrowser(BILLING_PORTAL_URL);
-        addSystemMessage(t.green(`\u2713 Billing portal opened: ${BILLING_PORTAL_URL}`));
-        return;
-      }
-      try {
-        const result = await backend.openBillingPortal();
-        openInBrowser(result.url);
-        addSystemMessage(t.green(`\u2713 Billing portal (manage, cancel, invoices): ${result.url}`));
-      } catch (err) {
-        addSystemMessage(formatError(getErrorMessage(err)));
+      const parts = args.trim().toLowerCase().split(/\s+/);
+      const sub = parts[0] || "";
+      const rest = parts.slice(1).join(" ");
+
+      switch (sub) {
+        case "manage":
+        case "": {
+          const { BILLING_PORTAL_URL } = await import("../../daemon/billing/config.js");
+          openInBrowser(BILLING_PORTAL_URL);
+          addSystemMessage(t.green(`\u2713 Billing portal opened: ${BILLING_PORTAL_URL}`));
+          return;
+        }
+        case "plan":
+          return this.plan();
+        case "upgrade":
+          return this.upgrade(rest);
+        case "cancel": {
+          const { BILLING_PORTAL_URL } = await import("../../daemon/billing/config.js");
+          openInBrowser(BILLING_PORTAL_URL);
+          addSystemMessage(t.green(`\u2713 To cancel, use the billing portal: ${BILLING_PORTAL_URL}`));
+          return;
+        }
+        default:
+          addSystemMessage(t.dim("Usage: /billing [manage|plan|upgrade|cancel]"));
+          return;
       }
     },
 
