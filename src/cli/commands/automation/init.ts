@@ -27,6 +27,7 @@ import { getConfigDir } from "../../../shared/config.js";
 import { ClackPrompter } from "../../wizard/clack-prompter.js";
 import { runOnboarding, persistSetup } from "../../wizard/onboarding.js";
 import { JERIKO_DIR } from "../../lib/daemon.js";
+import { VERSION } from "../../../shared/version.js";
 
 const CONFIG_DIR = getConfigDir();
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
@@ -69,18 +70,6 @@ function buildNonInteractiveConfig(): Record<string, unknown> {
   };
 }
 
-/**
- * Get version string from package.json.
- */
-async function getVersion(): Promise<string> {
-  try {
-    const pkgPath = join(import.meta.dirname, "../../../package.json");
-    const pkg = await Bun.file(pkgPath).json();
-    return pkg.version ?? "2.0.0";
-  } catch {
-    return "2.0.0";
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Command
@@ -123,7 +112,7 @@ export const command: CommandHandler = {
     // Interactive mode — same wizard as first-run onboarding
     try {
       const prompter = new ClackPrompter();
-      const version = await getVersion();
+      const version = VERSION;
       const result = await runOnboarding(prompter, version);
 
       if (result) {
@@ -143,7 +132,7 @@ export const command: CommandHandler = {
  * @deprecated Use runOnboarding + persistSetup from wizard/onboarding.ts directly.
  */
 export async function runInteractiveInit(prompter: import("../../wizard/prompter.js").WizardPrompter): Promise<void> {
-  const version = await getVersion();
+  const version = VERSION;
   const result = await runOnboarding(prompter, version);
   if (result) {
     await persistSetup(result);

@@ -64,7 +64,13 @@ const DIST = path.join(ROOT, "dist");
 const RELAY_AUTH_SECRET = process.env.BAKED_RELAY_AUTH_SECRET
   ?? "32a52cbdd799c10fb4d055b1ab3106a43e6712c0b4b4022bf460f9d3260e8827";
 
+// Read version from package.json at build time
+const PKG_VERSION = JSON.parse(
+  await Bun.file(path.join(ROOT, "package.json")).text(),
+).version as string;
+
 const BAKED_OAUTH_DEFINES: Record<string, string> = {
+  __BAKED_VERSION__:                JSON.stringify(PKG_VERSION),
   __BAKED_POSTHOG_KEY__:            JSON.stringify(process.env.BAKED_POSTHOG_KEY ?? "phc_tZSl9DLWFuWV7ozBohDcJM74U3OFoN9P3QLp5IsV4f1"),
   __BAKED_RELAY_AUTH_SECRET__:       JSON.stringify(RELAY_AUTH_SECRET),
   __BAKED_GITHUB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),

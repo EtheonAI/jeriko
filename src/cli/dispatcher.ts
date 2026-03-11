@@ -16,6 +16,7 @@ import type { OutputFormat } from "../shared/types.js";
 import { parseArgs, flagStr, flagBool } from "../shared/args.js";
 import { fail, setOutputFormat } from "../shared/output.js";
 import { capture } from "../shared/telemetry.js";
+import { VERSION } from "../shared/version.js";
 
 /** Flags consumed by the dispatcher — stripped before passing to commands.
  *  Note: --help is NOT stripped — commands handle their own --help for per-command docs.
@@ -178,7 +179,6 @@ async function loadBuiltinCommands(): Promise<void> {
 // Version
 // ---------------------------------------------------------------------------
 
-const VERSION = "2.0.0-alpha.1";
 
 function printVersion(): void {
   console.log(`jeriko ${VERSION}`);

@@ -11,7 +11,6 @@
 
 import { render } from "ink";
 import React from "react";
-import { join } from "node:path";
 
 import { App } from "./app.js";
 import { printBanner } from "./components/Banner.js";
@@ -21,23 +20,10 @@ import { runOnboarding } from "./wizard/onboarding.js";
 import { ClackPrompter } from "./wizard/clack-prompter.js";
 import { persistSetup } from "./wizard/onboarding.js";
 import type { Phase } from "./types.js";
+import { VERSION } from "../shared/version.js";
 
 // Re-export for backward compat (tests, dispatcher)
 export { slashCompleter } from "./commands.js";
-
-// ---------------------------------------------------------------------------
-// Version
-// ---------------------------------------------------------------------------
-
-async function getVersion(): Promise<string> {
-  try {
-    const pkgPath = join(import.meta.dirname, "../../package.json");
-    const pkg = await Bun.file(pkgPath).json();
-    return pkg.version ?? "2.0.0";
-  } catch {
-    return "2.0.0";
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Entry point
@@ -47,7 +33,7 @@ export async function startChat(): Promise<void> {
   // Bun stdin compatibility — ensure stdin is flowing
   process.stdin.resume();
 
-  const version = await getVersion();
+  const version = VERSION;
 
   // First-run onboarding wizard (before Ink mounts).
   // Only handles provider setup — channels are added after via /connect.

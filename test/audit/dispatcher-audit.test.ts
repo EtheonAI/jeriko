@@ -14,6 +14,7 @@
 import { describe, expect, it, spyOn, afterEach, beforeEach } from "bun:test";
 import { parseArgs, flagStr, flagBool, requireFlag } from "../../src/shared/args.js";
 import { setOutputFormat, getOutputFormat } from "../../src/shared/output.js";
+import { VERSION } from "../../src/shared/version.js";
 
 // ---------------------------------------------------------------------------
 // parseArgs (src/shared/args.ts)
@@ -194,7 +195,7 @@ describe("dispatcher", () => {
       if (e?.message !== "EXIT") throw e;
     }
     expect(exitSpy).toHaveBeenCalledWith(0);
-    expect(logSpy).toHaveBeenCalledWith("jeriko 2.0.0-alpha.1");
+    expect(logSpy).toHaveBeenCalledWith(`jeriko ${VERSION}`);
   });
 
   it("--help with no command prints help and exits 0", async () => {

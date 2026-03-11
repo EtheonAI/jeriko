@@ -31,6 +31,7 @@ import {
 import { join, dirname } from "node:path";
 import { homedir, platform, arch as osArch } from "node:os";
 import { execSync } from "node:child_process";
+import { VERSION } from "../../../shared/version.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -95,15 +96,7 @@ function detectPlatform(): string {
 // ---------------------------------------------------------------------------
 
 function getCurrentVersion(): string {
-  try {
-    const output = execSync(`"${process.execPath}" --version`, {
-      encoding: "utf-8",
-      timeout: 5000,
-    }).trim();
-    const match = output.match(/(\d+\.\d+\.\d+(-[^\s]+)?)/);
-    if (match?.[1]) return match[1];
-  } catch { /* ignore */ }
-  return "unknown";
+  return VERSION;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,5 @@
 import { describe, expect, it, spyOn, afterEach, beforeEach } from "bun:test";
+import { VERSION } from "../../src/shared/version.js";
 
 describe("dispatcher", () => {
   let exitSpy: ReturnType<typeof spyOn>;
@@ -22,7 +23,7 @@ describe("dispatcher", () => {
       // Only swallow the EXIT error from our process.exit mock
       if (e?.message !== "EXIT") throw e;
     }
-    expect(logSpy).toHaveBeenCalledWith("jeriko 2.0.0-alpha.1");
+    expect(logSpy).toHaveBeenCalledWith(`jeriko ${VERSION}`);
   });
 
   it("--help prints help and exits", async () => {
