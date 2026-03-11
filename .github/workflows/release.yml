@@ -137,29 +137,29 @@ jobs:
             filename=$(basename "$f")
             echo "Uploading $filename..."
             wrangler r2 object put "${BUCKET}/releases/${VERSION}/${filename}" \
-              --file "$f" --content-type "application/octet-stream"
+              --file "$f" --content-type "application/octet-stream" --remote
           done
 
           # Upload manifest
           wrangler r2 object put "${BUCKET}/releases/${VERSION}/manifest.json" \
-            --file dist/manifest.json --content-type "application/json"
+            --file dist/manifest.json --content-type "application/json" --remote
 
           # Upload templates
           if [ -f dist/templates.tar.gz ]; then
             wrangler r2 object put "${BUCKET}/releases/${VERSION}/templates.tar.gz" \
-              --file dist/templates.tar.gz --content-type "application/gzip"
+              --file dist/templates.tar.gz --content-type "application/gzip" --remote
           fi
 
           # Upload agent prompt
           if [ -f dist/agent.md ]; then
             wrangler r2 object put "${BUCKET}/releases/${VERSION}/agent.md" \
-              --file dist/agent.md --content-type "text/markdown"
+              --file dist/agent.md --content-type "text/markdown" --remote
           fi
 
           # Update latest pointer
           echo -n "$VERSION" > dist/latest
           wrangler r2 object put "${BUCKET}/releases/latest" \
-            --file dist/latest --content-type "text/plain"
+            --file dist/latest --content-type "text/plain" --remote
 
           echo "CDN upload complete: $VERSION"
 

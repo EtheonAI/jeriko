@@ -122,7 +122,7 @@ if [ "$DO_CDN" = true ]; then
 
         r2_key="releases/${VERSION}/${filename}"
         info "  Uploading $filename → $r2_key"
-        $WRANGLER r2 object put "${R2_BUCKET}/${r2_key}" --file "$local_path" --ct "application/octet-stream"
+        $WRANGLER r2 object put "${R2_BUCKET}/${r2_key}" --file "$local_path" --ct "application/octet-stream" --remote
         ok "  $platform uploaded"
     done
 
@@ -130,7 +130,7 @@ if [ "$DO_CDN" = true ]; then
     info "  Uploading manifest.json"
     $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/manifest.json" \
         --file "$DIST_DIR/manifest.json" \
-        --ct "application/json"
+        --ct "application/json" --remote
     ok "  manifest.json uploaded"
 
     # Upload templates archive if present
@@ -138,7 +138,7 @@ if [ "$DO_CDN" = true ]; then
         info "  Uploading templates.tar.gz"
         $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/templates.tar.gz" \
             --file "$DIST_DIR/templates.tar.gz" \
-            --ct "application/gzip"
+            --ct "application/gzip" --remote
         ok "  templates.tar.gz uploaded"
     fi
 
@@ -147,7 +147,7 @@ if [ "$DO_CDN" = true ]; then
         info "  Uploading agent.md"
         $WRANGLER r2 object put "${R2_BUCKET}/releases/${VERSION}/agent.md" \
             --file "$DIST_DIR/agent.md" \
-            --ct "text/markdown"
+            --ct "text/markdown" --remote
         ok "  agent.md uploaded"
     fi
 
@@ -155,7 +155,7 @@ if [ "$DO_CDN" = true ]; then
     echo -n "$VERSION" > "$DIST_DIR/latest"
     $WRANGLER r2 object put "${R2_BUCKET}/releases/latest" \
         --file "$DIST_DIR/latest" \
-        --ct "text/plain"
+        --ct "text/plain" --remote
     ok "  'latest' pointer → $VERSION"
 
     # Optionally update "stable" pointer
@@ -163,7 +163,7 @@ if [ "$DO_CDN" = true ]; then
         echo -n "$VERSION" > "$DIST_DIR/stable"
         $WRANGLER r2 object put "${R2_BUCKET}/releases/stable" \
             --file "$DIST_DIR/stable" \
-            --ct "text/plain"
+            --ct "text/plain" --remote
         ok "  'stable' pointer → $VERSION"
     fi
 
