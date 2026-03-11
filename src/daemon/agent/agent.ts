@@ -13,7 +13,7 @@
 
 import { getDriver, messageText, type DriverConfig, type DriverMessage, type StreamChunk, type ToolCall, type ToolResult } from "./drivers/index.js";
 import { resolveModel, getCapabilities, probeLocalModel, type ModelCapabilities } from "./drivers/models.js";
-import { getTool, listTools, toDriverFormat } from "./tools/registry.js";
+import { getTool, resolveDottedTool, listTools, toDriverFormat } from "./tools/registry.js";
 import { addMessage, addPart } from "./session/message.js";
 import { touchSession } from "./session/session.js";
 import { estimateTokens } from "../../shared/tokens.js";
@@ -270,7 +270,9 @@ export async function* runAgent(
     const toolResults: ToolResult[] = [];
 
     for (const tc of toolCalls) {
-      const tool = getTool(tc.name);
+      // Resolve tool — supports dotted names from OSS models (e.g. "browser.click")
+      const { tool, inferredAction } = resolveDottedTool(tc.name);
+
       let result: string;
       let isError = false;
 
@@ -279,13 +281,17 @@ export async function* runAgent(
         isError = true;
       } else {
         // Guard: per-tool rate limit check
-        const rateCheck = guard.checkToolCall(tc.name);
+        const rateCheck = guard.checkToolCall(tool.name);
         if (rateCheck) {
           result = rateCheck;
           isError = true;
         } else {
           try {
             const args = parseToolArgs(tc.arguments);
+            // Inject inferred action from dotted name (e.g. "browser.click" → action:"click")
+            if (inferredAction && !args.action) {
+              args.action = inferredAction;
+            }
             result = await tool.execute(args);
           } catch (err) {
             result = err instanceof Error ? err.message : String(err);

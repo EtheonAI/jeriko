@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from "bun:test";
 import {
   registerTool,
   getTool,
+  resolveDottedTool,
   listTools,
   clearTools,
   unregisterTool,
@@ -194,5 +195,144 @@ describe("tool alias resolution", () => {
     expect(getTool("exec")!.id).toBe("bash");
     expect(getTool("read")!.id).toBe("read_file");
     expect(getTool("cat")!.id).toBe("read_file");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dotted-name resolution tests (OSS model compatibility)
+// ---------------------------------------------------------------------------
+
+describe("dotted-name resolution for multi-action tools", () => {
+  afterEach(() => {
+    clearTools();
+  });
+
+  const browserTool: ToolDefinition = {
+    id: "browser",
+    name: "browser",
+    description: "Browser automation",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["navigate", "click", "type", "scroll"],
+        },
+        url: { type: "string" },
+        index: { type: "number" },
+      },
+      required: ["action"],
+    },
+    execute: async (args) => JSON.stringify({ ok: true, action: args.action }),
+    aliases: ["browse"],
+  };
+
+  const webdevTool: ToolDefinition = {
+    id: "webdev",
+    name: "webdev",
+    description: "Web development tool",
+    parameters: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: ["status", "restart", "debug_logs"],
+        },
+      },
+      required: ["action"],
+    },
+    execute: async (args) => JSON.stringify({ ok: true, action: args.action }),
+  };
+
+  it("resolves browser.click to browser tool with action=click", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browser.click");
+    expect(tool).toBeDefined();
+    expect(tool!.id).toBe("browser");
+    expect(inferredAction).toBe("click");
+  });
+
+  it("resolves Browser.click (capitalized prefix) via lowercase fallback", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("Browser.click");
+    expect(tool!.id).toBe("browser");
+    expect(inferredAction).toBe("click");
+  });
+
+  it("resolves browser.scroll to browser tool with action=scroll", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browser.scroll");
+    expect(tool!.id).toBe("browser");
+    expect(inferredAction).toBe("scroll");
+  });
+
+  it("resolves webdev.status to webdev tool with action=status", () => {
+    registerTool(webdevTool);
+    const { tool, inferredAction } = resolveDottedTool("webdev.status");
+    expect(tool!.id).toBe("webdev");
+    expect(inferredAction).toBe("status");
+  });
+
+  it("does not resolve dotted name if prefix tool has no action parameter", () => {
+    const simpleTool: ToolDefinition = {
+      id: "bash",
+      name: "bash",
+      description: "Run shell commands",
+      parameters: {
+        type: "object",
+        properties: {
+          command: { type: "string" },
+        },
+      },
+      execute: async () => "ok",
+    };
+    registerTool(simpleTool);
+    const { tool, inferredAction } = resolveDottedTool("bash.run");
+    expect(tool).toBeUndefined();
+    expect(inferredAction).toBeUndefined();
+  });
+
+  it("direct tool name still resolves normally (no dotted name)", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browser");
+    expect(tool!.id).toBe("browser");
+    expect(inferredAction).toBeUndefined();
+  });
+
+  it("inferred action is injected into args when executing", async () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browser.click");
+    const args: Record<string, unknown> = { index: 5 };
+    if (inferredAction && !args.action) {
+      args.action = inferredAction;
+    }
+    const result = await tool!.execute(args);
+    expect(JSON.parse(result).action).toBe("click");
+  });
+
+  it("does not override explicit action in args", async () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browser.click");
+    const args: Record<string, unknown> = { action: "navigate", url: "https://example.com" };
+    if (inferredAction && !args.action) {
+      args.action = inferredAction;
+    }
+    const result = await tool!.execute(args);
+    // Explicit action takes priority
+    expect(JSON.parse(result).action).toBe("navigate");
+  });
+
+  it("resolves alias prefix with dotted action (browse.click)", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("browse.click");
+    expect(tool!.id).toBe("browser");
+    expect(inferredAction).toBe("click");
+  });
+
+  it("returns undefined for completely unknown dotted name", () => {
+    registerTool(browserTool);
+    const { tool, inferredAction } = resolveDottedTool("unknown.action");
+    expect(tool).toBeUndefined();
+    expect(inferredAction).toBeUndefined();
   });
 });

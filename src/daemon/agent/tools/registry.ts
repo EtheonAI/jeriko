@@ -120,6 +120,49 @@ export function getTool(id: string): ToolDefinition | undefined {
   return undefined;
 }
 
+/** Result of dotted-name resolution for multi-action tools. */
+export interface DottedToolResolution {
+  /** The resolved tool definition, or undefined if not found. */
+  tool: ToolDefinition | undefined;
+  /** The inferred action from the dotted suffix (e.g. "click" from "browser.click"). */
+  inferredAction: string | undefined;
+}
+
+/**
+ * Resolve a potentially dotted tool name to a multi-action tool + action.
+ *
+ * OSS models (Ollama, Qwen, etc.) often call "browser.click" or "Browser.click"
+ * instead of `browser(action: "click")`. This function handles that by:
+ *   1. Trying getTool() as-is (exact match or alias)
+ *   2. Splitting on "." and checking if the prefix is a multi-action tool
+ *      (i.e. has an "action" property in its parameter schema)
+ *   3. Trying the prefix in lowercase for capitalized names (e.g. "Browser")
+ *
+ * The caller is responsible for injecting `inferredAction` into the tool args
+ * (only when args.action is not already set).
+ */
+export function resolveDottedTool(name: string): DottedToolResolution {
+  // Fast path — direct resolution (exact ID or alias)
+  const direct = getTool(name);
+  if (direct) return { tool: direct, inferredAction: undefined };
+
+  // Dotted-name resolution: split on first "."
+  const dotIdx = name.indexOf(".");
+  if (dotIdx <= 0) return { tool: undefined, inferredAction: undefined };
+
+  const prefix = name.slice(0, dotIdx);
+  const suffix = name.slice(dotIdx + 1);
+
+  // Try prefix as-is, then lowercase (handles "Browser.click")
+  const candidate = getTool(prefix) ?? getTool(prefix.toLowerCase());
+  if (candidate?.parameters?.properties?.action) {
+    log.debug(`Dotted tool name resolved: "${name}" → ${candidate.name}(action:"${suffix}")`);
+    return { tool: candidate, inferredAction: suffix };
+  }
+
+  return { tool: undefined, inferredAction: undefined };
+}
+
 /**
  * Return all registered tool definitions.
  */
