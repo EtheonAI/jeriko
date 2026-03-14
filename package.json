@@ -109,6 +109,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@stripe/ui-extension-sdk": "^9.1.0",
     "@types/bun": "latest",
     "@types/node": "^25.3.2",
     "@types/react": "^19.0.2",

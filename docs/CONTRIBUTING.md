@@ -3,9 +3,9 @@
 ## Development Setup
 
 ```bash
-git clone https://github.com/etheon/Jeriko.git
-cd Jeriko
-npm install
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko
+bun install
 
 # Add bin/ to PATH for development
 export PATH="$(pwd)/bin:$PATH"

@@ -23,8 +23,11 @@ R2_BUCKET="${JERIKO_R2_BUCKET:-jeriko-releases}"
 GITHUB_REPO="etheonai/jeriko"
 RELEASES_URL="https://github.com/$GITHUB_REPO/releases"
 
-# Cloudflare account — required for R2 uploads
-export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-fcbfb5e1eedee3ce3651c3b263e5c0dd}"
+# Cloudflare account — required for R2 uploads (set in CI secrets or local env)
+if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    die "CLOUDFLARE_ACCOUNT_ID is required. Set it in your environment or CI secrets."
+fi
+export CLOUDFLARE_ACCOUNT_ID
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; BLUE='\033[0;34m'
 YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'

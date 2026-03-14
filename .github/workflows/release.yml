@@ -48,6 +48,18 @@ jobs:
           echo "Building version: $VERSION"
 
       - name: Build all platforms
+        env:
+          BAKED_RELAY_AUTH_SECRET: ${{ secrets.BAKED_RELAY_AUTH_SECRET }}
+          BAKED_POSTHOG_KEY: ${{ secrets.BAKED_POSTHOG_KEY }}
+          BAKED_GITHUB_CLIENT_ID: ${{ secrets.BAKED_GITHUB_CLIENT_ID }}
+          BAKED_GOOGLE_CLIENT_ID: ${{ secrets.BAKED_GOOGLE_CLIENT_ID }}
+          BAKED_X_CLIENT_ID: ${{ secrets.BAKED_X_CLIENT_ID }}
+          BAKED_VERCEL_CLIENT_ID: ${{ secrets.BAKED_VERCEL_CLIENT_ID }}
+          BAKED_STRIPE_CLIENT_ID: ${{ secrets.BAKED_STRIPE_CLIENT_ID }}
+          BAKED_HUBSPOT_CLIENT_ID: ${{ secrets.BAKED_HUBSPOT_CLIENT_ID }}
+          BAKED_SHOPIFY_CLIENT_ID: ${{ secrets.BAKED_SHOPIFY_CLIENT_ID }}
+          BAKED_SLACK_CLIENT_ID: ${{ secrets.BAKED_SLACK_CLIENT_ID }}
+          BAKED_PAYPAL_CLIENT_ID: ${{ secrets.BAKED_PAYPAL_CLIENT_ID }}
         run: bash scripts/release.sh
 
       - name: List artifacts

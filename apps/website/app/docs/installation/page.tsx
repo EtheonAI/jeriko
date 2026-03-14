@@ -57,7 +57,7 @@ jeriko server start`,
       <h2>Manual Install</h2>
       <p>
         You can also download the binary directly from the{" "}
-        <a href="https://github.com/EtheonAI/jerikoai/releases" target="_blank" rel="noreferrer">
+        <a href="https://github.com/etheonai/jeriko/releases" target="_blank" rel="noreferrer">
           GitHub releases page
         </a>.
       </p>

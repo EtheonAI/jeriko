@@ -39,6 +39,28 @@ native/npm/
 *.swo
 .DS_Store
 
+# Claude Code local settings (may contain allowlisted commands)
+.claude/settings.local.json
+
+# Stripe CLI build artifacts
+.build/
+yarn.lock
+
+# Internal docs (not for open source)
+BLUEPRINT.md
+BUSINESS_PLAN.md
+docs/COMPETITORS.md
+docs/MONETIZATION.md
+docs/FUTURE.md
+docs/SECRETS-SETUP.md
+docs/STRIPE-APP-TEST-PLAN.md
+
+# Root-level ADR drafts (canonical versions live in docs/)
+/ADR-*.md
+
+# Source maps
+*.js.map
+
 # Legacy v1 data (will be migrated)
 # data/x-tokens.json
 # data/chrome-profile/

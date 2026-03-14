@@ -669,6 +669,6 @@ if [ "${DO_NOT_TRACK:-0}" != "1" ]; then
   _ph_uid="${JERIKO_USER_ID:-anonymous}"
   curl -s -o /dev/null --max-time 3 \
     -H "Content-Type: application/json" \
-    -d "{\"api_key\":\"phc_tZSl9DLWFuWV7ozBohDcJM74U3OFoN9P3QLp5IsV4f1\",\"event\":\"install\",\"distinct_id\":\"$_ph_uid\",\"properties\":{\"\$os\":\"$(uname -s)\",\"method\":\"source\"}}" \
+    -d "{\"api_key\":\"${BAKED_POSTHOG_KEY:-}\",\"event\":\"install\",\"distinct_id\":\"$_ph_uid\",\"properties\":{\"\$os\":\"$(uname -s)\",\"method\":\"source\"}}" \
     "https://us.i.posthog.com/capture/" &
 fi

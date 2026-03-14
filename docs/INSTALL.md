@@ -32,10 +32,10 @@ jeriko sys
 ### From Source
 
 ```bash
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko
-npm install
-npm link
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko
+bun install
+bun run build
 ```
 
 `npm link` creates a global symlink so the `jeriko` command is available system-wide. To remove the link later, run `npm unlink -g Jeriko` from the project directory.
@@ -45,8 +45,8 @@ npm link
 For active development with auto-reload:
 
 ```bash
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko
 npm install
 npm run dev
 ```

@@ -1,0 +1,103 @@
+{
+  "allowed_redirect_uris": [
+    "https://relay.jeriko.ai/oauth/stripe/callback"
+  ],
+  "connect_permissions": null,
+  "distribution_type": "public",
+  "icon": "./stripe-app-icon.png",
+  "id": "ai.jeriko.connector",
+  "name": "Jeriko",
+  "permissions": [
+    {
+      "permission": "customer_read",
+      "purpose": "Read customer records to display customer data and enable AI-driven customer insights"
+    },
+    {
+      "permission": "customer_write",
+      "purpose": "Create and update customer records through natural language commands"
+    },
+    {
+      "permission": "charge_read",
+      "purpose": "View charge details and history for payment analytics and reporting"
+    },
+    {
+      "permission": "charge_write",
+      "purpose": "Create charges through AI-driven payment workflows"
+    },
+    {
+      "permission": "invoice_read",
+      "purpose": "Read invoice data to display billing history and enable invoice search"
+    },
+    {
+      "permission": "invoice_write",
+      "purpose": "Create, finalize, and send invoices through natural language commands"
+    },
+    {
+      "permission": "subscription_read",
+      "purpose": "View subscription details for recurring billing management"
+    },
+    {
+      "permission": "subscription_write",
+      "purpose": "Create and cancel subscriptions through AI-driven billing workflows"
+    },
+    {
+      "permission": "product_read",
+      "purpose": "Read product catalog to display available products and pricing"
+    },
+    {
+      "permission": "product_write",
+      "purpose": "Create and update products in the Stripe catalog"
+    },
+    {
+      "permission": "plan_read",
+      "purpose": "View price and plan details for subscription and billing management"
+    },
+    {
+      "permission": "plan_write",
+      "purpose": "Create and configure pricing plans through the Jeriko CLI"
+    },
+    {
+      "permission": "payment_intent_read",
+      "purpose": "View payment intent status to track payment flows"
+    },
+    {
+      "permission": "payment_intent_write",
+      "purpose": "Create and confirm payment intents for payment processing"
+    },
+    {
+      "permission": "payout_read",
+      "purpose": "View payout history and status for financial reporting"
+    },
+    {
+      "permission": "payout_write",
+      "purpose": "Initiate payouts through the Jeriko CLI"
+    },
+    {
+      "permission": "balance_read",
+      "purpose": "View account balance for financial overview and reporting"
+    },
+    {
+      "permission": "event_read",
+      "purpose": "Read Stripe events for webhook processing and activity monitoring"
+    },
+    {
+      "permission": "checkout_session_read",
+      "purpose": "View checkout session data for payment flow tracking"
+    },
+    {
+      "permission": "checkout_session_write",
+      "purpose": "Create checkout sessions for hosted payment pages"
+    },
+    {
+      "permission": "payment_links_read",
+      "purpose": "View payment links for sharing and tracking"
+    },
+    {
+      "permission": "payment_links_write",
+      "purpose": "Create payment links through natural language commands"
+    }
+  ],
+  "sandbox_install_compatible": true,
+  "stripe_api_access_type": "oauth",
+  "version": "0.0.5"
+}

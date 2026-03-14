@@ -231,7 +231,7 @@ Replace:
 2. Warns if `claude` CLI is not found (needed for `claude-code` backend).
 3. Clones the repo to `~/.Jeriko/repo` (or `git pull` if already cloned).
 4. Creates `~/.Jeriko/.env` with `PROXY_URL`, `NODE_NAME`, `NODE_TOKEN`.
-5. Runs `npm install --production` for dependencies.
+5. Runs `bun install --production` for dependencies.
 6. If systemd is available: creates, enables, and starts a systemd service.
 7. Otherwise: prints manual start instructions (direct or pm2).
 
@@ -239,9 +239,9 @@ Replace:
 
 ```bash
 # Clone the repo
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko
-npm install
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko
+bun install
 ```
 
 Create a `.env` file in the project root:
@@ -536,7 +536,7 @@ journalctl -u Jeriko-agent --since today
 On macOS or systems without systemd, use [pm2](https://pm2.keymetrics.io/):
 
 ```bash
-npm install -g pm2
+bun install -g pm2
 pm2 start agent/agent.js --name Jeriko-macbook
 pm2 save
 pm2 startup    # generates the OS-specific auto-start command
@@ -618,8 +618,8 @@ A realistic setup with a VPS hub, a MacBook at home, and a Raspberry Pi in the o
 
 ```bash
 # On the VPS
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko && npm install
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko && bun install
 
 # Generate a strong secret
 openssl rand -hex 32
@@ -658,8 +658,8 @@ From Telegram (or any method):
 
 ```bash
 # Clone and install
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko && npm install
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko && bun install
 
 # Create .env
 cat > .env <<'EOF'
@@ -687,8 +687,8 @@ curl -sL https://Jeriko.yourdomain.com/install | \
 Or manually:
 
 ```bash
-git clone https://github.com/khaleel737/Jeriko.git
-cd Jeriko && npm install
+git clone https://github.com/etheonai/jeriko.git
+cd jeriko && bun install
 
 cat > .env <<'EOF'
 PROXY_URL=wss://Jeriko.yourdomain.com/ws

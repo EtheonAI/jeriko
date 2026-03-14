@@ -1206,7 +1206,7 @@ npx wrangler secret put STRIPE_BILLING_WEBHOOK_SECRET
 npx wrangler deploy
 ```
 
-**CF Account:** `fcbfb5e1eedee3ce3651c3b263e5c0dd` (Khaleelmusleh@gmail.com)
+**CF Account:** Set via `CLOUDFLARE_ACCOUNT_ID` environment variable (CI secrets)
 
 **Route table:**
 

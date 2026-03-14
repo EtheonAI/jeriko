@@ -56,13 +56,14 @@ const DIST = path.join(ROOT, "dist");
  * via their own env vars (self-hosted mode).
  */
 /**
- * Hardcoded relay auth secret — shared key between all installations and the relay.
- * This is NOT a secret per se — it's a shared API key (like Firebase API keys).
- * Real security is per-user (JERIKO_USER_ID) + server-side rate limiting.
- * Can be overridden via BAKED_RELAY_AUTH_SECRET env var in CI if rotated.
+ * Relay auth secret — baked into official release binaries via CI env var.
+ *
+ * Official builds (GitHub Actions): CI injects BAKED_RELAY_AUTH_SECRET from secrets
+ * → gets compiled into the binary → users get relay access out of the box.
+ *
+ * Source builds: empty string → users must set RELAY_AUTH_SECRET env var or self-host relay.
  */
-const RELAY_AUTH_SECRET = process.env.BAKED_RELAY_AUTH_SECRET
-  ?? "32a52cbdd799c10fb4d055b1ab3106a43e6712c0b4b4022bf460f9d3260e8827";
+const RELAY_AUTH_SECRET = process.env.BAKED_RELAY_AUTH_SECRET ?? "";
 
 // Read version from package.json at build time
 const PKG_VERSION = JSON.parse(
@@ -71,7 +72,7 @@ const PKG_VERSION = JSON.parse(
 
 const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_VERSION__:                JSON.stringify(PKG_VERSION),
-  __BAKED_POSTHOG_KEY__:            JSON.stringify(process.env.BAKED_POSTHOG_KEY ?? "phc_tZSl9DLWFuWV7ozBohDcJM74U3OFoN9P3QLp5IsV4f1"),
+  __BAKED_POSTHOG_KEY__:            JSON.stringify(process.env.BAKED_POSTHOG_KEY ?? ""),
   __BAKED_RELAY_AUTH_SECRET__:       JSON.stringify(RELAY_AUTH_SECRET),
   __BAKED_GITHUB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),
   __BAKED_GOOGLE_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GOOGLE_CLIENT_ID    ?? ""),

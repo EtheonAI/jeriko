@@ -3,6 +3,8 @@
 const YEAR = new Date().getFullYear();
 
 const LINKS = [
+  { label: "Pricing", href: "/pricing" },
+  { label: "Support", href: "/support" },
   { label: "Privacy Policy", href: "/privacy-policy" },
   { label: "Terms & Conditions", href: "/terms-and-conditions" },
   { label: "Refund Policy", href: "/refund-policy" },
