@@ -60,6 +60,18 @@ jobs:
           BAKED_SHOPIFY_CLIENT_ID: ${{ secrets.BAKED_SHOPIFY_CLIENT_ID }}
           BAKED_SLACK_CLIENT_ID: ${{ secrets.BAKED_SLACK_CLIENT_ID }}
           BAKED_PAYPAL_CLIENT_ID: ${{ secrets.BAKED_PAYPAL_CLIENT_ID }}
+          BAKED_SQUARE_CLIENT_ID: ${{ secrets.BAKED_SQUARE_CLIENT_ID }}
+          BAKED_GITLAB_CLIENT_ID: ${{ secrets.BAKED_GITLAB_CLIENT_ID }}
+          BAKED_NOTION_CLIENT_ID: ${{ secrets.BAKED_NOTION_CLIENT_ID }}
+          BAKED_LINEAR_CLIENT_ID: ${{ secrets.BAKED_LINEAR_CLIENT_ID }}
+          BAKED_ATLASSIAN_CLIENT_ID: ${{ secrets.BAKED_ATLASSIAN_CLIENT_ID }}
+          BAKED_AIRTABLE_CLIENT_ID: ${{ secrets.BAKED_AIRTABLE_CLIENT_ID }}
+          BAKED_ASANA_CLIENT_ID: ${{ secrets.BAKED_ASANA_CLIENT_ID }}
+          BAKED_MAILCHIMP_CLIENT_ID: ${{ secrets.BAKED_MAILCHIMP_CLIENT_ID }}
+          BAKED_DROPBOX_CLIENT_ID: ${{ secrets.BAKED_DROPBOX_CLIENT_ID }}
+          BAKED_DISCORD_CLIENT_ID: ${{ secrets.BAKED_DISCORD_CLIENT_ID }}
+          BAKED_INSTAGRAM_CLIENT_ID: ${{ secrets.BAKED_INSTAGRAM_CLIENT_ID }}
+          BAKED_THREADS_CLIENT_ID: ${{ secrets.BAKED_THREADS_CLIENT_ID }}
         run: bash scripts/release.sh
 
       - name: List artifacts

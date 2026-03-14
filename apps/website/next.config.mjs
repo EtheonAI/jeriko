@@ -2,7 +2,7 @@
 
 const CDN = "https://releases.jeriko.ai";
 const GITHUB_RAW =
-  "https://raw.githubusercontent.com/EtheonAI/jeriko/main/scripts";
+  "https://raw.githubusercontent.com/etheonai/jeriko/main/scripts";
 
 const nextConfig = {
   reactStrictMode: true,
