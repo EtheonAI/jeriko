@@ -114,7 +114,7 @@
     "@types/node": "^25.3.2",
     "@types/react": "^19.0.2",
     "@types/ws": "^8.5.0",
-    "drizzle-kit": "^0.30.0",
+    "drizzle-kit": "^0.31.9",
     "ink-testing-library": "^4.0.0",
     "typescript": "^5.7.0"
   }
