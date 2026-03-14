@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/etheonai/jeriko/releases"><img src="https://img.shields.io/github/v/release/etheonai/jeriko?label=version&style=flat-square" alt="Version"></a>
+  <a href="https://github.com/etheonai/jeriko/releases"><img src="https://img.shields.io/github/v/release/etheonai/jeriko?include_prereleases&label=version&style=flat-square" alt="Version"></a>
   <a href="https://github.com/etheonai/jeriko/actions"><img src="https://img.shields.io/github/actions/workflow/status/etheonai/jeriko/ci.yml?style=flat-square&label=CI" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
   <a href="https://github.com/etheonai/jeriko/issues"><img src="https://img.shields.io/github/issues/etheonai/jeriko?style=flat-square" alt="Issues"></a>
