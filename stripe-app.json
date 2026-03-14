@@ -1,6 +1,6 @@
 {
   "allowed_redirect_uris": [
-    "https://relay.jeriko.ai/oauth/stripe/callback"
+    "https://bot.jeriko.ai/oauth/stripe/callback"
   ],
   "connect_permissions": null,
   "distribution_type": "public",
