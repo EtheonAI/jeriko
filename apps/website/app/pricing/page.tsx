@@ -5,19 +5,35 @@ export default function PricingPage() {
 
       <h1>Pricing</h1>
       <p className="effective">
-        Simple, transparent pricing. Start free, upgrade when you need more.
+        Jeriko is open source and free to use. Pay only if you want managed infrastructure.
       </p>
 
       <div className="pricing-grid">
         <article className="pricing-card">
+          <h2>Open Source</h2>
+          <p className="pricing-price">Free<span> forever</span></p>
+          <ul>
+            <li>Full source code (MIT license)</li>
+            <li>Build from source with Bun</li>
+            <li>All 51 CLI commands</li>
+            <li>All 17 agent tools</li>
+            <li>All connectors (self-hosted OAuth)</li>
+            <li>All automation triggers</li>
+            <li>Any AI model (bring your own keys)</li>
+            <li>Custom skills</li>
+            <li>Community support via GitHub</li>
+          </ul>
+        </article>
+
+        <article className="pricing-card">
           <h2>Free</h2>
           <p className="pricing-price">$0<span>/month</span></p>
           <ul>
-            <li>Full AI agent with any model</li>
+            <li>Pre-compiled binary (one-line install)</li>
             <li>Interactive CLI + chat REPL</li>
-            <li>2 connectors (e.g. Stripe, GitHub)</li>
+            <li>2 connectors with managed OAuth</li>
             <li>3 automation triggers</li>
-            <li>All agent tools (17 tools)</li>
+            <li>All 17 agent tools</li>
             <li>Custom skills</li>
             <li>Community support</li>
           </ul>
@@ -28,47 +44,24 @@ export default function PricingPage() {
           <p className="pricing-price">$19<span>/month</span></p>
           <ul>
             <li>Everything in Free, plus:</li>
-            <li>10 connectors</li>
-            <li>Unlimited automation triggers</li>
-            <li>Telegram & WhatsApp channels</li>
-            <li>Priority support</li>
-            <li>Relay server access</li>
-          </ul>
-        </article>
-
-        <article className="pricing-card">
-          <h2>Team</h2>
-          <p className="pricing-price">$49<span>/month per seat</span></p>
-          <ul>
-            <li>Everything in Pro, plus:</li>
             <li>Unlimited connectors</li>
-            <li>Team collaboration features</li>
-            <li>Shared skills & workflows</li>
-            <li>Admin dashboard</li>
-            <li>Dedicated support</li>
+            <li>Unlimited automation triggers</li>
+            <li>Telegram &amp; WhatsApp channels</li>
+            <li>Relay server access</li>
+            <li>Priority support</li>
           </ul>
         </article>
       </div>
 
       <section>
-        <h2>Stripe Integration Pricing</h2>
-        <p>
-          The Stripe connector is available on all plans, including Free. You
-          can connect one Stripe account and use all supported operations
-          (customers, invoices, subscriptions, charges, products, and more) at
-          no additional cost from Jeriko. Standard Stripe processing fees
-          apply to transactions made through your Stripe account.
-        </p>
-      </section>
-
-      <section>
         <h2>FAQ</h2>
 
-        <h3>Do I need to pay for the Stripe connector?</h3>
+        <h3>Is Jeriko really free?</h3>
         <p>
-          No. The Stripe connector is included in all plans, including the
-          Free tier. Jeriko does not charge any additional fees for Stripe
-          API access.
+          Yes. Jeriko is fully open source under the MIT license. You can build
+          from source, self-host everything, and use all features with zero
+          cost. The paid plans provide convenience (pre-compiled binaries,
+          managed OAuth, relay infrastructure) — not gated features.
         </p>
 
         <h3>What AI providers are supported?</h3>
@@ -80,16 +73,18 @@ export default function PricingPage() {
 
         <h3>Can I cancel anytime?</h3>
         <p>
-          Yes. You can cancel your subscription at any time from the CLI
-          with <code>jeriko billing cancel</code> or from the{" "}
+          Yes. Cancel your subscription at any time with{" "}
+          <code>jeriko billing cancel</code> or from the{" "}
           <a href="/billing/cancel">billing portal</a>. Your plan continues
           until the end of the billing period.
         </p>
 
-        <h3>Is there a refund policy?</h3>
+        <h3>What&apos;s the difference between Open Source and Free?</h3>
         <p>
-          Yes. See our <a href="/refund-policy">refund policy</a> for
-          details.
+          Open Source means you build from source and manage your own OAuth
+          credentials and infrastructure. The Free tier gives you a
+          pre-compiled binary with managed OAuth for up to 2 connectors and
+          3 triggers — no setup required.
         </p>
       </section>
     </main>
