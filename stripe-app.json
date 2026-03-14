@@ -99,5 +99,5 @@
   ],
   "sandbox_install_compatible": true,
   "stripe_api_access_type": "oauth",
-  "version": "0.0.5"
+  "version": "0.0.6"
 }
