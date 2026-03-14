@@ -21,6 +21,8 @@ bun.lockb
 data/
 auth_info_baileys/
 screenshots/
+skills/
+skills-lock.json
 *.log
 
 # Native build
