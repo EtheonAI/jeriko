@@ -106,7 +106,7 @@
     "react": "^19.0.0",
     "stripe": "^20.4.0",
     "ws": "^8.18.0",
-    "zod": "^3.24.0"
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@stripe/ui-extension-sdk": "^9.1.0",
