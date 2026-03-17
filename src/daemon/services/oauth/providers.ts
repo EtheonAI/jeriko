@@ -78,7 +78,7 @@ export const OAUTH_PROVIDERS: readonly OAuthProvider[] = [
   {
     name: "stripe",
     label: "Stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/chnlink_61UIOdwbUoGWqyNMT41CxYSOxDrnsCbY/authorize",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
     scopes: [],
     bakedIdKey: "stripe",

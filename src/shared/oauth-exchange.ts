@@ -91,7 +91,7 @@ export interface ExchangeOptions {
 export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider> = new Map<string, TokenExchangeProvider>([
   ["stripe", {
     name: "stripe",
-    authUrl: "https://marketplace.stripe.com/oauth/v2/chnlink_61UIOdwbUoGWqyNMT41CxYSOxDrnsCbY/authorize",
+    authUrl: "https://marketplace.stripe.com/oauth/v2/authorize",
     tokenUrl: "https://api.stripe.com/v1/oauth/token",
     scopes: [],
     tokenExchangeAuth: "basic-apikey",
