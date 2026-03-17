@@ -48,6 +48,12 @@ export interface TokenExchangeProvider {
    * their authorize endpoint only expects client_id, redirect_uri, and state.
    */
   skipResponseType?: boolean;
+  /**
+   * If true, omit `redirect_uri` from the token exchange POST body.
+   * Stripe Apps OAuth rejects redirect_uri during token exchange — it's only
+   * validated during the authorize step. Most other providers require it.
+   */
+  skipRedirectUri?: boolean;
 }
 
 /** Result of a successful token exchange. */
@@ -90,6 +96,7 @@ export const TOKEN_EXCHANGE_PROVIDERS: ReadonlyMap<string, TokenExchangeProvider
     scopes: [],
     tokenExchangeAuth: "basic-apikey",
     skipResponseType: true,
+    skipRedirectUri: true,
   }],
   ["github", {
     name: "github",
@@ -437,8 +444,13 @@ export async function exchangeCodeForTokens(opts: ExchangeOptions): Promise<Toke
   const params: Record<string, string> = {
     grant_type: "authorization_code",
     code,
-    redirect_uri: redirectUri,
   };
+
+  // Stripe Apps OAuth rejects redirect_uri in token exchange — it's validated
+  // only during the authorize step. Most other providers require it per RFC 6749.
+  if (!provider.skipRedirectUri) {
+    params.redirect_uri = redirectUri;
+  }
 
   if (authMode === "body") {
     params.client_id = clientId;
