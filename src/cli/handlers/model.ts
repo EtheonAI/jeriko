@@ -88,7 +88,10 @@ function buildPickerOptions(
       return bScore - aScore;
     });
 
-    for (const m of sorted.slice(0, 5)) {
+    // Cloud providers have hundreds of models — cap at 5 to keep the picker usable.
+    // Local models are hand-picked by the user (manually pulled), so show all.
+    const limit = provider === "local" ? sorted.length : 5;
+    for (const m of sorted.slice(0, limit)) {
       // Always use provider:model format so parseModelSpec() can resolve the driver.
       // Bare model IDs like "gpt-5.3-codex" cause "Unknown LLM backend" errors.
       const modelSpec = `${provider}:${m.id}`;

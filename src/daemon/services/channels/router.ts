@@ -24,7 +24,7 @@ import {
   getSession,
   getSessionBySlug,
 } from "../../agent/session/session.js";
-import { addMessage, getMessages, clearMessages } from "../../agent/session/message.js";
+import { addMessage, getMessages, clearMessages, buildDriverMessages } from "../../agent/session/message.js";
 import type { DriverMessage, ContentBlock } from "../../agent/drivers/index.js";
 import { listDrivers, getDriver } from "../../agent/drivers/index.js";
 import { resolveModel, getCapabilities, parseModelSpec, listModels } from "../../agent/drivers/models.js";
@@ -306,11 +306,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
       // Persist the text representation in DB (images are transient — too large for SQLite)
       addMessage(state.sessionId, "user", augmentedText);
 
-      // Build driver message history from DB
-      const history = getMessages(state.sessionId).map<DriverMessage>((m) => ({
-        role: m.role as DriverMessage["role"],
-        content: m.content,
-      }));
+      // Build driver message history from DB — includes tool_calls and tool_call_id
+      const history: DriverMessage[] = buildDriverMessages(state.sessionId);
 
       // Resolve model capabilities once — used for vision gating and agent config
       const { backend: modelBackend, model: modelId } = parseModelSpec(state.model);

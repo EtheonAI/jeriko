@@ -1,14 +1,12 @@
 // Agent API routes — chat, stream, list sessions, spawn new agent.
 
 import { Hono } from "hono";
-import { randomUUID } from "node:crypto";
-import { getDatabase } from "../../storage/db.js";
 import { getLogger } from "../../../shared/logger.js";
 import { loadConfig } from "../../../shared/config.js";
 import { createSession } from "../../agent/session/session.js";
-import { getMessages, addMessage, addPart } from "../../agent/session/message.js";
-import { runAgent, type AgentRunConfig, type AgentEvent } from "../../agent/agent.js";
-import type { DriverMessage } from "../../agent/drivers/index.js";
+import { addMessage, addPart, buildDriverMessages } from "../../agent/session/message.js";
+import { runAgent, type AgentRunConfig } from "../../agent/agent.js";
+import { parseModelSpec } from "../../agent/drivers/models.js";
 
 const log = getLogger();
 
@@ -30,28 +28,6 @@ const activeSessions = new Map<string, AgentSession>();
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Resolve the LLM backend name from a model string. */
-function resolveBackend(model: string): string {
-  const m = model.toLowerCase();
-  if (m.startsWith("claude") || m === "anthropic") return "claude";
-  if (m.startsWith("gpt") || m.startsWith("o1") || m.startsWith("o3") || m === "openai") return "openai";
-  if (m === "local" || m === "ollama") return "local";
-  // Default: treat the model name itself as the backend key
-  return m;
-}
-
-/** Convert DB message rows to DriverMessage format. */
-function toDriverMessages(
-  rows: { role: string; content: string }[],
-): DriverMessage[] {
-  return rows
-    .filter((r) => r.role === "user" || r.role === "assistant" || r.role === "system" || r.role === "tool")
-    .map((r) => ({
-      role: r.role as DriverMessage["role"],
-      content: r.content,
-    }));
-}
 
 // ---------------------------------------------------------------------------
 // Routes
@@ -83,15 +59,15 @@ export function agentRoutes(): Hono {
     }
 
     const config = loadConfig();
-    const model = body.model ?? config.agent.model;
-    const backend = resolveBackend(model);
+    const rawModel = body.model ?? config.agent.model;
+    const { backend, model: modelId } = parseModelSpec(rawModel);
 
     // Create or reuse session
     let sessionId = body.session_id;
     if (!sessionId) {
       const sess = createSession({
         title: body.message.slice(0, 80),
-        model,
+        model: modelId,
       });
       sessionId = sess.id;
     }
@@ -101,7 +77,7 @@ export function agentRoutes(): Hono {
     if (!tracker) {
       tracker = {
         id: sessionId,
-        model,
+        model: modelId,
         status: "active",
         created_at: new Date().toISOString(),
         last_activity: new Date().toISOString(),
@@ -117,21 +93,20 @@ export function agentRoutes(): Hono {
     const userMsg = addMessage(sessionId, "user", body.message);
     addPart(userMsg.id, "text", body.message);
 
-    // Build conversation history from DB
-    const dbMessages = getMessages(sessionId);
-    const conversationHistory = toDriverMessages(dbMessages);
+    // Build conversation history from DB — includes tool_calls and tool_call_id
+    const conversationHistory = buildDriverMessages(sessionId);
 
     // Configure the agent run
     const agentConfig: AgentRunConfig = {
       sessionId,
       backend,
-      model,
+      model: modelId,
       systemPrompt: body.system ?? undefined,
       maxTokens: body.max_tokens ?? config.agent.maxTokens,
       toolIds: body.tools ?? null,
     };
 
-    log.info(`Agent chat: session=${sessionId}, model=${model}, backend=${backend}`);
+    log.info(`Agent chat: session=${sessionId}, model=${modelId}, backend=${backend}`);
 
     // Run the agent loop and collect the full response
     let response = "";
@@ -203,15 +178,15 @@ export function agentRoutes(): Hono {
     }
 
     const config = loadConfig();
-    const model = body.model ?? config.agent.model;
-    const backend = resolveBackend(model);
+    const rawModel = body.model ?? config.agent.model;
+    const { backend, model: modelId } = parseModelSpec(rawModel);
 
     // Create or reuse session
     let sessionId = body.session_id;
     if (!sessionId) {
       const sess = createSession({
         title: body.message.slice(0, 80),
-        model,
+        model: modelId,
       });
       sessionId = sess.id;
     }
@@ -221,7 +196,7 @@ export function agentRoutes(): Hono {
     if (!tracker) {
       tracker = {
         id: sessionId,
-        model,
+        model: modelId,
         status: "active",
         created_at: new Date().toISOString(),
         last_activity: new Date().toISOString(),
@@ -237,20 +212,19 @@ export function agentRoutes(): Hono {
     const userMsg = addMessage(sessionId, "user", body.message);
     addPart(userMsg.id, "text", body.message);
 
-    // Build conversation history
-    const dbMessages = getMessages(sessionId);
-    const conversationHistory = toDriverMessages(dbMessages);
+    // Build conversation history — includes tool metadata
+    const conversationHistory = buildDriverMessages(sessionId);
 
     const agentConfig: AgentRunConfig = {
       sessionId,
       backend,
-      model,
+      model: modelId,
       systemPrompt: body.system ?? undefined,
       maxTokens: body.max_tokens ?? config.agent.maxTokens,
       toolIds: body.tools ?? null,
     };
 
-    log.info(`Agent stream: session=${sessionId}, model=${model}, backend=${backend}`);
+    log.info(`Agent stream: session=${sessionId}, model=${modelId}, backend=${backend}`);
 
     // Capture sessionId for the closure
     const sid = sessionId;

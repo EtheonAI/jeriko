@@ -744,7 +744,7 @@ export async function createInProcessBackend(): Promise<Backend> {
     getSessionBySlug,
     listSessions: dbListSessions,
   } = await import("../daemon/agent/session/session.js");
-  const { addMessage, getMessages } = await import("../daemon/agent/session/message.js");
+  const { addMessage, getMessages, buildDriverMessages } = await import("../daemon/agent/session/message.js");
   const { kvGet, kvSet, kvList } = await import("../daemon/storage/kv.js");
   const { runAgent } = await import("../daemon/agent/agent.js");
 
@@ -775,11 +775,9 @@ export async function createInProcessBackend(): Promise<Backend> {
 
   if (existing && existing.archived_at === null) {
     session = existing;
-    const rows = getMessages(session.id);
-    history = rows.map((m) => ({
-      role: m.role as DriverMessage["role"],
-      content: m.content,
-    }));
+    // Reconstruct full history including tool_calls and tool_call_id
+    // from the parts table so resumed sessions work with all providers.
+    history = buildDriverMessages(session.id);
   } else {
     session = createSession({ model: currentModel });
     kvSet("state:last_session_id", session.id);
@@ -1548,6 +1546,9 @@ function getStaticModelList(_currentModel: string): ModelInfo[] {
     }
   } catch { /* config may not exist yet */ }
 
+  // listModels() returns all models from the registry: models.dev (cloud)
+  // + Ollama probe cache (local). Local models are probed at boot by
+  // loadModelRegistry(), so they're already available here.
   try {
     const { listModels: registryListModels } = require("../daemon/agent/drivers/models.js");
     const all = registryListModels() as import("../daemon/agent/drivers/models.js").ModelCapabilities[];
@@ -1578,7 +1579,7 @@ function getStaticModelList(_currentModel: string): ModelInfo[] {
     // Registry not loaded — fall through to defaults
   }
 
-  // Fallback defaults — only return configured providers
+  // Fallback defaults — only when registry is completely unavailable
   const defaults: ModelInfo[] = [];
   if (configuredProviders.has("anthropic")) {
     defaults.push({ id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true });
@@ -1587,7 +1588,7 @@ function getStaticModelList(_currentModel: string): ModelInfo[] {
     defaults.push({ id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true });
   }
   if (configuredProviders.has("local") || configuredProviders.has("ollama")) {
-    defaults.push({ id: "local", name: "Local (Ollama)", provider: "ollama" });
+    defaults.push({ id: "local", name: "Local (Ollama)", provider: "local" });
   }
   return defaults;
 }

@@ -241,22 +241,27 @@ export async function* runAgent(
     totalTokensIn += turnTokensIn;
     totalTokensOut += turnTokensOut;
 
-    // Persist assistant message
-    if (fullText) {
+    // Persist assistant message — always persist, even when text is empty.
+    // Tool-only responses (empty text + tool_calls) must be stored so that
+    // session history can be fully reconstructed from DB. Without this,
+    // tool result messages become orphaned (no preceding assistant with
+    // tool_calls), which OpenAI's API rejects.
+    if (fullText || toolCalls.length > 0) {
       const assistantMsg = addMessage(
         config.sessionId,
         "assistant",
         fullText,
         { input: turnTokensIn, output: turnTokensOut },
       );
-      addPart(assistantMsg.id, "text", fullText);
+      if (fullText) addPart(assistantMsg.id, "text", fullText);
+      for (const tc of toolCalls) {
+        addPart(assistantMsg.id, "tool_call", tc.arguments, tc.name, tc.id);
+      }
       messages.push({
         role: "assistant",
         content: fullText,
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       });
-    } else if (toolCalls.length > 0) {
-      messages.push({ role: "assistant", content: "", tool_calls: toolCalls });
     }
 
     // If no tool calls, the turn is complete

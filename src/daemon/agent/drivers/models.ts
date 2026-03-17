@@ -163,17 +163,23 @@ export async function loadModelRegistry(): Promise<void> {
     log.warn(`Model registry fetch failed (using static fallbacks): ${msg}`);
   }
 
-  // Populate default local model from Ollama (non-blocking, best-effort)
-  if (!cachedDefaultLocalModel) {
-    try {
-      const models = await fetchOllamaModels();
-      if (models.length > 0) {
+  // Populate local models from Ollama — probe all installed models so they
+  // appear in listModels() immediately. Without this, local models are absent
+  // from the /model picker until individually probed on first chat use.
+  try {
+    const models = await fetchOllamaModels();
+    if (models.length > 0) {
+      if (!cachedDefaultLocalModel) {
         cachedDefaultLocalModel = models[0]!.id;
-        log.debug(`Default local model detected: ${cachedDefaultLocalModel}`);
       }
-    } catch {
-      // Non-fatal — cachedDefaultLocalModel stays null
+      // Probe all models in parallel — populates localProbeCache so
+      // listModels() returns them. Probes are cached, so subsequent
+      // calls (e.g. during agent loop) are free.
+      await Promise.all(models.map((m) => probeLocalModel(m.id)));
+      log.info(`Ollama models loaded: ${models.length} models probed`);
     }
+  } catch {
+    // Non-fatal — local models will be probed lazily on first use
   }
 }
 
@@ -713,16 +719,27 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
 
 /**
  * List all known models for a provider.
+ *
+ * Cloud models come from the models.dev capability index (populated at boot).
+ * Local models come from Ollama probe cache (populated lazily on first use).
+ *
+ * When no local models have been probed yet, this still returns a default
+ * local model entry if one is known (via LOCAL_MODEL env var or Ollama
+ * detection at boot). This ensures local models appear in the /model picker
+ * without requiring every consumer to add their own fallback.
  */
 export function listModels(provider?: string): ModelCapabilities[] {
   const results: ModelCapabilities[] = [];
   for (const [key, caps] of capIndex) {
     if (!provider || key.startsWith(`${provider}:`)) results.push(caps);
   }
-  // Include probed local models
+
   if (!provider || provider === "local") {
+    // Include probed local models — populated at boot by loadModelRegistry()
+    // which probes all installed Ollama models in parallel.
     for (const [, caps] of localProbeCache) results.push(caps);
   }
+
   return results;
 }
 

@@ -647,7 +647,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
     const { runAgent } = await import("./agent/agent.js");
     const { createSession, getSession } = await import("./agent/session/session.js");
-    const { addMessage, addPart, getMessages } = await import("./agent/session/message.js");
+    const { addMessage, addPart, buildDriverMessages } = await import("./agent/session/message.js");
     const { kvGet, kvSet } = await import("./storage/kv.js");
 
     const message = params.message as string;
@@ -679,12 +679,10 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const userMsg = addMessage(sessionId, "user", message);
     addPart(userMsg.id, "text", message);
 
-    // Build conversation history from DB (includes all prior messages)
-    const dbMessages = getMessages(sessionId);
-    const history = dbMessages.map((m: { role: string; content: string }) => ({
-      role: m.role as "user" | "assistant" | "system" | "tool",
-      content: m.content,
-    }));
+    // Build conversation history from DB — includes tool_calls and tool_call_id
+    // metadata from parts table so providers that require paired tool messages
+    // (OpenAI, OpenAI-compat) receive valid history.
+    const history = buildDriverMessages(sessionId);
 
     const agentConfig = {
       sessionId,
@@ -940,7 +938,6 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     for (const driver of registeredDrivers) {
       const mapping = builtInDriverProviders[driver];
       if (mapping) {
-        // Only include built-in provider if its API key is set (or no key needed)
         if (!mapping.envKey || process.env[mapping.envKey]) {
           relevantProviders.add(mapping.provider);
         }

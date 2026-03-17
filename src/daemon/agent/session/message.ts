@@ -216,3 +216,82 @@ export function getPartsByType(messageId: string, type: PartRow["type"]): PartRo
     )
     .all(messageId, type);
 }
+
+// ---------------------------------------------------------------------------
+// History reconstruction — DriverMessage[] from DB
+// ---------------------------------------------------------------------------
+
+import type { DriverMessage } from "../drivers/index.js";
+
+/**
+ * Reconstruct a full DriverMessage history from DB for a session.
+ *
+ * Rebuilds `tool_calls` on assistant messages and `tool_call_id` on tool
+ * messages using the parts table. Without this, session resumption sends
+ * malformed history to providers that require tool message/call pairing
+ * (OpenAI, OpenAI-compat endpoints).
+ *
+ * This is the single authoritative function for building conversation
+ * history from DB — used by kernel.ts (daemon IPC), backend.ts (in-process),
+ * and routes/agent.ts (HTTP API).
+ */
+export function buildDriverMessages(sessionId: string): DriverMessage[] {
+  const db = getDatabase();
+  const msgs = getMessages(sessionId);
+
+  // Batch-load all parts for this session's messages in one query.
+  // Using a single query avoids N+1 for sessions with many messages.
+  const msgIds = msgs.map((m) => m.id);
+  const partsByMessage = new Map<string, PartRow[]>();
+
+  if (msgIds.length > 0) {
+    // SQLite doesn't support array binds — use a parameterized IN clause.
+    const placeholders = msgIds.map(() => "?").join(",");
+    const allParts = db
+      .query<PartRow, string[]>(
+        `SELECT * FROM part WHERE message_id IN (${placeholders}) ORDER BY created_at ASC`,
+      )
+      .all(...msgIds);
+
+    for (const part of allParts) {
+      const list = partsByMessage.get(part.message_id) ?? [];
+      list.push(part);
+      partsByMessage.set(part.message_id, list);
+    }
+  }
+
+  return msgs
+    .filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system" || m.role === "tool")
+    .map((m) => {
+      const driverMsg: DriverMessage = {
+        role: m.role as DriverMessage["role"],
+        content: m.content,
+      };
+
+      const parts = partsByMessage.get(m.id) ?? [];
+
+      if (m.role === "assistant") {
+        // Reconstruct tool_calls from "tool_call" parts stored on this message.
+        const toolCallParts = parts.filter((p) => p.type === "tool_call");
+        if (toolCallParts.length > 0) {
+          driverMsg.tool_calls = toolCallParts.map((p) => ({
+            id: p.tool_call_id ?? "",
+            name: p.tool_name ?? "",
+            arguments: p.content,
+          }));
+        }
+      }
+
+      if (m.role === "tool") {
+        // Reconstruct tool_call_id from the "tool_result" or "error" part.
+        const resultPart = parts.find(
+          (p) => p.type === "tool_result" || p.type === "error",
+        );
+        if (resultPart?.tool_call_id) {
+          driverMsg.tool_call_id = resultPart.tool_call_id;
+        }
+      }
+
+      return driverMsg;
+    });
+}

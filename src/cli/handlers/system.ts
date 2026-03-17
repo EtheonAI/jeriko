@@ -1308,6 +1308,7 @@ async function onboardFinalize(ctx: SystemCommandContext, state: OnboardState): 
 
   const displayModel = state.localModel ?? provider.model;
   ctx.dispatch({ type: "SET_MODEL", model: provider.model });
+  await ctx.backend.updateSessionModel(provider.model);
 
   const parts = [
     t.green("\u2713 Setup complete!"),
