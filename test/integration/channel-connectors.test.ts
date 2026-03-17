@@ -59,7 +59,7 @@ describe("CONNECTOR_DEFS", () => {
     const stripe = getConnectorDef("stripe");
     expect(stripe).toBeDefined();
     expect(stripe!.label).toBe("Stripe");
-    expect(stripe!.required).toEqual(["STRIPE_SECRET_KEY"]);
+    expect(stripe!.required).toEqual([["STRIPE_SECRET_KEY", "STRIPE_ACCESS_TOKEN"]]);
   });
 
   test("getConnectorDef returns undefined for unknown", () => {
