@@ -407,6 +407,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       const { BAKED_RELAY_AUTH_SECRET } = await import("../shared/baked-oauth-ids.js");
       relayToken = BAKED_RELAY_AUTH_SECRET;
     }
+    // Ensure connectors can read the resolved relay token for relay-based
+    // token refresh (BearerConnector.getRelayAuthSecret reads process.env).
+    if (relayToken && !process.env.RELAY_AUTH_SECRET) {
+      process.env.RELAY_AUTH_SECRET = relayToken;
+    }
     const selfHosted = !!process.env.JERIKO_PUBLIC_URL;
 
     if (userId && relayToken && !selfHosted) {
