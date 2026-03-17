@@ -40,6 +40,11 @@ export const command: CommandHandler = {
   name: "connectors",
   description: "Unified connector gateway (list, health, info, call)",
   async run(args: string[]) {
+    // Load secrets so OAuth tokens (STRIPE_ACCESS_TOKEN, etc.) are available
+    // in the CLI process — they're stored in ~/.config/jeriko/.env by the daemon.
+    const { loadSecrets } = await import("../../../shared/secrets.js");
+    loadSecrets();
+
     const parsed = parseArgs(args);
 
     if (flagBool(parsed, "help")) {

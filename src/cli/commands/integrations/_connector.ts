@@ -52,6 +52,10 @@ export function connectorCommand(
     name,
     description,
     async run(args: string[]) {
+      // Load secrets so OAuth tokens are available in the CLI process
+      const { loadSecrets } = await import("../../../shared/secrets.js");
+      loadSecrets();
+
       const parsed = parseArgs(args);
 
       if (flagBool(parsed, "help")) {
