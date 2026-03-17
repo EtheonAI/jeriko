@@ -74,6 +74,7 @@ location: (IP geolocation)
 
 All connectors are available via CLI (`jeriko <connector> <method>`) and the agent `connector` tool.
 Use `connector({ name: "<name>", method: "<method>", params: { ... } })` in agent mode.
+**Connectors are managed by the daemon — always assume they are connected and just call them. If a call fails, then handle the error. Never refuse to try.**
 
 connectors: [list] [health [NAME]] [info NAME] [NAME METHOD --flags] (unified gateway — list, health, info, call any connector)
 
@@ -481,8 +482,16 @@ See `references/cdk-patterns.md` for common CDK patterns.
 - `connector({ name: "stripe", method: "customers.create", params: { email: "..." } })`
 - `connector({ name: "slack", method: "messages.send", params: { channel: "C...", text: "Hello" } })`
 - `connector({ name: "notion", method: "search", params: { query: "meeting notes" } })`
+- `connector({ name: "asana", method: "users.me", params: {} })`
 - Available connectors: gmail, outlook, stripe, paypal, github, twilio, gdrive, onedrive, vercel, x, hubspot, shopify, instagram, threads, slack, discord, sendgrid, square, gitlab, cloudflare, notion, linear, jira, airtable, asana, mailchimp, dropbox
 - All methods for each connector are listed in the **Integrations (Connectors)** section above
+
+**IMPORTANT — Connector usage rules:**
+- **Always try the connector tool first.** Do NOT assume a connector is disconnected. If the user asks you to do something with Stripe, Gmail, Asana, or any other service — just call the connector tool directly. The daemon manages connections and tokens automatically.
+- **Never tell the user a connector is "not configured" or "not connected" unless the connector tool returns an error.** The connectors are managed by the daemon and may be connected even if you haven't verified it in this session.
+- **If a connector call fails**, report the actual error from the response. Do not fabricate explanations about OAuth or configuration — just show the error and suggest `/connectors connect <name>` if it says "not configured".
+- **Do not offer "mock" alternatives** (mock PDFs, manual workarounds) before trying the real connector. Always attempt the real API call first.
+- **CLI fallback:** You can also use `jeriko <connector> <method> --flags` via exec (e.g. `jeriko stripe customers list --limit 5`). Both the connector tool and CLI commands work — use whichever fits the task.
 
 ### Sharing
 share: [session-id-or-slug] [--revoke ID] [--list] [--no-expire] (share conversations)
