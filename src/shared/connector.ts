@@ -43,8 +43,8 @@ export const CONNECTOR_DEFS: ConnectorDef[] = [
     name: "stripe",
     label: "Stripe",
     description: "Payments, subscriptions, invoices",
-    required: ["STRIPE_SECRET_KEY"],
-    optional: ["STRIPE_WEBHOOK_SECRET", "STRIPE_ACCESS_TOKEN", "STRIPE_REFRESH_TOKEN"],
+    required: [["STRIPE_SECRET_KEY", "STRIPE_ACCESS_TOKEN"]],
+    optional: ["STRIPE_WEBHOOK_SECRET", "STRIPE_REFRESH_TOKEN"],
     oauth: { clientIdVar: "STRIPE_OAUTH_CLIENT_ID", clientSecretVar: "STRIPE_SECRET_KEY" },
     // Stripe natively uses "limit" — no remapping needed
   },

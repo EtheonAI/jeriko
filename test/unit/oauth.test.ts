@@ -246,7 +246,7 @@ describe("ConnectorDef OAuth metadata", () => {
     expect(def!.oauth).toBeDefined();
     expect(def!.oauth!.clientIdVar).toBe("STRIPE_OAUTH_CLIENT_ID");
     expect(def!.oauth!.clientSecretVar).toBe("STRIPE_SECRET_KEY");
-    expect(def!.required).toEqual(["STRIPE_SECRET_KEY"]);
+    expect(def!.required).toEqual([["STRIPE_SECRET_KEY", "STRIPE_ACCESS_TOKEN"]]);
   });
 
   it("ConnectorDef.oauth matches OAuthProvider vars", () => {
