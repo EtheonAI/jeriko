@@ -136,9 +136,12 @@ export async function* parseOpenAIStream(
           yield { type: "text", content: delta.content as string };
         }
 
-        // Reasoning content (o-series internal reasoning, if exposed)
-        if (delta.reasoning_content) {
-          yield { type: "thinking", content: delta.reasoning_content as string };
+        // Reasoning content — multiple field names across providers:
+        //   - `reasoning_content`: OpenAI o-series models
+        //   - `reasoning`: Ollama cloud models (e.g. gpt-oss, kimi-k2-thinking)
+        const reasoning = (delta.reasoning_content ?? delta.reasoning) as string | undefined;
+        if (reasoning) {
+          yield { type: "thinking", content: reasoning };
         }
 
         // Tool calls (streamed incrementally by index)
