@@ -640,6 +640,11 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
   startSocketServer();
 
   registerStreamMethod("ask", async (params, emit) => {
+    // Reload secrets on every request — picks up API keys added after daemon boot
+    // (e.g. onboarding writes OPENAI_API_KEY to .env while daemon is already running).
+    const { reloadSecrets } = await import("../shared/config.js");
+    reloadSecrets();
+
     const { runAgent } = await import("./agent/agent.js");
     const { createSession, getSession } = await import("./agent/session/session.js");
     const { addMessage, addPart, getMessages } = await import("./agent/session/message.js");
