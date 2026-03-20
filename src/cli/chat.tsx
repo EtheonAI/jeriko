@@ -16,6 +16,7 @@ import { App } from "./app.js";
 import { printBanner } from "./components/Banner.js";
 import { createBackend } from "./backend.js";
 import { needsSetup } from "./lib/setup.js";
+import { StdinFilter } from "./lib/paste.js";
 import { runOnboarding } from "./wizard/onboarding.js";
 import { ClackPrompter } from "./wizard/clack-prompter.js";
 import { persistSetup } from "./wizard/onboarding.js";
@@ -85,12 +86,19 @@ export async function startChat(): Promise<void> {
   // Always start idle (setup handled by wizard above)
   const initialPhase: Phase = "idle";
 
+  // Wrap stdin in a filter that strips bracketed paste escape sequence
+  // markers (\x1b[200~ / \x1b[201~) BEFORE Ink's input parser sees them.
+  // Ink splits escape sequences across multiple useInput callbacks, so
+  // filtering must happen at the stream level to be reliable.
+  const filteredStdin = new StdinFilter(process.stdin);
+
   // Render Ink app with optimized options:
+  //   stdin: Filtered stream that strips paste markers (see StdinFilter)
   //   patchConsole: Intercepts console.log/warn/error so they don't break the TUI
-  //   incrementalRendering: Only redraws changed lines (reduces flicker on fast updates)
   const { waitUntilExit } = render(
     <App backend={backend} initialModel={model} initialPhase={initialPhase} />,
     {
+      stdin: filteredStdin as unknown as NodeJS.ReadStream,
       patchConsole: true,
     },
   );

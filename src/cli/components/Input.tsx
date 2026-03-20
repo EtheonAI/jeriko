@@ -18,8 +18,8 @@
  * Always listens for Ctrl+C regardless of phase (interrupt/abort).
  */
 
-import React, { useState, useRef, useCallback, useEffect } from "react";
-import { Text, Box, useInput, useStdout } from "ink";
+import React, { useState, useRef, useCallback } from "react";
+import { Text, Box, useInput } from "ink";
 import { PALETTE } from "../theme.js";
 import { slashCompleter, SLASH_COMMANDS } from "../commands.js";
 import {
@@ -31,6 +31,7 @@ import {
 } from "../lib/autocomplete.js";
 import { InputHistory } from "../lib/history.js";
 import { Autocomplete } from "./Autocomplete.js";
+import { useBracketedPaste } from "../hooks/useBracketedPaste.js";
 import type { Phase } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -110,25 +111,10 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
   }, []);
 
   // ----- Bracketed paste mode -----
-  // Enable bracketed paste (\x1b[?2004h) so the terminal wraps pasted text
-  // in escape sequences (\x1b[200~ ... \x1b[201~). We intercept these markers
-  // via a pre-read listener on stdin (using 'readable' to cooperate with Ink's
-  // own readable handler rather than conflicting via 'data').
-
-  const { stdout } = useStdout();
-
-  useEffect(() => {
-    if (!stdout?.isTTY || !isIdle) return;
-
-    // Enable bracketed paste mode — terminal wraps pasted content in
-    // \x1b[200~ ... \x1b[201~ markers. Ink's useInput delivers multi-char
-    // input as a single string, which we detect in the input handler below.
-    stdout.write("\x1b[?2004h");
-
-    return () => {
-      stdout.write("\x1b[?2004l");
-    };
-  }, [stdout, isIdle]);
+  // Enables \x1b[?2004h so the terminal wraps pasted text in CSI markers.
+  // cleanInput() strips any marker fragments that Ink's useInput doesn't
+  // natively consume (e.g. [200~, [201 artifacts on Konsole/Linux).
+  const { cleanInput } = useBracketedPaste(isIdle);
 
   /** Insert pasted text at cursor, handling multi-line with size limits. */
   const handlePaste = useCallback((text: string) => {
@@ -463,17 +449,22 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
 
       // ── Regular character input / paste detection ─────────────
       if (input && !key.ctrl && !key.meta) {
+        // Strip any bracketed paste escape sequence artifacts that Ink's
+        // useInput didn't consume (e.g. [200~, [201 on Konsole/Linux).
+        const cleaned = cleanInput(input);
+        if (!cleaned) return;
+
         // Multi-character input without modifier keys is a paste event.
         // The terminal sends all pasted characters as a single chunk.
-        if (input.length > 1 && input.includes("\n")) {
-          handlePaste(input);
+        if (cleaned.length > 1 && cleaned.includes("\n")) {
+          handlePaste(cleaned);
           return;
         }
         const newLines = [...lines];
         const line = newLines[cursorLine] ?? "";
-        newLines[cursorLine] = line.slice(0, cursorCol) + input + line.slice(cursorCol);
+        newLines[cursorLine] = line.slice(0, cursorCol) + cleaned + line.slice(cursorCol);
         setLines(newLines);
-        setCursorCol((c) => c + input.length);
+        setCursorCol((c) => c + cleaned.length);
         updateAutocomplete(newLines);
       }
     },
