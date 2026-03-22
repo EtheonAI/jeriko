@@ -16,8 +16,9 @@ import { resolveModel, getCapabilities, probeLocalModel, type ModelCapabilities 
 import { getTool, resolveDottedTool, listTools, toDriverFormat } from "./tools/registry.js";
 import { addMessage, addPart } from "./session/message.js";
 import { touchSession } from "./session/session.js";
-import { estimateTokens } from "../../shared/tokens.js";
+import { estimateTokens, DEFAULT_CONTEXT_LIMIT, COMPACTION_CONTEXT_RATIO, MIN_MESSAGES_FOR_COMPACTION } from "../../shared/tokens.js";
 import { ExecutionGuard } from "./guard.js";
+import { trimHistory, compactHistory, sanitizeToolPairs } from "./history.js";
 import { setActiveContext, clearActiveContext } from "./orchestrator-context.js";
 import { getLogger } from "../../shared/logger.js";
 
@@ -47,6 +48,10 @@ export interface AgentRunConfig {
   toolIds?: string[] | null;
   /** Maximum number of tool-call rounds before forcing a text response. */
   maxRounds?: number;
+  /** Max conversation history messages to send per request. Keeps tool call/result pairs intact. */
+  maxHistoryMessages?: number;
+  /** Max estimated tokens of conversation history to send per request. */
+  maxHistoryTokens?: number;
   /** Optional AbortSignal for cancellation/timeout. Forwarded to the LLM driver. */
   signal?: AbortSignal;
   /** Nesting depth for sub-agent orchestration (0 = top-level). */
@@ -144,13 +149,32 @@ export async function* runAgent(
   };
 
   // ─── Step 4: Dynamic compaction threshold from context window ────────
-  // Compact at 75% of the model's actual context window
-  const compactionThreshold = Math.floor((caps.context || 24_000) * 0.75);
+  const contextLimit = caps.context || DEFAULT_CONTEXT_LIMIT;
+  const compactionThreshold = Math.floor(contextLimit * COMPACTION_CONTEXT_RATIO);
 
   // ─── Step 5: Initialize execution guard ──────────────────────────────
   const guard = new ExecutionGuard();
 
-  const messages: DriverMessage[] = [...conversationHistory];
+  // ─── Step 6: Pre-trim history to fit within configured limits ────────
+  // Prevents sending unbounded history to token-limited providers (Groq, etc.)
+  // and reduces cost on providers billed by input tokens (Anthropic, OpenAI).
+  // Tool call/result pairs are kept intact — never orphaned.
+  const trimmed = trimHistory([...conversationHistory], {
+    contextLimit,
+    maxMessages: config.maxHistoryMessages,
+    maxTokens: config.maxHistoryTokens,
+  });
+
+  // ─── Step 7: Validate tool call/result pairs ───────────────────────
+  // Removes orphaned tool results, tool messages with missing tool_call_id,
+  // and assistant tool_calls without matching results. Prevents 400 errors
+  // from all providers (Anthropic, OpenAI, Groq, OpenRouter).
+  const messages: DriverMessage[] = sanitizeToolPairs(trimmed);
+
+  if (messages.length < conversationHistory.length) {
+    log.debug(`Agent: history ${conversationHistory.length} → ${trimmed.length} (trimmed) → ${messages.length} (sanitized)`);
+  }
+
   let totalTokensIn = 0;
   let totalTokensOut = 0;
 
@@ -179,9 +203,9 @@ export async function* runAgent(
     const currentTokens = estimateTokens(
       messages.map((m) => messageText(m)).join(""),
     );
-    if (currentTokens >= compactionThreshold && messages.length > 4) {
+    if (currentTokens >= compactionThreshold && messages.length >= MIN_MESSAGES_FOR_COMPACTION) {
       const beforeTokens = currentTokens;
-      const compacted = compactMessages(messages);
+      const compacted = compactHistory(messages, contextLimit);
       const afterTokens = estimateTokens(
         compacted.map((m) => messageText(m)).join(""),
       );
@@ -391,34 +415,3 @@ function parseToolArgs(raw: string): Record<string, unknown> {
   }
 }
 
-/**
- * Compact a message history by keeping:
- * - System messages
- * - First user message
- * - Last 6 messages
- * With a compaction marker where messages were removed.
- */
-function compactMessages(messages: DriverMessage[]): DriverMessage[] {
-  if (messages.length <= 8) return messages;
-
-  const result: DriverMessage[] = [];
-  const systemMsgs = messages.filter((m) => m.role === "system");
-  const nonSystem = messages.filter((m) => m.role !== "system");
-
-  result.push(...systemMsgs);
-
-  if (nonSystem.length > 0) {
-    const first = nonSystem[0];
-    if (first) result.push(first);
-  }
-
-  result.push({
-    role: "system",
-    content: "[Earlier conversation history was compacted to save context window space.]",
-  });
-
-  const tail = nonSystem.slice(-6);
-  result.push(...tail);
-
-  return result;
-}

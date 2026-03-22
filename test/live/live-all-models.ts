@@ -53,7 +53,7 @@ import { runAgent, type AgentRunConfig } from "../../src/daemon/agent/agent.js";
 import { createSession } from "../../src/daemon/agent/session/session.js";
 import { addMessage, getMessages, getRecentMessages } from "../../src/daemon/agent/session/message.js";
 import { delegate, readContext, getChildSessions } from "../../src/daemon/agent/orchestrator.js";
-import { estimateTokens, shouldCompact } from "../../src/shared/tokens.js";
+import { estimateTokens, shouldCompact, DEFAULT_CONTEXT_LIMIT } from "../../src/shared/tokens.js";
 import { getCapabilities } from "../../src/daemon/agent/drivers/models.js";
 
 await Promise.all([
@@ -355,7 +355,7 @@ for (const { name: model, sizeBytes } of models) {
 
     const totalTokens = estimateTokens(bigHistory.map(m => m.content).join(""));
     const modelCaps = getCapabilities("local", model);
-    const needsCompact = shouldCompact(totalTokens, modelCaps.context || 24_000);
+    const needsCompact = shouldCompact(totalTokens, modelCaps.context || DEFAULT_CONTEXT_LIMIT);
 
     const session = createSession({ title: `compact-${model}`, model });
     const result = await runAgentWithTimeout(

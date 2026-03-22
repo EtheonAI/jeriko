@@ -350,6 +350,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     maxTokens: config.agent.maxTokens,
     temperature: config.agent.temperature,
     extendedThinking: config.agent.extendedThinking,
+    maxHistoryMessages: config.agent.maxHistoryMessages,
+    maxHistoryTokens: config.agent.maxHistoryTokens,
     systemPrompt,
     getTriggerEngine: () => state.triggers,
     getConnectors: () => connectors,
@@ -692,6 +694,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
       maxTokens: (params.max_tokens as number) || state.config!.agent.maxTokens,
       temperature: state.config!.agent.temperature,
       extendedThinking: state.config!.agent.extendedThinking,
+      maxHistoryMessages: state.config!.agent.maxHistoryMessages,
+      maxHistoryTokens: state.config!.agent.maxHistoryTokens,
       toolIds: params.tools === false ? [] : null,
     };
 

@@ -10,6 +10,7 @@
 // compaction, max output) reads from this registry.
 
 import { getLogger } from "../../../shared/logger.js";
+import { DEFAULT_CONTEXT_LIMIT } from "../../../shared/tokens.js";
 
 const log = getLogger();
 
@@ -706,7 +707,7 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
     id: modelId,
     provider,
     family: "unknown",
-    context: 24_000,
+    context: DEFAULT_CONTEXT_LIMIT,
     maxOutput: 4_096,
     toolCall: false,
     reasoning: false,

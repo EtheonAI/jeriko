@@ -75,6 +75,10 @@ export interface ChannelRouterOptions {
   maxTokens: number;
   temperature: number;
   extendedThinking: boolean;
+  /** Max conversation history messages to send per request. */
+  maxHistoryMessages?: number;
+  /** Max estimated tokens of conversation history to send per request. */
+  maxHistoryTokens?: number;
   /** System prompt from AGENT.md — Jeriko identity and commands. */
   systemPrompt?: string;
   /** Lazy accessor for trigger engine (created after router in kernel boot). */
@@ -330,6 +334,8 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
         maxTokens: opts.maxTokens,
         temperature: opts.temperature,
         extendedThinking: caps.reasoning ? opts.extendedThinking : false,
+        maxHistoryMessages: opts.maxHistoryMessages,
+        maxHistoryTokens: opts.maxHistoryTokens,
         toolIds: null,
         signal: controller.signal,
       };

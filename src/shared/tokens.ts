@@ -1,5 +1,44 @@
-// Layer 0 — Token estimation. Zero internal imports.
-// No hardcoded model limits — capabilities come from the model registry.
+// Layer 0 — Token estimation and context management constants.
+// Zero internal imports. No hardcoded model limits — capabilities
+// come from the model registry at runtime.
+
+// ---------------------------------------------------------------------------
+// Context management constants
+// ---------------------------------------------------------------------------
+
+/** Default context window assumed when model capabilities are unknown. */
+export const DEFAULT_CONTEXT_LIMIT = 24_000;
+
+/**
+ * Fraction of context window used as the auto token budget for pre-trim.
+ * Applied when loading history before the agent loop starts.
+ * Leaves 40% headroom for system prompt, tool definitions, and response.
+ */
+export const PRE_TRIM_CONTEXT_RATIO = 0.6;
+
+/**
+ * Fraction of context window that triggers in-loop compaction.
+ * When accumulated tokens exceed this ratio during execution,
+ * emergency compaction fires to free space.
+ */
+export const COMPACTION_CONTEXT_RATIO = 0.75;
+
+/**
+ * Target context usage after emergency compaction.
+ * Tighter than PRE_TRIM_CONTEXT_RATIO because we're already near
+ * the limit and need guaranteed headroom for continued execution.
+ */
+export const COMPACT_TARGET_RATIO = 0.5;
+
+/**
+ * Minimum number of non-system messages required before compaction
+ * is allowed. Prevents thrashing on very short conversations.
+ */
+export const MIN_MESSAGES_FOR_COMPACTION = 5;
+
+// ---------------------------------------------------------------------------
+// Token estimation
+// ---------------------------------------------------------------------------
 
 /**
  * Estimate the token count for a text string.
@@ -16,15 +55,19 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+// ---------------------------------------------------------------------------
+// Context threshold checks
+// ---------------------------------------------------------------------------
+
 /**
- * Check whether context usage has crossed the compaction threshold (75%).
+ * Check whether context usage has crossed the compaction threshold.
  *
  * @param tokens        Current estimated token count
  * @param contextLimit  The model's context window size (from capabilities)
  */
 export function shouldCompact(tokens: number, contextLimit: number): boolean {
   if (contextLimit <= 0) return false;
-  return (tokens / contextLimit) * 100 >= 75;
+  return tokens / contextLimit >= COMPACTION_CONTEXT_RATIO;
 }
 
 /**

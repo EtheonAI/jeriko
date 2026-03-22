@@ -918,6 +918,8 @@ export class TriggerEngine {
       maxTokens: config.agent.maxTokens,
       temperature: config.agent.temperature,
       extendedThinking: config.agent.extendedThinking,
+      maxHistoryMessages: config.agent.maxHistoryMessages,
+      maxHistoryTokens: config.agent.maxHistoryTokens,
     };
 
     let response = "";

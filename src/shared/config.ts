@@ -17,6 +17,10 @@ export interface AgentConfig {
   temperature: number;
   /** Enable extended thinking for Claude */
   extendedThinking: boolean;
+  /** Max conversation history messages to send per request. Keeps tool call/result pairs intact. */
+  maxHistoryMessages?: number;
+  /** Max estimated tokens of conversation history to send per request. */
+  maxHistoryTokens?: number;
 }
 
 export interface ChannelsConfig {
@@ -430,6 +434,8 @@ function applyEnvOverrides(config: JerikoConfig): void {
   // Agent
   if (env.JERIKO_MODEL)          config.agent.model = env.JERIKO_MODEL;
   if (env.JERIKO_MAX_TOKENS)     config.agent.maxTokens = parseInt(env.JERIKO_MAX_TOKENS, 10);
+  if (env.JERIKO_MAX_HISTORY_MESSAGES) config.agent.maxHistoryMessages = parseInt(env.JERIKO_MAX_HISTORY_MESSAGES, 10);
+  if (env.JERIKO_MAX_HISTORY_TOKENS)   config.agent.maxHistoryTokens = parseInt(env.JERIKO_MAX_HISTORY_TOKENS, 10);
   if (env.JERIKO_LOG_LEVEL)      config.logging.level = env.JERIKO_LOG_LEVEL as JerikoConfig["logging"]["level"];
   if (env.JERIKO_DB_PATH)        config.storage.dbPath = env.JERIKO_DB_PATH;
 

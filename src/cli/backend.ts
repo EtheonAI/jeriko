@@ -810,6 +810,8 @@ export async function createInProcessBackend(): Promise<Backend> {
         maxTokens: config.agent.maxTokens,
         temperature: config.agent.temperature,
         extendedThinking: config.agent.extendedThinking,
+        maxHistoryMessages: config.agent.maxHistoryMessages,
+        maxHistoryTokens: config.agent.maxHistoryTokens,
         toolIds: null as string[] | null,
         signal: abortController.signal,
       };

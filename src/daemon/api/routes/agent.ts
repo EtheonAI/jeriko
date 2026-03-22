@@ -103,6 +103,8 @@ export function agentRoutes(): Hono {
       model: modelId,
       systemPrompt: body.system ?? undefined,
       maxTokens: body.max_tokens ?? config.agent.maxTokens,
+      maxHistoryMessages: config.agent.maxHistoryMessages,
+      maxHistoryTokens: config.agent.maxHistoryTokens,
       toolIds: body.tools ?? null,
     };
 
@@ -221,6 +223,8 @@ export function agentRoutes(): Hono {
       model: modelId,
       systemPrompt: body.system ?? undefined,
       maxTokens: body.max_tokens ?? config.agent.maxTokens,
+      maxHistoryMessages: config.agent.maxHistoryMessages,
+      maxHistoryTokens: config.agent.maxHistoryTokens,
       toolIds: body.tools ?? null,
     };
 
