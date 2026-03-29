@@ -172,7 +172,7 @@ Interactive REPL meta-commands (not CLI args):
 | Category | Commands |
 |----------|----------|
 | **Session** (7) | `/help`, `/new`, `/sessions`, `/resume <slug>`, `/history`, `/clear`, `/compact` |
-| **Model** (2) | `/model [name]`, `/models` |
+| **Model** (5) | `/model [name]`, `/model list`, `/model pin <spec>`, `/model unpin <spec>`, `/model pins` |
 | **Channels** (2) | `/channels`, `/channel connect\|disconnect <name>` |
 | **Management** (6) | `/connectors`, `/connect <name>`, `/disconnect <name>`, `/triggers`, `/skills`, `/skill <name>` |
 | **System** (4) | `/status`, `/health`, `/sys`, `/config` |
@@ -448,6 +448,11 @@ interface ModelCapabilities {
 - `resolveModel(provider, alias)` → real model ID
 - `getCapabilities(provider, modelId)` → capability struct
 - `probeLocalModel(modelId)` → Ollama-specific detection
+- `buildModelList(opts)` → unified model list for picker and IPC (single source of truth)
+- `buildPinnedSpecSet(customModels)` → Set of pinned "provider:model" specs
+
+**User-curated models** (`config.agent.customModels`):
+When set, the model picker shows the user's pinned models first, then "Browse all...". Each entry is a `"provider:model"` string or an object with optional capability overrides (`context`, `maxOutput`, `toolCall`, `reasoning`, `vision`). Managed via `/model pin`, `/model unpin`, or config file directly.
 
 **Static fallback aliases:**
 ```typescript

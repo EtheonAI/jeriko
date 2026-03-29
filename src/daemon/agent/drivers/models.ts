@@ -11,6 +11,12 @@
 
 import { getLogger } from "../../../shared/logger.js";
 import { DEFAULT_CONTEXT_LIMIT } from "../../../shared/tokens.js";
+import {
+  type CustomModel,
+  type ProviderConfig,
+  normalizeCustomModel,
+  parseCustomModelSpec,
+} from "../../../shared/config.js";
 
 const log = getLogger();
 
@@ -792,6 +798,144 @@ export function isKnownProvider(name: string): boolean {
   } catch {
     return false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Unified model list builder
+// ---------------------------------------------------------------------------
+
+/**
+ * A model entry ready for display in the CLI or IPC response.
+ * This is the canonical shape — both kernel IPC and in-process backend return this.
+ */
+export interface ModelListEntry {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow: number;
+  maxOutput: number;
+  supportsTools: boolean;
+  supportsReasoning: boolean;
+  supportsVision: boolean;
+  costInput: number;
+  costOutput: number;
+  pinned: boolean;
+}
+
+/** Convert ModelCapabilities to a ModelListEntry. */
+function capsToEntry(
+  caps: ModelCapabilities,
+  pinned: boolean,
+  displayName?: string,
+): ModelListEntry {
+  return {
+    id: caps.id,
+    name: displayName ?? caps.id,
+    provider: caps.provider,
+    contextWindow: caps.context,
+    maxOutput: caps.maxOutput,
+    supportsTools: caps.toolCall,
+    supportsReasoning: caps.reasoning,
+    supportsVision: caps.vision,
+    costInput: caps.costInput,
+    costOutput: caps.costOutput,
+    pinned,
+  };
+}
+
+/**
+ * Build the complete, deduplicated model list for display.
+ *
+ * This is the SINGLE function that assembles the model list from all sources:
+ *   1. Registry models (models.dev + Ollama probe cache)
+ *   2. Custom provider models/aliases from config
+ *   3. User's pinned custom models (always included, even if not in registry)
+ *
+ * Used by kernel IPC ("models") and in-process backend (getStaticModelList).
+ * Eliminates duplication between the two code paths.
+ */
+export function buildModelList(opts: {
+  /** Provider IDs that are configured and active (have API key or are custom). */
+  configuredProviders: ReadonlySet<string>;
+  /** Custom providers from config.providers[]. */
+  customProviders?: ReadonlyArray<Pick<ProviderConfig, "id" | "name" | "defaultModel" | "models">>;
+  /** User's curated model list from config.agent.customModels. */
+  customModels?: ReadonlyArray<string | CustomModel>;
+}): ModelListEntry[] {
+  const { configuredProviders, customProviders = [], customModels = [] } = opts;
+
+  const pinnedSpecs = buildPinnedSpecSet(customModels);
+  const seen = new Set<string>();
+  const results: ModelListEntry[] = [];
+
+  /** Add a model from capabilities if not already seen. */
+  function add(caps: ModelCapabilities, displayName?: string): void {
+    const key = `${caps.provider}:${caps.id}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    results.push(capsToEntry(caps, pinnedSpecs.has(key), displayName));
+  }
+
+  // 1. Registry models — cloud (models.dev) + local (Ollama probe cache)
+  for (const caps of listModels()) {
+    if (configuredProviders.has(caps.provider)) add(caps);
+  }
+
+  // 2. Custom provider models from config (may not be in models.dev)
+  for (const provider of customProviders) {
+    if (provider.defaultModel && !seen.has(`${provider.id}:${provider.defaultModel}`)) {
+      add(getCapabilities(provider.id, provider.defaultModel), provider.name);
+    }
+    if (provider.models) {
+      for (const [alias, modelId] of Object.entries(provider.models)) {
+        if (!seen.has(`${provider.id}:${modelId}`)) {
+          const caps = getCapabilities(provider.id, modelId);
+          add({ ...caps, id: modelId, provider: provider.id }, alias);
+        }
+      }
+    }
+  }
+
+  // 3. Pinned custom models — ensure they appear even if not in any registry
+  for (const entry of customModels) {
+    const normalized = normalizeCustomModel(entry);
+    const { provider, model } = parseCustomModelSpec(normalized.spec);
+    const key = `${provider}:${model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+
+    const caps = getCapabilities(provider, model);
+    results.push({
+      id: model,
+      name: normalized.name ?? model,
+      provider,
+      contextWindow: normalized.context ?? caps.context,
+      maxOutput: normalized.maxOutput ?? caps.maxOutput,
+      supportsTools: normalized.toolCall ?? caps.toolCall,
+      supportsReasoning: normalized.reasoning ?? caps.reasoning,
+      supportsVision: normalized.vision ?? caps.vision,
+      costInput: caps.costInput,
+      costOutput: caps.costOutput,
+      pinned: true,
+    });
+  }
+
+  return results;
+}
+
+/**
+ * Build a Set of "provider:model" specs from the user's customModels config.
+ * Exported for use by consumers that need the pinned set without the full model list.
+ */
+export function buildPinnedSpecSet(
+  customModels: ReadonlyArray<string | CustomModel>,
+): Set<string> {
+  const specs = new Set<string>();
+  for (const entry of customModels) {
+    const { provider, model } = parseCustomModelSpec(normalizeCustomModel(entry).spec);
+    specs.add(`${provider}:${model}`);
+  }
+  return specs;
 }
 
 // ---------------------------------------------------------------------------

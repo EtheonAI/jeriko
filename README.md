@@ -97,6 +97,31 @@ jeriko provider add deepseek --type openai-compatible --base-url https://api.dee
 
 **Built-in presets:** anthropic, openai, google, deepseek, mistral, groq, together, fireworks, perplexity, cohere, x-ai, cerebras, sambanova, hyperbolic, openrouter, ollama, lm-studio, llama-cpp, jan, text-gen-webui, koboldcpp, vllm.
 
+### Curate Your Model List
+
+Pin the models you actually use — the model picker shows your list instead of hundreds of random models:
+
+```bash
+# From the REPL
+/model pin anthropic:claude-opus-4-6
+/model pin groq:llama-3.3-70b-versatile Groq Llama
+/model pins                              # view your list
+/model                                   # picker shows pinned first
+```
+
+Or in `~/.config/jeriko/config.json`:
+```json
+{
+  "agent": {
+    "customModels": [
+      "anthropic:claude-opus-4-6",
+      "openai:gpt-5",
+      { "spec": "groq:llama-3.3-70b-versatile", "name": "Groq Llama", "toolCall": true }
+    ]
+  }
+}
+```
+
 ---
 
 ## Features

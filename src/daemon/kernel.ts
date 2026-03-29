@@ -2,7 +2,7 @@
 // This is the entry point for `jeriko serve`.
 
 import { getLogger, Logger } from "../shared/logger.js";
-import { loadConfig, type JerikoConfig, type ProviderConfig } from "../shared/config.js";
+import { loadConfig, type JerikoConfig, type ProviderConfig, type CustomModel } from "../shared/config.js";
 
 // Bundled AGENT.md — inlined at compile time, always available even if
 // ~/.config/jeriko/agent.md is missing (e.g. partial install).
@@ -920,112 +920,35 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
   // ── Model listing IPC method ──────────────────────────────────
   registerMethod("models", async () => {
-    const { listModels } = await import("./agent/drivers/models.js");
+    const { buildModelList } = await import("./agent/drivers/models.js");
     const { listDrivers } = await import("./agent/drivers/index.js");
 
-    // Get all models from the capability index (populated from models.dev)
-    const allModels = listModels();
-
-    // Filter to models from configured providers only.
-    // Built-in providers require their API key to be set; custom providers
-    // are always included (they're explicitly configured in config.json).
+    // Determine which providers are configured and active.
     const registeredDrivers = new Set(listDrivers());
-    const providerIds = new Set(config.providers?.map((p) => p.id) ?? []);
-
     const builtInDriverProviders: Record<string, { provider: string; envKey?: string }> = {
       anthropic: { provider: "anthropic", envKey: "ANTHROPIC_API_KEY" },
       openai:    { provider: "openai",    envKey: "OPENAI_API_KEY" },
-      local:     { provider: "local" }, // no key needed
+      local:     { provider: "local" },
     };
 
-    const relevantProviders = new Set<string>();
+    const configuredProviders = new Set<string>();
     for (const driver of registeredDrivers) {
       const mapping = builtInDriverProviders[driver];
       if (mapping) {
         if (!mapping.envKey || process.env[mapping.envKey]) {
-          relevantProviders.add(mapping.provider);
+          configuredProviders.add(mapping.provider);
         }
       }
     }
-    for (const id of providerIds) {
-      relevantProviders.add(id);
+    for (const p of config.providers ?? []) {
+      configuredProviders.add(p.id);
     }
 
-    // Collect models for relevant providers, deduplicated by id
-    const seen = new Set<string>();
-    const models: Array<{
-      id: string;
-      name: string;
-      provider: string;
-      contextWindow: number;
-      maxOutput: number;
-      supportsTools: boolean;
-      supportsReasoning: boolean;
-      costInput: number;
-      costOutput: number;
-    }> = [];
-
-    for (const caps of allModels) {
-      if (!relevantProviders.has(caps.provider)) continue;
-      if (seen.has(`${caps.provider}:${caps.id}`)) continue;
-      seen.add(`${caps.provider}:${caps.id}`);
-
-      models.push({
-        id: caps.id,
-        name: caps.id,
-        provider: caps.provider,
-        contextWindow: caps.context,
-        maxOutput: caps.maxOutput,
-        supportsTools: caps.toolCall,
-        supportsReasoning: caps.reasoning,
-        costInput: caps.costInput,
-        costOutput: caps.costOutput,
-      });
-    }
-
-    // Add custom provider models from config (may not be in models.dev)
-    for (const provider of config.providers ?? []) {
-      if (!seen.has(`${provider.id}:default`) && provider.defaultModel) {
-        const { getCapabilities } = await import("./agent/drivers/models.js");
-        const caps = getCapabilities(provider.id, provider.defaultModel);
-        seen.add(`${provider.id}:${provider.defaultModel}`);
-        models.push({
-          id: provider.defaultModel,
-          name: provider.name,
-          provider: provider.id,
-          contextWindow: caps.context,
-          maxOutput: caps.maxOutput,
-          supportsTools: caps.toolCall,
-          supportsReasoning: caps.reasoning,
-          costInput: caps.costInput,
-          costOutput: caps.costOutput,
-        });
-      }
-
-      // Add aliased models from provider config
-      if (provider.models) {
-        for (const [alias, modelId] of Object.entries(provider.models)) {
-          const key = `${provider.id}:${modelId}`;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const { getCapabilities } = await import("./agent/drivers/models.js");
-          const caps = getCapabilities(provider.id, modelId);
-          models.push({
-            id: modelId,
-            name: alias,
-            provider: provider.id,
-            contextWindow: caps.context,
-            maxOutput: caps.maxOutput,
-            supportsTools: caps.toolCall,
-            supportsReasoning: caps.reasoning,
-            costInput: caps.costInput,
-            costOutput: caps.costOutput,
-          });
-        }
-      }
-    }
-
-    return models;
+    return buildModelList({
+      configuredProviders,
+      customProviders: config.providers,
+      customModels: config.agent?.customModels,
+    });
   });
 
   // ── Provider management IPC methods ──────────────────────────
@@ -1117,6 +1040,28 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     return providers;
   });
 
+  // ── Shared config file I/O for all config mutations ──────────
+
+  async function loadConfigFile() {
+    const { readFileSync, writeFileSync, existsSync: fileExists, mkdirSync } = await import("node:fs");
+    const { join: pathJoin } = await import("node:path");
+    const { getConfigDir } = await import("../shared/config.js");
+    const configDir = getConfigDir();
+    const configPath = pathJoin(configDir, "config.json");
+    let fileConfig: Record<string, unknown> = {};
+    if (fileExists(configPath)) {
+      fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+    }
+    return {
+      fileConfig,
+      configPath,
+      save(fc: Record<string, unknown>) {
+        if (!fileExists(configDir)) mkdirSync(configDir, { recursive: true });
+        writeFileSync(configPath, JSON.stringify(fc, null, 2) + "\n");
+      },
+    };
+  }
+
   registerMethod("providers.add", async (params) => {
     const id = params.id as string;
     const name = params.name as string | undefined;
@@ -1128,28 +1073,13 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     if (!id || !baseUrl || !apiKey) {
       throw new Error("id, base_url, and api_key are required");
     }
-
-    // Validate provider type
     if (providerType !== "openai-compatible" && providerType !== "anthropic") {
       throw new Error(`Invalid type "${providerType}". Supported: openai-compatible, anthropic`);
     }
 
-    // Load and update config file
-    const { readFileSync, writeFileSync, existsSync: fileExists, mkdirSync } = await import("node:fs");
-    const { join: pathJoin } = await import("node:path");
-    const { getConfigDir } = await import("../shared/config.js");
-
-    const configDir = getConfigDir();
-    const configPath = pathJoin(configDir, "config.json");
-
-    let fileConfig: Record<string, unknown> = {};
-    if (fileExists(configPath)) {
-      fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
-    }
-
+    const { fileConfig, save } = await loadConfigFile();
     const providers = (fileConfig.providers as ProviderConfig[] | undefined) ?? [];
 
-    // Check for duplicate
     if (providers.some((p) => p.id === id)) {
       throw new Error(`Provider "${id}" already exists. Remove it first.`);
     }
@@ -1165,9 +1095,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
     providers.push(newProvider);
     fileConfig.providers = providers;
-
-    if (!fileExists(configDir)) mkdirSync(configDir, { recursive: true });
-    writeFileSync(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+    save(fileConfig);
 
     // Register the driver at runtime
     const { registerCustomProviders } = await import("./agent/drivers/providers.js");
@@ -1184,16 +1112,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const id = params.id as string;
     if (!id) throw new Error("id is required");
 
-    const { readFileSync, writeFileSync, existsSync: fileExists } = await import("node:fs");
-    const { join: pathJoin } = await import("node:path");
-    const { getConfigDir } = await import("../shared/config.js");
-
-    const configPath = pathJoin(getConfigDir(), "config.json");
-    if (!fileExists(configPath)) {
-      throw new Error(`Provider "${id}" not found`);
-    }
-
-    const fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+    const { fileConfig, save } = await loadConfigFile();
     const providers = (fileConfig.providers as ProviderConfig[] | undefined) ?? [];
 
     const idx = providers.findIndex((p) => p.id === id);
@@ -1201,7 +1120,7 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
 
     providers.splice(idx, 1);
     fileConfig.providers = providers;
-    writeFileSync(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+    save(fileConfig);
 
     // Update in-memory config
     if (config.providers) {
@@ -1209,6 +1128,72 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
 
     return { id, removed: true };
+  });
+
+  // ── Model pin/unpin ───────────────────────────────────────────
+
+  registerMethod("models.pin", async (params) => {
+    const spec = params.spec as string;
+    const name = params.name as string | undefined;
+    if (!spec) throw new Error("spec is required");
+
+    const { normalizeCustomModel } = await import("../shared/config.js");
+    const { fileConfig, save } = await loadConfigFile();
+
+    const agent = (fileConfig.agent ?? {}) as Record<string, unknown>;
+    const existing = (agent.customModels ?? []) as Array<string | CustomModel>;
+
+    // Idempotent
+    if (existing.some((e) => normalizeCustomModel(e).spec === spec)) {
+      return { ok: true };
+    }
+
+    const entry: string | CustomModel = name ? { spec, name } : spec;
+    existing.push(entry);
+    agent.customModels = existing;
+    fileConfig.agent = agent;
+    save(fileConfig);
+
+    // Update in-memory config
+    if (!config.agent.customModels) config.agent.customModels = [];
+    config.agent.customModels.push(entry);
+
+    return { ok: true };
+  });
+
+  registerMethod("models.unpin", async (params) => {
+    const spec = params.spec as string;
+    if (!spec) throw new Error("spec is required");
+
+    const { normalizeCustomModel } = await import("../shared/config.js");
+    const { fileConfig, save } = await loadConfigFile();
+
+    const agent = (fileConfig.agent ?? {}) as Record<string, unknown>;
+    const existing = (agent.customModels ?? []) as Array<string | CustomModel>;
+    if (existing.length === 0) return { ok: true };
+
+    const filtered = existing.filter((e) => normalizeCustomModel(e).spec !== spec);
+    if (filtered.length === existing.length) return { ok: true }; // nothing removed
+
+    if (filtered.length === 0) {
+      delete agent.customModels;
+    } else {
+      agent.customModels = filtered;
+    }
+    fileConfig.agent = agent;
+    save(fileConfig);
+
+    // Update in-memory config
+    if (config.agent.customModels) {
+      config.agent.customModels = config.agent.customModels.filter(
+        (e) => normalizeCustomModel(e).spec !== spec,
+      );
+      if (config.agent.customModels.length === 0) {
+        delete config.agent.customModels;
+      }
+    }
+
+    return { ok: true };
   });
 
   // ── Connector IPC methods ─────────────────────────────────────

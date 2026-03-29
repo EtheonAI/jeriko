@@ -47,6 +47,9 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/model list",       "Browse all providers + models"],
       ["/model add [id]",   "Add a provider (preset picker + API key)"],
       ["/model rm [id]",    "Remove a provider"],
+      ["/model pin <spec>", "Pin a model to your curated list"],
+      ["/model unpin <spec>","Remove from curated list"],
+      ["/model pins",       "Show your pinned models"],
     ],
   },
   {

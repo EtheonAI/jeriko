@@ -14,6 +14,7 @@ import type { Backend } from "../backend.js";
 import type { AppAction, ModelInfo, ProviderInfo, WizardConfig } from "../types.js";
 import {
   formatModelList,
+  formatPinnedList,
   formatProviderAdded,
   formatProviderRemoved,
   formatError,
@@ -53,19 +54,54 @@ function launchWizard(ctx: ModelCommandContext, config: WizardConfig): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Build unified picker options: configured models + unconfigured providers. */
-function buildPickerOptions(
-  models: ReadonlyArray<ModelInfo>,
-  providers: ReadonlyArray<ProviderInfo>,
-  currentModel: string,
-): Array<{ value: string; label: string; hint: string }> {
-  const activeIds = new Set(
-    providers
-      .filter((p) => p.type !== "available")
-      .map((p) => p.id),
-  );
+// ---------------------------------------------------------------------------
+// Picker option builders — shared helpers
+// ---------------------------------------------------------------------------
 
-  // Group models by provider
+type PickerOption = { value: string; label: string; hint: string };
+
+/** Sort comparator: current model first, then by capabilities (tools + reasoning). */
+function modelSortComparator(currentModel: string) {
+  return (a: ModelInfo, b: ModelInfo): number => {
+    const specA = `${a.provider}:${a.id}`;
+    const specB = `${b.provider}:${b.id}`;
+    const aCur = (specA === currentModel || a.id === currentModel) ? 1 : 0;
+    const bCur = (specB === currentModel || b.id === currentModel) ? 1 : 0;
+    if (aCur !== bCur) return bCur - aCur;
+    const aScore = (a.supportsTools ? 2 : 0) + (a.supportsReasoning ? 2 : 0);
+    const bScore = (b.supportsTools ? 2 : 0) + (b.supportsReasoning ? 2 : 0);
+    return bScore - aScore;
+  };
+}
+
+/** Convert a ModelInfo to a picker option. */
+function toPickerOption(m: ModelInfo): PickerOption {
+  const hints: string[] = [m.provider];
+  if (m.contextWindow) hints.push(`${Math.round(m.contextWindow / 1000)}k`);
+  if (m.supportsReasoning) hints.push("reasoning");
+  if (m.supportsTools) hints.push("tools");
+  return {
+    value: `${m.provider}:${m.id}`,
+    label: m.name !== m.id ? `${m.name} (${m.id})` : m.id,
+    hint: hints.join(" \u00B7 "),
+  };
+}
+
+/** Get the set of active (configured) provider IDs. */
+function activeProviderIds(providers: ReadonlyArray<ProviderInfo>): Set<string> {
+  return new Set(providers.filter((p) => p.type !== "available").map((p) => p.id));
+}
+
+/**
+ * Build provider-grouped model options with per-provider limits.
+ * Shared by the non-pinned picker path and the "browse all" flow.
+ */
+function buildProviderGroupedOptions(
+  models: ReadonlyArray<ModelInfo>,
+  activeIds: ReadonlySet<string>,
+  currentModel: string,
+  perProviderLimit: number,
+): PickerOption[] {
   const byProvider = new Map<string, ModelInfo[]>();
   for (const m of models) {
     if (!activeIds.has(m.provider)) continue;
@@ -74,53 +110,32 @@ function buildPickerOptions(
     byProvider.set(m.provider, group);
   }
 
-  const options: Array<{ value: string; label: string; hint: string }> = [];
-  const builtIn = BUILT_IN_PROVIDER_IDS;
-
-  // Section 1: Models from configured providers
+  const sort = modelSortComparator(currentModel);
+  const options: PickerOption[] = [];
   for (const [provider, providerModels] of byProvider) {
-    const sorted = [...providerModels].sort((a, b) => {
-      const aCur = a.id === currentModel ? 1 : 0;
-      const bCur = b.id === currentModel ? 1 : 0;
-      if (aCur !== bCur) return bCur - aCur;
-      const aScore = (a.supportsTools ? 2 : 0) + (a.supportsReasoning ? 2 : 0);
-      const bScore = (b.supportsTools ? 2 : 0) + (b.supportsReasoning ? 2 : 0);
-      return bScore - aScore;
-    });
-
-    // Cloud providers have hundreds of models — cap at 5 to keep the picker usable.
-    // Local models are hand-picked by the user (manually pulled), so show all.
-    const limit = provider === "local" ? sorted.length : 5;
+    const sorted = [...providerModels].sort(sort);
+    const limit = provider === "local" ? sorted.length : perProviderLimit;
     for (const m of sorted.slice(0, limit)) {
-      // Always use provider:model format so parseModelSpec() can resolve the driver.
-      // Bare model IDs like "gpt-5.3-codex" cause "Unknown LLM backend" errors.
-      const modelSpec = `${provider}:${m.id}`;
-      const hints: string[] = [provider];
-      if (m.contextWindow) hints.push(`${Math.round(m.contextWindow / 1000)}k`);
-      if (m.supportsReasoning) hints.push("reasoning");
-      if (m.supportsTools) hints.push("tools");
-
-      options.push({
-        value: modelSpec,
-        label: m.id,
-        hint: hints.join(" \u00B7 "),
-      });
+      options.push(toPickerOption(m));
     }
   }
+  return options;
+}
 
-  // Section 2: Unconfigured providers (available to connect)
+/** Append "available provider" connect options to picker. */
+function appendProviderConnectOptions(
+  options: PickerOption[],
+  providers: ReadonlyArray<ProviderInfo>,
+): void {
   const available = providers.filter((p) => p.type === "available");
   for (const p of available.slice(0, 8)) {
     const connectHint = hasOAuth(p.id) ? "sign in or API key" : "add API key";
     options.push({
       value: `__add__:${p.id}`,
       label: `+ ${p.name}`,
-      hint: p.defaultModel
-        ? `${connectHint} \u00B7 ${p.defaultModel}`
-        : connectHint,
+      hint: p.defaultModel ? `${connectHint} \u00B7 ${p.defaultModel}` : connectHint,
     });
   }
-
   if (available.length > 8) {
     options.push({
       value: "__add_more__",
@@ -128,7 +143,34 @@ function buildPickerOptions(
       hint: `${available.length - 8} more available`,
     });
   }
+}
 
+/**
+ * Build unified picker options.
+ *
+ * When the user has pinned models: shows pinned first, then "Browse all...".
+ * Otherwise: shows the full provider-grouped list (current behavior).
+ * Always appends available providers to connect.
+ */
+function buildPickerOptions(
+  models: ReadonlyArray<ModelInfo>,
+  providers: ReadonlyArray<ProviderInfo>,
+  currentModel: string,
+): PickerOption[] {
+  const activeIds = activeProviderIds(providers);
+  const options: PickerOption[] = [];
+  const hasPinned = models.some((m) => m.pinned);
+
+  if (hasPinned) {
+    const pinned = models.filter((m) => m.pinned && activeIds.has(m.provider));
+    const sorted = [...pinned].sort(modelSortComparator(currentModel));
+    for (const m of sorted) options.push(toPickerOption(m));
+    options.push({ value: "__browse_all__", label: "Browse all models...", hint: `${models.length} available` });
+  } else {
+    options.push(...buildProviderGroupedOptions(models, activeIds, currentModel, 5));
+  }
+
+  appendProviderConnectOptions(options, providers);
   return options;
 }
 
@@ -564,15 +606,44 @@ async function handleRemove(ctx: ModelCommandContext, removeId?: string): Promis
 export function createModelHandlers(ctx: ModelCommandContext) {
   const { backend, dispatch, addSystemMessage, state } = ctx;
 
+  /** Show the "browse all models" picker (provider-grouped, higher limit). */
+  async function showBrowseAll(): Promise<void> {
+    const [models, providers] = await Promise.all([
+      backend.listModels(),
+      backend.listProviders(),
+    ]);
+    const options = buildProviderGroupedOptions(
+      models, activeProviderIds(providers), state.model, 10,
+    );
+    if (options.length === 0) {
+      addSystemMessage(t.muted("No models available."));
+      return;
+    }
+    launchWizard(ctx, {
+      title: "Browse All Models",
+      steps: [{ type: "select", message: `Current: ${state.model}`, options }],
+      onComplete: async ([selected]) => {
+        dispatch({ type: "SET_PHASE", phase: "idle" });
+        if (!selected) return;
+        dispatch({ type: "SET_MODEL", model: selected });
+        await backend.updateSessionModel(selected);
+        addSystemMessage(t.green(`Model switched to ${selected}`));
+      },
+    });
+  }
+
   return {
     /**
      * /model — unified model command.
      *
-     *   /model              → interactive picker (models + add provider)
+     *   /model              → interactive picker (pinned first, or all if none pinned)
      *   /model <name>       → direct switch (or connect-then-switch)
      *   /model list         → browse all providers + models
      *   /model add [id]     → add a provider (preset picker or API key only)
      *   /model rm [id]      → remove a provider
+     *   /model pin <spec>   → add a model to your curated list
+     *   /model unpin <spec> → remove from curated list
+     *   /model pins         → show pinned models
      */
     async model(args: string): Promise<void> {
       const modelArg = args.trim();
@@ -605,6 +676,53 @@ export function createModelHandlers(ctx: ModelCommandContext) {
         const rmId = rmParts[1];
         try {
           await handleRemove(ctx, rmId);
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
+        return;
+      }
+
+      // /model pin <spec> [name] → add model to curated list
+      if (modelArg === "pin" || modelArg.startsWith("pin ")) {
+        const pinArgs = modelArg.slice(4).trim();
+        if (!pinArgs) {
+          addSystemMessage(t.muted("Usage: /model pin <provider:model> [display name]"));
+          return;
+        }
+        // First token is the spec, rest is optional display name
+        const parts = pinArgs.split(/\s+/);
+        const spec = parts[0]!;
+        const displayName = parts.length > 1 ? parts.slice(1).join(" ") : undefined;
+        try {
+          await backend.pinModel(spec, displayName);
+          addSystemMessage(`${t.green("\u2713")} Pinned ${t.blue(spec)}${displayName ? ` as "${displayName}"` : ""}`);
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
+        return;
+      }
+
+      // /model unpin <spec> → remove from curated list
+      if (modelArg === "unpin" || modelArg.startsWith("unpin ")) {
+        const spec = modelArg.slice(6).trim();
+        if (!spec) {
+          addSystemMessage(t.muted("Usage: /model unpin <provider:model>"));
+          return;
+        }
+        try {
+          await backend.unpinModel(spec);
+          addSystemMessage(`${t.green("\u2713")} Unpinned ${t.blue(spec)}`);
+        } catch (err) {
+          addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
+        }
+        return;
+      }
+
+      // /model pins → show pinned models
+      if (modelArg === "pins" || modelArg === "pinned") {
+        try {
+          const models = await backend.listModels();
+          addSystemMessage(formatPinnedList(models, state.model));
         } catch (err) {
           addSystemMessage(formatError(err instanceof Error ? err.message : String(err)));
         }
@@ -662,6 +780,11 @@ export function createModelHandlers(ctx: ModelCommandContext) {
           onComplete: async ([selected]) => {
             dispatch({ type: "SET_PHASE", phase: "idle" });
 
+            if (selected === "__browse_all__") {
+              await showBrowseAll();
+              return;
+            }
+
             if (selected === "__add_more__") {
               await handleAdd(ctx);
               return;
@@ -690,7 +813,10 @@ export function createModelHandlers(ctx: ModelCommandContext) {
           t.dim(`  /model <name>       switch model\n`) +
           t.dim(`  /model list         browse all\n`) +
           t.dim(`  /model add [id]     add a provider\n`) +
-          t.dim(`  /model rm [id]      remove a provider`),
+          t.dim(`  /model rm [id]      remove a provider\n`) +
+          t.dim(`  /model pin <spec>   add to your model list\n`) +
+          t.dim(`  /model unpin <spec> remove from your list\n`) +
+          t.dim(`  /model pins         show your pinned models`),
         );
       }
     },

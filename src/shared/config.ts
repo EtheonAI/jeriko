@@ -8,6 +8,45 @@ import * as os from "node:os";
 // Config interfaces
 // ---------------------------------------------------------------------------
 
+/**
+ * A user-curated model entry for the model picker.
+ *
+ * Simple form: `"provider:model"` string spec (e.g., `"anthropic:claude-opus-4-6"`).
+ * Object form: spec + optional display name and capability overrides.
+ */
+export interface CustomModel {
+  /** Model spec — "provider:model" format (e.g., "anthropic:claude-sonnet-4-6"). */
+  spec: string;
+  /** Optional display name for the picker. Defaults to the model ID portion of spec. */
+  name?: string;
+  /** Context window override (tokens). Resolved from models.dev if omitted. */
+  context?: number;
+  /** Max output tokens override. */
+  maxOutput?: number;
+  /** Whether the model supports tool/function calling. */
+  toolCall?: boolean;
+  /** Whether the model supports reasoning/thinking mode. */
+  reasoning?: boolean;
+  /** Whether the model supports vision/image input. */
+  vision?: boolean;
+}
+
+/** Normalize a custom model entry (string or object) to its canonical object form. */
+export function normalizeCustomModel(entry: string | CustomModel): CustomModel {
+  if (typeof entry === "string") return { spec: entry };
+  return entry;
+}
+
+/** Parse a custom model spec into provider and model ID. */
+export function parseCustomModelSpec(spec: string): { provider: string; model: string } {
+  const colonIdx = spec.indexOf(":");
+  if (colonIdx > 0) {
+    return { provider: spec.slice(0, colonIdx), model: spec.slice(colonIdx + 1) };
+  }
+  // No colon — treat as provider-less (will resolve via static aliases)
+  return { provider: spec, model: spec };
+}
+
 export interface AgentConfig {
   /** Default model to use: "claude", "gpt4", "local" */
   model: string;
@@ -21,6 +60,21 @@ export interface AgentConfig {
   maxHistoryMessages?: number;
   /** Max estimated tokens of conversation history to send per request. */
   maxHistoryTokens?: number;
+  /**
+   * User-curated model list. When set, the model picker shows these models
+   * first (before the full models.dev catalog). Each entry is either a
+   * "provider:model" spec string, or an object with optional overrides.
+   *
+   * Example:
+   * ```json
+   * [
+   *   "anthropic:claude-opus-4-6",
+   *   "openai:gpt-5",
+   *   { "spec": "groq:llama-3.3-70b-versatile", "name": "Groq Llama 3.3" }
+   * ]
+   * ```
+   */
+  customModels?: Array<string | CustomModel>;
 }
 
 export interface ChannelsConfig {

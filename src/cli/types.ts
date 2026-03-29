@@ -213,6 +213,8 @@ export interface ModelInfo {
   supportsReasoning?: boolean;
   costInput?: number;
   costOutput?: number;
+  /** True when the model is in the user's customModels list. */
+  pinned?: boolean;
 }
 
 // ---------------------------------------------------------------------------

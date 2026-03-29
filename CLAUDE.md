@@ -104,6 +104,7 @@ Packages:           packages/protocol/    (wire protocol types)
 - **Triggers** (6 types): cron, webhook, file, http, email, once
 - **Agent tools** (17): bash, browse, camera, connector, delegate, edit, list, memory-tool, parallel, read, screenshot, search, skill, web, webdev, write + registry
 - **LLM drivers**: Anthropic, OpenAI, local (Ollama/LM Studio), Claude Code, custom providers (OpenAI-compat or Anthropic-compat)
+- **Custom model list**: `config.agent.customModels` — user-curated models shown first in picker. Managed via `/model pin`/`unpin` or config file. `buildModelList()` in `models.ts` is the single source of truth for model listing.
 
 ## Output Contract
 

@@ -754,8 +754,54 @@ export function formatModelList(
     sectionHeader("Models", 62),
   ];
 
+  /** Format a single model line. */
+  function formatModelLine(m: ModelInfo, provider: string): string {
+    const spec = `${provider}:${m.id}`;
+    const isCurrent = m.id === currentModel || m.name === currentModel || spec === currentModel;
+    const marker = isCurrent ? t.brand(ICONS.active) : " ";
+    const pinnedIcon = m.pinned ? "\u2605 " : "  ";
+
+    // Show as provider:model for custom providers, just model for built-in
+    const isBuiltIn = ["anthropic", "openai", "local"].includes(provider);
+    const displayName = isBuiltIn ? m.id : `${provider}:${m.id}`;
+    const truncated = displayName.length > 30 ? displayName.slice(0, 27) + "\u2026" : displayName;
+    const idStr = isCurrent ? t.brandBold(truncated.padEnd(30)) : t.blue(truncated.padEnd(30));
+
+    // Context window
+    const ctxStr = m.contextWindow
+      ? t.muted(`${formatTokens(m.contextWindow)} ctx`.padEnd(10))
+      : t.dim("\u2014".padEnd(10));
+
+    // Cost
+    let costStr: string;
+    if (m.costInput && m.costOutput) {
+      costStr = t.muted(`$${m.costInput}/$${m.costOutput}`.padEnd(12));
+    } else if (m.costInput === 0 && m.costOutput === 0) {
+      costStr = t.green("free".padEnd(12));
+    } else {
+      costStr = t.dim("\u2014".padEnd(12));
+    }
+
+    // Capability icons
+    const caps: string[] = [];
+    if (m.supportsReasoning) caps.push(MODEL_CAPS.reasoning);
+    if (m.supportsTools) caps.push(MODEL_CAPS.tools);
+    const capsStr = caps.length > 0 ? caps.join("") : "";
+
+    return `  ${marker}${pinnedIcon}${idStr} ${ctxStr} ${costStr} ${capsStr}`;
+  }
+
+  // ── Pinned models section (user's curated list) ──────────────────────
+  const pinnedModels = models.filter((m) => m.pinned);
+  if (pinnedModels.length > 0) {
+    lines.push(subSection("Your Models \u2605"));
+    for (const m of pinnedModels) {
+      lines.push(formatModelLine(m, m.provider));
+    }
+    lines.push("");
+  }
+
   // ── Active providers with their models ───────────────────────────────
-  // Group models by provider
   const byProvider = new Map<string, ModelInfo[]>();
   for (const m of models) {
     const group = byProvider.get(m.provider) ?? [];
@@ -763,12 +809,10 @@ export function formatModelList(
     byProvider.set(m.provider, group);
   }
 
-  // Limit models per provider to keep it readable
   const MAX_MODELS_PER_PROVIDER = 5;
 
   if (byProvider.size > 0) {
     for (const [provider, providerModels] of byProvider) {
-      // Sort: current model first, then by capabilities (tools + reasoning), then by context
       const sorted = [...providerModels].sort((a, b) => {
         const aCurrent = a.id === currentModel || a.name === currentModel ? 1 : 0;
         const bCurrent = b.id === currentModel || b.name === currentModel ? 1 : 0;
@@ -784,37 +828,7 @@ export function formatModelList(
       lines.push(subSection(provider));
 
       for (const m of displayed) {
-        const isCurrent = m.id === currentModel || m.name === currentModel;
-        const marker = isCurrent ? t.brand(ICONS.active) : " ";
-
-        // Show as provider:model for custom providers, just model for built-in
-        const isBuiltIn = ["anthropic", "openai", "local"].includes(provider);
-        const displayName = isBuiltIn ? m.id : `${provider}:${m.id}`;
-        const truncated = displayName.length > 30 ? displayName.slice(0, 27) + "…" : displayName;
-        const idStr = isCurrent ? t.brandBold(truncated.padEnd(30)) : t.blue(truncated.padEnd(30));
-
-        // Context window
-        const ctxStr = m.contextWindow
-          ? t.muted(`${formatTokens(m.contextWindow)} ctx`.padEnd(10))
-          : t.dim("—".padEnd(10));
-
-        // Cost
-        let costStr: string;
-        if (m.costInput && m.costOutput) {
-          costStr = t.muted(`$${m.costInput}/$${m.costOutput}`.padEnd(12));
-        } else if (m.costInput === 0 && m.costOutput === 0) {
-          costStr = t.green("free".padEnd(12));
-        } else {
-          costStr = t.dim("—".padEnd(12));
-        }
-
-        // Capability icons
-        const caps: string[] = [];
-        if (m.supportsReasoning) caps.push(MODEL_CAPS.reasoning);
-        if (m.supportsTools) caps.push(MODEL_CAPS.tools);
-        const capsStr = caps.length > 0 ? caps.join("") : "";
-
-        lines.push(`  ${marker} ${idStr} ${ctxStr} ${costStr} ${capsStr}`);
+        lines.push(formatModelLine(m, provider));
       }
 
       if (remaining > 0) {
@@ -831,7 +845,6 @@ export function formatModelList(
     if (available.length > 0) {
       lines.push("");
       lines.push(subSection("Add a provider"));
-      // Show top providers in a compact grid
       const top = available.slice(0, 8);
       for (const p of top) {
         const envHint = p.envKey ? t.dim(p.envKey) : "";
@@ -844,8 +857,8 @@ export function formatModelList(
   }
 
   lines.push("");
-  lines.push(`  ${t.dim(`${MODEL_CAPS.reasoning} reasoning ${ICONS.dot} ${MODEL_CAPS.tools} tools`)}`);
-  lines.push(`  ${hint("Switch:", "/model <name>", "")} ${t.dim(ICONS.dot)} ${hint("Add provider:", "/model add", "")}`);
+  lines.push(`  ${t.dim(`\u2605 pinned ${ICONS.dot} ${MODEL_CAPS.reasoning} reasoning ${ICONS.dot} ${MODEL_CAPS.tools} tools`)}`);
+  lines.push(`  ${hint("Switch:", "/model <name>", "")} ${t.dim(ICONS.dot)} ${hint("Pin:", "/model pin <spec>", "")} ${t.dim(ICONS.dot)} ${hint("Add provider:", "/model add", "")}`);
   return lines.join("\n");
 }
 
@@ -1187,6 +1200,41 @@ export function formatProviderAdded(id: string, name: string): string {
  */
 export function formatProviderRemoved(id: string): string {
   return `${t.green(ICONS.success)} Provider ${t.blue(id)} removed`;
+}
+
+// ---------------------------------------------------------------------------
+// Pinned models
+// ---------------------------------------------------------------------------
+
+/**
+ * Format the user's pinned model list for /model pins.
+ */
+export function formatPinnedList(
+  models: ReadonlyArray<ModelInfo>,
+  currentModel: string,
+): string {
+  const pinned = models.filter((m) => m.pinned);
+  if (pinned.length === 0) {
+    return (
+      t.muted("No pinned models.\n") +
+      t.dim("  Use /model pin <provider:model> to curate your model list.")
+    );
+  }
+
+  const lines: string[] = ["", t.brandBold("Pinned Models")];
+  for (const m of pinned) {
+    const spec = `${m.provider}:${m.id}`;
+    const isCurrent = spec === currentModel || m.id === currentModel;
+    const marker = isCurrent ? t.brand(ICONS.active) : " ";
+    const hints: string[] = [m.provider];
+    if (m.contextWindow) hints.push(`${formatTokens(m.contextWindow)} ctx`);
+    if (m.supportsReasoning) hints.push(MODEL_CAPS.reasoning);
+    if (m.supportsTools) hints.push(MODEL_CAPS.tools);
+    lines.push(`  ${marker} ${t.blue(spec.padEnd(35))} ${t.muted(hints.join(" \u00B7 "))}`);
+  }
+  lines.push("");
+  lines.push(t.dim("  /model unpin <spec>  remove  \u00B7  /model pin <spec>  add"));
+  return lines.join("\n");
 }
 
 // ---------------------------------------------------------------------------

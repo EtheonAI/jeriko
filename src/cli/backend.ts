@@ -28,6 +28,7 @@ import type {
   NotificationPref,
   AuthStatus,
 } from "./types.js";
+import type { CustomModel } from "../shared/config.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -130,6 +131,10 @@ export interface Backend {
   listProviders(): Promise<ProviderInfo[]>;
   addProvider(config: { id: string; name?: string; baseUrl: string; apiKey: string; defaultModel?: string }): Promise<{ id: string; name: string; baseUrl: string }>;
   removeProvider(id: string): Promise<{ id: string; removed: boolean }>;
+
+  // Custom model list (user-curated favorites)
+  pinModel(spec: string, name?: string): Promise<void>;
+  unpinModel(spec: string): Promise<void>;
 
   // Billing
   getPlan(): Promise<PlanInfo>;
@@ -557,6 +562,22 @@ export async function createDaemonBackend(): Promise<Backend> {
         throw new Error(err instanceof Error ? err.message : String(err));
       }
       throw new Error("Failed to remove provider");
+    },
+
+    async pinModel(spec, name) {
+      try {
+        const response = await sendRequest("models.pin" as any, { spec, name });
+        if (response.ok) return;
+      } catch { /* fall through to direct */ }
+      pinModelDirect(spec, name);
+    },
+
+    async unpinModel(spec) {
+      try {
+        const response = await sendRequest("models.unpin" as any, { spec });
+        if (response.ok) return;
+      } catch { /* fall through to direct */ }
+      unpinModelDirect(spec);
     },
 
     // Billing
@@ -1056,6 +1077,14 @@ export async function createInProcessBackend(): Promise<Backend> {
       return removeProviderDirect(id);
     },
 
+    async pinModel(spec, name) {
+      pinModelDirect(spec, name);
+    },
+
+    async unpinModel(spec) {
+      unpinModelDirect(spec);
+    },
+
     // Billing — direct access
     async getPlan() {
       return getDefaultPlan();
@@ -1524,14 +1553,15 @@ async function loadConfigDirect(): Promise<Record<string, unknown>> {
 
 /**
  * Static model list for in-process mode (no daemon to query).
- * Uses the model registry if available, falls back to well-known defaults.
+ * Uses buildModelList() from the model registry — the single source of truth.
+ * Falls back to minimal defaults when the registry is completely unavailable.
  */
 function getStaticModelList(_currentModel: string): ModelInfo[] {
-  // Determine which built-in providers are configured (API key set).
+  // Determine which providers are configured (built-in + custom).
   const builtInEnvKeys: Record<string, string | undefined> = {
     anthropic: "ANTHROPIC_API_KEY",
     openai: "OPENAI_API_KEY",
-    local: undefined, // always available
+    local: undefined,
     ollama: undefined,
   };
   const configuredProviders = new Set<string>();
@@ -1539,58 +1569,44 @@ function getStaticModelList(_currentModel: string): ModelInfo[] {
     if (!envKey || process.env[envKey]) configuredProviders.add(provider);
   }
 
-  // Add custom providers from config
+  let cfg: import("../shared/config.js").JerikoConfig | undefined;
   try {
     const { loadConfig: loadCfg } = require("../shared/config.js");
-    const cfg = loadCfg();
-    for (const p of cfg.providers ?? []) {
-      configuredProviders.add(p.id);
-    }
+    cfg = loadCfg();
+    for (const p of cfg!.providers ?? []) configuredProviders.add(p.id);
   } catch { /* config may not exist yet */ }
 
-  // listModels() returns all models from the registry: models.dev (cloud)
-  // + Ollama probe cache (local). Local models are probed at boot by
-  // loadModelRegistry(), so they're already available here.
+  // Use buildModelList() — same logic as kernel IPC.
+  // Import once — buildPinnedSpecSet is also used in the fallback path below.
+  let modelsModule: typeof import("../daemon/agent/drivers/models.js") | undefined;
   try {
-    const { listModels: registryListModels } = require("../daemon/agent/drivers/models.js");
-    const all = registryListModels() as import("../daemon/agent/drivers/models.js").ModelCapabilities[];
-
-    if (all.length > 0) {
-      const seen = new Set<string>();
-      const results: ModelInfo[] = [];
-      for (const caps of all) {
-        if (!configuredProviders.has(caps.provider)) continue;
-        const key = `${caps.provider}:${caps.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        results.push({
-          id: caps.id,
-          name: caps.id,
-          provider: caps.provider,
-          contextWindow: caps.context,
-          maxOutput: caps.maxOutput,
-          supportsTools: caps.toolCall,
-          supportsReasoning: caps.reasoning,
-          costInput: caps.costInput,
-          costOutput: caps.costOutput,
-        });
-      }
-      return results;
-    }
+    modelsModule = require("../daemon/agent/drivers/models.js");
+    const entries = modelsModule!.buildModelList({
+      configuredProviders,
+      customProviders: cfg?.providers,
+      customModels: cfg?.agent?.customModels,
+    });
+    if (entries.length > 0) return entries;
   } catch {
     // Registry not loaded — fall through to defaults
   }
 
-  // Fallback defaults — only when registry is completely unavailable
+  // Fallback defaults — only when registry is completely unavailable.
+  // buildPinnedSpecSet is a pure function (no registry dependency), so it works
+  // even when the registry failed to load — but only if the module itself loaded.
+  const pinnedSpecs = modelsModule
+    ? modelsModule.buildPinnedSpecSet(cfg?.agent?.customModels ?? [])
+    : new Set<string>();
+
   const defaults: ModelInfo[] = [];
   if (configuredProviders.has("anthropic")) {
-    defaults.push({ id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true });
+    defaults.push({ id: "claude", name: "Claude Sonnet", provider: "anthropic", contextWindow: 200000, supportsTools: true, supportsReasoning: true, pinned: pinnedSpecs.has("anthropic:claude") });
   }
   if (configuredProviders.has("openai")) {
-    defaults.push({ id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true });
+    defaults.push({ id: "gpt4", name: "GPT-4o", provider: "openai", contextWindow: 128000, supportsTools: true, pinned: pinnedSpecs.has("openai:gpt4") });
   }
   if (configuredProviders.has("local") || configuredProviders.has("ollama")) {
-    defaults.push({ id: "local", name: "Local (Ollama)", provider: "local" });
+    defaults.push({ id: "local", name: "Local (Ollama)", provider: "local", pinned: pinnedSpecs.has("local:local") });
   }
   return defaults;
 }
@@ -1665,17 +1681,13 @@ function loadProvidersDirect(): ProviderInfo[] {
   }
 }
 
-/**
- * Add a provider directly to config file (no daemon needed).
- */
-function addProviderDirect(cfg: {
-  id: string;
-  name?: string;
-  baseUrl: string;
-  apiKey: string;
-  defaultModel?: string;
-}): { id: string; name: string; baseUrl: string } {
-  const { readFileSync: readFs, writeFileSync: writeFs, existsSync: exists } = require("node:fs");
+// ---------------------------------------------------------------------------
+// Direct config file I/O — shared by provider and model pin operations
+// ---------------------------------------------------------------------------
+
+/** Read the raw config file. Returns the parsed object and path. */
+function readConfigFile(): { fileConfig: Record<string, unknown>; configPath: string } {
+  const { readFileSync: readFs, existsSync: exists } = require("node:fs");
   const { join: pathJ } = require("node:path");
   const { getConfigDir } = require("../shared/config.js");
 
@@ -1686,6 +1698,28 @@ function addProviderDirect(cfg: {
   if (exists(configPath)) {
     fileConfig = JSON.parse(readFs(configPath, "utf-8"));
   }
+  return { fileConfig, configPath };
+}
+
+/** Write the config file back to disk, creating the directory if needed. */
+function writeConfigFile(configPath: string, fileConfig: Record<string, unknown>): void {
+  const { writeFileSync: writeFs, existsSync: exists, mkdirSync } = require("node:fs");
+  const { dirname } = require("node:path");
+
+  const dir = dirname(configPath);
+  if (!exists(dir)) mkdirSync(dir, { recursive: true });
+  writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+}
+
+/** Add a provider directly to config file (no daemon needed). */
+function addProviderDirect(cfg: {
+  id: string;
+  name?: string;
+  baseUrl: string;
+  apiKey: string;
+  defaultModel?: string;
+}): { id: string; name: string; baseUrl: string } {
+  const { fileConfig, configPath } = readConfigFile();
 
   const providers = (fileConfig.providers as Array<Record<string, unknown>> | undefined) ?? [];
   if (providers.some((p) => p.id === cfg.id)) {
@@ -1693,50 +1727,70 @@ function addProviderDirect(cfg: {
   }
 
   const displayName = cfg.name ?? cfg.id.charAt(0).toUpperCase() + cfg.id.slice(1);
-  const newProvider = {
+  providers.push({
     id: cfg.id,
     name: displayName,
     baseUrl: cfg.baseUrl,
     apiKey: cfg.apiKey,
     type: "openai-compatible",
     ...(cfg.defaultModel ? { defaultModel: cfg.defaultModel } : {}),
-  };
-
-  providers.push(newProvider);
+  });
   fileConfig.providers = providers;
-
-  if (!exists(configDir)) {
-    const { mkdirSync } = require("node:fs");
-    mkdirSync(configDir, { recursive: true });
-  }
-  writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+  writeConfigFile(configPath, fileConfig);
 
   return { id: cfg.id, name: displayName, baseUrl: cfg.baseUrl };
 }
 
-/**
- * Remove a provider directly from config file (no daemon needed).
- */
+/** Remove a provider directly from config file (no daemon needed). */
 function removeProviderDirect(id: string): { id: string; removed: boolean } {
-  const { readFileSync: readFs, writeFileSync: writeFs, existsSync: exists } = require("node:fs");
-  const { join: pathJ } = require("node:path");
-  const { getConfigDir } = require("../shared/config.js");
+  const { fileConfig, configPath } = readConfigFile();
 
-  const configPath = pathJ(getConfigDir(), "config.json");
-  if (!exists(configPath)) {
-    throw new Error(`Provider "${id}" not found`);
-  }
-
-  const fileConfig = JSON.parse(readFs(configPath, "utf-8"));
   const providers = (fileConfig.providers as Array<Record<string, unknown>> | undefined) ?? [];
   const idx = providers.findIndex((p) => p.id === id);
   if (idx === -1) throw new Error(`Provider "${id}" not found`);
 
   providers.splice(idx, 1);
   fileConfig.providers = providers;
-  writeFs(configPath, JSON.stringify(fileConfig, null, 2) + "\n");
+  writeConfigFile(configPath, fileConfig);
 
   return { id, removed: true };
+}
+
+/** Pin a model — add to agent.customModels. Idempotent. */
+function pinModelDirect(spec: string, name?: string): void {
+  const { normalizeCustomModel } = require("../shared/config.js");
+  const { fileConfig, configPath } = readConfigFile();
+
+  const agent = (fileConfig.agent ?? {}) as Record<string, unknown>;
+  const existing = (agent.customModels ?? []) as Array<string | CustomModel>;
+
+  if (existing.some((e) => normalizeCustomModel(e).spec === spec)) return;
+
+  existing.push(name ? { spec, name } : spec);
+  agent.customModels = existing;
+  fileConfig.agent = agent;
+  writeConfigFile(configPath, fileConfig);
+}
+
+/** Unpin a model — remove from agent.customModels. Idempotent. */
+function unpinModelDirect(spec: string): void {
+  const { normalizeCustomModel } = require("../shared/config.js");
+  const { fileConfig, configPath } = readConfigFile();
+
+  const agent = (fileConfig.agent ?? {}) as Record<string, unknown>;
+  const existing = (agent.customModels ?? []) as Array<string | CustomModel>;
+  if (existing.length === 0) return;
+
+  const filtered = existing.filter((e) => normalizeCustomModel(e).spec !== spec);
+  if (filtered.length === existing.length) return;
+
+  if (filtered.length === 0) {
+    delete agent.customModels;
+  } else {
+    agent.customModels = filtered;
+  }
+  fileConfig.agent = agent;
+  writeConfigFile(configPath, fileConfig);
 }
 
 /**
