@@ -96,7 +96,7 @@
     "@whiskeysockets/baileys": "^6.7.16",
     "chalk": "^5.4.0",
     "croner": "^10.0.1",
-    "drizzle-orm": "^0.39.0",
+    "drizzle-orm": "^0.45.2",
     "grammy": "^1.35.0",
     "hono": "^4.7.0",
     "ink": "7.0.0",
