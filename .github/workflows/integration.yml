@@ -23,7 +23,7 @@ jobs:
     name: Relay Integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Relay E2E tests
         run: bun test test/integration/relay-e2e.test.ts --timeout 60000
@@ -32,7 +32,7 @@ jobs:
     name: Channel Integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Channel connector integration
         run: bun test test/integration/channel-connectors.test.ts --timeout 60000
@@ -41,7 +41,7 @@ jobs:
     name: Command Integration
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Command integration tests
         run: bun test test/integration/commands.test.ts --timeout 60000
@@ -50,7 +50,7 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: E2E channel commands
         run: bun test test/e2e/ --timeout 60000
@@ -59,7 +59,7 @@ jobs:
     name: Billing Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Billing unit tests
         run: bun test test/unit/billing/ --timeout 30000
@@ -68,7 +68,7 @@ jobs:
     name: Connector Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Connector tests
         run: bun test test/unit/connectors.test.ts test/unit/oauth.test.ts --timeout 30000
@@ -77,7 +77,7 @@ jobs:
     name: Trigger Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
       - name: Trigger tests
         run: bun test test/unit/trigger-engine.test.ts test/unit/trigger-routes.test.ts test/unit/email-trigger.test.ts --timeout 30000
