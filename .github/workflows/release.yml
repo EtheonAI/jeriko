@@ -17,7 +17,7 @@ jobs:
     name: Pre-Release Gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
 
       - name: Typecheck
@@ -37,7 +37,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-bun
 
       - name: Extract version
@@ -138,7 +138,7 @@ jobs:
     needs: [build, verify-macos, verify-windows, verify-linux]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v4
         with:
@@ -193,7 +193,7 @@ jobs:
     needs: [build, verify-macos, verify-windows, verify-linux, upload-cdn]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/download-artifact@v4
         with:
