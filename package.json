@@ -116,6 +116,6 @@
     "@types/ws": "^8.5.0",
     "drizzle-kit": "^0.31.10",
     "ink-testing-library": "^4.0.0",
-    "typescript": "^5.7.0"
+    "typescript": "^6.0.2"
   }
 }
