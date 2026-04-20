@@ -43,7 +43,7 @@ function getStripeClient(): Stripe {
   }
 
   _stripe = new Stripe(config.stripeSecretKey, {
-    apiVersion: "2026-02-25.clover",
+    apiVersion: "2026-03-25.dahlia",
     appInfo: {
       name: "jeriko",
       version: "2.0.0",
