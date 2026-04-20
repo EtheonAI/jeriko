@@ -90,7 +90,7 @@ jobs:
         run: bun run test:unit:${{ matrix.suite }} --timeout 30000 2>&1 | tee test-output.txt
       - name: Upload test output on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-output-${{ matrix.suite }}
           path: test-output.txt
@@ -121,7 +121,7 @@ jobs:
         run: bun run test:integration:${{ matrix.suite }} --timeout 60000 2>&1 | tee test-output.txt
       - name: Upload test output on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-output-integration-${{ matrix.suite }}
           path: test-output.txt
