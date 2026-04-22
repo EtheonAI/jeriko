@@ -1050,7 +1050,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const configPath = pathJoin(configDir, "config.json");
     let fileConfig: Record<string, unknown> = {};
     if (fileExists(configPath)) {
-      fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      try {
+        fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Config file is malformed JSON: ${configPath} (${message})`);
+      }
+      if (!fileConfig || typeof fileConfig !== "object" || Array.isArray(fileConfig)) {
+        throw new Error(`Config file must contain a JSON object: ${configPath}`);
+      }
     }
     return {
       fileConfig,

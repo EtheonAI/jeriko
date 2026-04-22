@@ -98,6 +98,10 @@ export class VercelConnector extends ConnectorBase {
           target: p.target,
           gitSource: p.gitSource,
         }),
+      "deployments.promote": (p: Record<string, unknown>) =>
+        this.post(`/v13/deployments/${p.id}/promote`, {
+          target: p.target ?? "production",
+        }),
       "deployments.cancel": (p: Record<string, unknown>) =>
         this.patch(`/v12/deployments/${p.id}/cancel`, {}),
       "deployments.delete": (p: Record<string, unknown>) =>
