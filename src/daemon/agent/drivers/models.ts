@@ -10,7 +10,6 @@
 // compaction, max output) reads from this registry.
 
 import { getLogger } from "../../../shared/logger.js";
-import { DEFAULT_CONTEXT_LIMIT } from "../../../shared/tokens.js";
 import {
   type CustomModel,
   type ProviderConfig,
@@ -98,7 +97,7 @@ const STATIC_ALIASES: Record<string, Record<string, string>> = {
     anthropic:         "claude-sonnet-4-6",
   },
   openai: {
-    openai:  "gpt-4o",
+    openai:  "gpt-5.4",
     gpt:     "gpt-4o",
     gpt4:    "gpt-4o",
     "gpt-4": "gpt-4o",
@@ -122,8 +121,8 @@ const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
     costInput: 3, costOutput: 15,
   },
   openai: {
-    id: "gpt-4o", provider: "openai", family: "gpt",
-    context: 128_000, maxOutput: 16_384, toolCall: true, reasoning: false,
+    id: "gpt-5.4", provider: "openai", family: "gpt",
+    context: 128_000, maxOutput: 64_000, toolCall: true, reasoning: false,
     vision: true, structuredOutput: true,
     costInput: 2.5, costOutput: 10,
   },
@@ -135,7 +134,7 @@ const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
   },
   "claude-code": {
     id: "claude-sonnet-4-6", provider: "claude-code", family: "claude-code",
-    context: 200_000, maxOutput: 16_384, toolCall: false, reasoning: true,
+    context: 200_000, maxOutput: 64_000, toolCall: false, reasoning: true,
     vision: true, structuredOutput: true,
     costInput: 0, costOutput: 0,
   },
@@ -684,10 +683,10 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
   // models by matching against the models.dev family data (e.g., a "deepseek-chat-v3"
   // model on OpenRouter inherits DeepSeek V3's known capabilities).
   //
-  // Only applies when no built-in provider fallback exists — built-in providers
-  // (anthropic, openai, local, claude-code) have intentional fallback caps that
-  // override model-level data (e.g., claude-code disables toolCall by design).
-  if (familyCrossRef.size > 0 && !FALLBACK_CAPS[provider]) {
+  // Only apply this for registered custom providers. Unknown providers must stay
+  // ultra-conservative, otherwise a random provider/model string can inherit an
+  // unrelated family and silently look more capable than it is.
+  if (familyCrossRef.size > 0 && !FALLBACK_CAPS[provider] && isKnownProvider(provider)) {
     const matchKeys = generateMatchKeys(modelId);
     for (const matchKey of matchKeys) {
       const ref = familyCrossRef.get(matchKey);
@@ -713,7 +712,7 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
     id: modelId,
     provider,
     family: "unknown",
-    context: DEFAULT_CONTEXT_LIMIT,
+    context: 24_000,
     maxOutput: 4_096,
     toolCall: false,
     reasoning: false,
@@ -861,8 +860,13 @@ export function buildModelList(opts: {
   customProviders?: ReadonlyArray<Pick<ProviderConfig, "id" | "name" | "defaultModel" | "models">>;
   /** User's curated model list from config.agent.customModels. */
   customModels?: ReadonlyArray<string | CustomModel>;
+  /**
+   * When true, only show models in customModels. Suppresses the full
+   * models.dev catalog and custom provider model enumerations.
+   */
+  pinnedOnly?: boolean;
 }): ModelListEntry[] {
-  const { configuredProviders, customProviders = [], customModels = [] } = opts;
+  const { configuredProviders, customProviders = [], customModels = [], pinnedOnly = false } = opts;
 
   const pinnedSpecs = buildPinnedSpecSet(customModels);
   const seen = new Set<string>();
@@ -876,21 +880,24 @@ export function buildModelList(opts: {
     results.push(capsToEntry(caps, pinnedSpecs.has(key), displayName));
   }
 
-  // 1. Registry models — cloud (models.dev) + local (Ollama probe cache)
-  for (const caps of listModels()) {
-    if (configuredProviders.has(caps.provider)) add(caps);
-  }
-
-  // 2. Custom provider models from config (may not be in models.dev)
-  for (const provider of customProviders) {
-    if (provider.defaultModel && !seen.has(`${provider.id}:${provider.defaultModel}`)) {
-      add(getCapabilities(provider.id, provider.defaultModel), provider.name);
+  if (!pinnedOnly) {
+    // 1. Registry models — cloud (models.dev) + local (Ollama probe cache)
+    for (const caps of listModels()) {
+      if (configuredProviders.has(caps.provider)) add(caps);
     }
-    if (provider.models) {
-      for (const [alias, modelId] of Object.entries(provider.models)) {
-        if (!seen.has(`${provider.id}:${modelId}`)) {
-          const caps = getCapabilities(provider.id, modelId);
-          add({ ...caps, id: modelId, provider: provider.id }, alias);
+
+    // 2. Custom provider models from config (may not be in models.dev)
+    for (const provider of customProviders) {
+      if (provider.defaultModel && !seen.has(`${provider.id}:${provider.defaultModel}`)) {
+        add(getCapabilities(provider.id, provider.defaultModel), provider.name);
+      }
+      if (provider.models) {
+        for (const [alias, modelId] of Object.entries(provider.models)) {
+          if (typeof modelId !== "string") continue; // skip malformed entries
+          if (!seen.has(`${provider.id}:${modelId}`)) {
+            const caps = getCapabilities(provider.id, modelId);
+            add({ ...caps, id: modelId, provider: provider.id }, alias);
+          }
         }
       }
     }
