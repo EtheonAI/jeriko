@@ -7,7 +7,10 @@
 // This is the single source of truth for the app version. All code that
 // needs the version should import from this module.
 
+import { join } from "node:path";
+
 declare const __BAKED_VERSION__: string | undefined;
+declare const __BAKED_BUILD_REF__: string | undefined;
 
 /** App version — baked at build time, read from package.json in dev. */
 export const VERSION: string = (() => {
@@ -22,5 +25,21 @@ export const VERSION: string = (() => {
     return JSON.parse(readFileSync(pkgPath, "utf-8")).version as string;
   } catch {
     return "0.0.0-dev";
+  }
+})();
+
+/** Source/build provenance for compiled binaries. */
+export const BUILD_REF: string = (() => {
+  if (typeof __BAKED_BUILD_REF__ !== "undefined") return __BAKED_BUILD_REF__;
+
+  try {
+    const { execSync } = require("node:child_process");
+    return execSync("git rev-parse --short HEAD", {
+      cwd: join(import.meta.dirname, "../.."),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
   }
 })();

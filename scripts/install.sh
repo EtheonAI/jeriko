@@ -19,6 +19,7 @@ if [[ -n "$TARGET" ]] && [[ ! "$TARGET" =~ ^(stable|latest|[0-9]+\.[0-9]+\.[0-9]
 fi
 
 CDN_URL="${JERIKO_CDN_URL:-https://releases.jeriko.ai}"
+GITHUB_REPO="etheonai/jeriko"
 DOWNLOAD_DIR="$HOME/.jeriko/downloads"
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,27 @@ download_file() {
     else
         return 1
     fi
+}
+
+resolve_release_base() {
+    local version="$1"
+    local asset="$2"
+    local url
+
+    for url in \
+        "$CDN_URL/releases/$version/$asset" \
+        "https://github.com/$GITHUB_REPO/releases/download/v$version/$asset" \
+        "https://github.com/$GITHUB_REPO/releases/download/$version/$asset"
+    do
+        if download_file "$url" "$DOWNLOAD_DIR/.origin-probe" >/dev/null 2>&1; then
+            rm -f "$DOWNLOAD_DIR/.origin-probe"
+            echo "${url%/$asset}"
+            return 0
+        fi
+    done
+
+    rm -f "$DOWNLOAD_DIR/.origin-probe"
+    return 1
 }
 
 # Pure-bash JSON parser for extracting checksum when jq is not available.
@@ -122,9 +144,15 @@ fi
 
 mkdir -p "$DOWNLOAD_DIR"
 
-version=$(download_file "$CDN_URL/releases/latest" "")
+version_target="${TARGET:-latest}"
+version=$(download_file "$CDN_URL/releases/$version_target" "")
 
-manifest_json=$(download_file "$CDN_URL/releases/$version/manifest.json" "")
+release_base=$(resolve_release_base "$version" "jeriko-$platform") || {
+    echo "Download failed" >&2
+    exit 1
+}
+
+manifest_json=$(download_file "$release_base/manifest.json" "")
 
 if [ "$HAS_JQ" = true ]; then
     checksum=$(echo "$manifest_json" | jq -r ".platforms[\"$platform\"].checksum // empty")
@@ -138,7 +166,7 @@ if [ -z "$checksum" ] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
 fi
 
 binary_path="$DOWNLOAD_DIR/jeriko-$version-$platform"
-if ! download_file "$CDN_URL/releases/$version/jeriko-$platform" "$binary_path"; then
+if ! download_file "$release_base/jeriko-$platform" "$binary_path"; then
     echo "Download failed" >&2
     rm -f "$binary_path"
     exit 1
@@ -170,7 +198,7 @@ chmod +x "$binary_path"
 templates_dir="$HOME/.local/lib/jeriko/templates"
 if [ ! -d "$templates_dir" ]; then
     templates_archive="$DOWNLOAD_DIR/templates-$version.tar.gz"
-    if download_file "$CDN_URL/releases/$version/templates.tar.gz" "$templates_archive" 2>/dev/null; then
+    if download_file "$release_base/templates.tar.gz" "$templates_archive" 2>/dev/null; then
         # Only create the target directory if the archive is valid — an empty
         # directory would cause self-install to report "Templates already installed"
         if tar -tzf "$templates_archive" >/dev/null 2>&1; then

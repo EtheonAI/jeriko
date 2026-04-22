@@ -13,7 +13,7 @@
  * Daemon startup is handled by createBackend() via ensureDaemon().
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validateApiKey, validateUrl, getProviderOptions, BUILT_IN_PROVIDER_IDS, MIN_API_KEY_LENGTH } from "../lib/setup.js";
 import { getProviderAuth, getOAuthConfig, getAvailableAuthChoices, type AuthChoice } from "../lib/provider-auth.js";
@@ -596,7 +596,13 @@ export function writeEnvBatch(envPath: string, vars: Record<string, string>): vo
 
   // Ensure single trailing newline
   const content = lines.join("\n").replace(/\n*$/, "\n");
-  writeFileSync(envPath, content);
+  writeFileSync(envPath, content, { mode: 0o600 });
+
+  try {
+    chmodSync(envPath, 0o600);
+  } catch {
+    // Best effort on filesystems that ignore chmod semantics
+  }
 }
 
 /** Escape a string for safe use in a RegExp. */

@@ -459,7 +459,7 @@ describe("Twilio call dispatch (all 8 read methods)", () => {
   }
 });
 
-describe("Vercel call dispatch (all 16 methods)", () => {
+describe("Vercel call dispatch (all 17 methods)", () => {
   let connector: ConnectorInterface;
 
   beforeEach(async () => {
@@ -472,7 +472,7 @@ describe("Vercel call dispatch (all 16 methods)", () => {
   });
 
   const methods = [
-    "deployments.list", "deployments.get", "deployments.create", "deployments.cancel", "deployments.delete",
+    "deployments.list", "deployments.get", "deployments.create", "deployments.promote", "deployments.cancel", "deployments.delete",
     "projects.list", "projects.get", "projects.create", "projects.delete",
     "domains.list", "domains.add", "domains.remove",
     "env.list", "env.create", "env.delete",

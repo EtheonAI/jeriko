@@ -28,7 +28,7 @@ if errorlevel 1 (
 
 REM ── Config ─────────────────────────────────────────────────────
 
-set "GITHUB_REPO=khaleel737/jeriko"
+set "GITHUB_REPO=etheonai/jeriko"
 set "RELEASES_URL=https://github.com/%GITHUB_REPO%/releases"
 if defined JERIKO_CDN_URL (
     set "CDN_URL=%JERIKO_CDN_URL%"
@@ -126,24 +126,30 @@ set "BINARY_PATH=%DOWNLOAD_DIR%\jeriko-%VERSION%-%PLATFORM%.exe"
 
 echo   [*] Downloading %BINARY_NAME%...
 
-set "DOWNLOADED=0"
+set "RELEASE_BASE="
+curl -fsSL -o "%TEMP%\jeriko-origin-probe" "%CDN_URL%/releases/%VERSION%/%BINARY_NAME%" 2>nul
+if not errorlevel 1 set "RELEASE_BASE=%CDN_URL%/releases/%VERSION%"
+if exist "%TEMP%\jeriko-origin-probe" del "%TEMP%\jeriko-origin-probe" >nul 2>&1
 
-REM Try CDN
-curl -fsSL -o "%BINARY_PATH%" "%CDN_URL%/releases/%VERSION%/%BINARY_NAME%" 2>nul
-if not errorlevel 1 set "DOWNLOADED=1"
-
-REM Fallback to GitHub Release
-if "%DOWNLOADED%"=="0" (
-    curl -fsSL -o "%BINARY_PATH%" "%RELEASES_URL%/download/v%VERSION%/%BINARY_NAME%" 2>nul
-    if not errorlevel 1 set "DOWNLOADED=1"
+if "%RELEASE_BASE%"=="" (
+    curl -fsSL -o "%TEMP%\jeriko-origin-probe" "%RELEASES_URL%/download/v%VERSION%/%BINARY_NAME%" 2>nul
+    if not errorlevel 1 set "RELEASE_BASE=%RELEASES_URL%/download/v%VERSION%"
+    if exist "%TEMP%\jeriko-origin-probe" del "%TEMP%\jeriko-origin-probe" >nul 2>&1
 )
 
-if "%DOWNLOADED%"=="0" (
-    curl -fsSL -o "%BINARY_PATH%" "%RELEASES_URL%/download/%VERSION%/%BINARY_NAME%" 2>nul
-    if not errorlevel 1 set "DOWNLOADED=1"
+if "%RELEASE_BASE%"=="" (
+    curl -fsSL -o "%TEMP%\jeriko-origin-probe" "%RELEASES_URL%/download/%VERSION%/%BINARY_NAME%" 2>nul
+    if not errorlevel 1 set "RELEASE_BASE=%RELEASES_URL%/download/%VERSION%"
+    if exist "%TEMP%\jeriko-origin-probe" del "%TEMP%\jeriko-origin-probe" >nul 2>&1
 )
 
-if "%DOWNLOADED%"=="0" (
+if "%RELEASE_BASE%"=="" (
+    echo   [ERROR] Download failed. Check: %RELEASES_URL% >&2
+    exit /b 1
+)
+
+curl -fsSL -o "%BINARY_PATH%" "%RELEASE_BASE%/%BINARY_NAME%" 2>nul
+if errorlevel 1 (
     echo   [ERROR] Download failed. Check: %RELEASES_URL% >&2
     exit /b 1
 )
@@ -155,15 +161,8 @@ echo   [*] Verifying checksum...
 set "MANIFEST_PATH=%DOWNLOAD_DIR%\manifest-%VERSION%.json"
 set "MANIFEST_OK=0"
 
-REM Try CDN manifest
-curl -fsSL -o "%MANIFEST_PATH%" "%CDN_URL%/releases/%VERSION%/manifest.json" 2>nul
+curl -fsSL -o "%MANIFEST_PATH%" "%RELEASE_BASE%/manifest.json" 2>nul
 if not errorlevel 1 set "MANIFEST_OK=1"
-
-REM Fallback to GitHub manifest
-if "%MANIFEST_OK%"=="0" (
-    curl -fsSL -o "%MANIFEST_PATH%" "%RELEASES_URL%/download/v%VERSION%/manifest.json" 2>nul
-    if not errorlevel 1 set "MANIFEST_OK=1"
-)
 
 if "%MANIFEST_OK%"=="0" (
     del "%BINARY_PATH%" >nul 2>&1
@@ -220,13 +219,8 @@ set "AGENT_MD_PATH=%DOWNLOAD_DIR%\agent.md"
 echo   [*] Downloading agent system prompt...
 
 set "AGENT_OK=0"
-curl -fsSL -o "%AGENT_MD_PATH%" "%CDN_URL%/releases/%VERSION%/agent.md" 2>nul
+curl -fsSL -o "%AGENT_MD_PATH%" "%RELEASE_BASE%/agent.md" 2>nul
 if not errorlevel 1 set "AGENT_OK=1"
-
-if "%AGENT_OK%"=="0" (
-    curl -fsSL -o "%AGENT_MD_PATH%" "%RELEASES_URL%/download/v%VERSION%/agent.md" 2>nul
-    if not errorlevel 1 set "AGENT_OK=1"
-)
 
 if "%AGENT_OK%"=="1" (
     if defined XDG_CONFIG_HOME (

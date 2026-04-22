@@ -20,12 +20,17 @@ import {
   buildAnthropicRequestBody,
   buildAnthropicHeaders,
 } from "./anthropic-shared.js";
+import { getLogger } from "../../../shared/logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
+const MAX_RETRIES = 4;
+const BASE_DELAY_MS = 1000;
+
+const log = getLogger();
 
 // ---------------------------------------------------------------------------
 // Driver
@@ -61,24 +66,58 @@ export class AnthropicDriver implements LLMDriver {
     const body = buildAnthropicRequestBody(config, { system, messages: converted, tools });
 
     const signal = withTimeout(config.signal);
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl}/v1/messages`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal,
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      yield { type: "error", content: `Anthropic request failed: ${msg}` };
-      yield { type: "done", content: "" };
-      return;
+    const isRetryable = (status: number) =>
+      status === 429 || status === 502 || status === 503 || status === 504;
+
+    let response!: Response;
+    let lastStatus = 0;
+    let lastErrorText = "";
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        response = await fetch(`${this.baseUrl}/v1/messages`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        yield { type: "error", content: `Anthropic request failed: ${msg}` };
+        yield { type: "done", content: "" };
+        return;
+      }
+
+      if (response.ok) break;
+
+      lastStatus = response.status;
+      const { redact } = await import("../../security/redaction.js");
+      lastErrorText = redact(await response.text());
+
+      if (!isRetryable(lastStatus) || attempt === MAX_RETRIES) break;
+
+      let delayMs: number;
+      const retryAfterHeader = response.headers.get("Retry-After");
+      if (retryAfterHeader !== null) {
+        const parsed = parseInt(retryAfterHeader, 10);
+        delayMs = Number.isNaN(parsed) ? BASE_DELAY_MS : parsed * 1000;
+      } else {
+        const base = BASE_DELAY_MS * Math.pow(2, attempt);
+        const jitter = base * 0.2 * (Math.random() * 2 - 1);
+        delayMs = base + jitter;
+      }
+
+      if (lastStatus === 429) {
+        log.warn(
+          `Anthropic rate-limited (429). Retrying in ${Math.round(delayMs)}ms (attempt ${attempt + 1}/${MAX_RETRIES}).`,
+        );
+      }
+
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
     }
 
     if (!response.ok) {
-      const errorText = await response.text();
-      yield { type: "error", content: `Anthropic API error ${response.status}: ${errorText}` };
+      yield { type: "error", content: `Anthropic API error ${lastStatus}: ${lastErrorText}` };
       yield { type: "done", content: "" };
       return;
     }
