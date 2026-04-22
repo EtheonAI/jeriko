@@ -147,6 +147,11 @@ mkdir -p "$DOWNLOAD_DIR"
 version_target="${TARGET:-latest}"
 version=$(download_file "$CDN_URL/releases/$version_target" "")
 
+release_base=$(resolve_release_base "$version" "jeriko-$platform") || {
+    echo "Download failed" >&2
+    exit 1
+}
+
 manifest_json=$(download_file "$release_base/manifest.json" "")
 
 if [ "$HAS_JQ" = true ]; then
@@ -159,11 +164,6 @@ if [ -z "$checksum" ] || [[ ! "$checksum" =~ ^[a-f0-9]{64}$ ]]; then
     echo "Platform $platform not found in manifest" >&2
     exit 1
 fi
-
-release_base=$(resolve_release_base "$version" "jeriko-$platform") || {
-    echo "Download failed" >&2
-    exit 1
-}
 
 binary_path="$DOWNLOAD_DIR/jeriko-$version-$platform"
 if ! download_file "$release_base/jeriko-$platform" "$binary_path"; then
