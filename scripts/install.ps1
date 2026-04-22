@@ -54,6 +54,30 @@ function Invoke-Download {
     }
 }
 
+function Resolve-ReleaseBase {
+    param(
+        [string]$Version,
+        [string]$Asset
+    )
+
+    $candidates = @(
+        "$CdnUrl/releases/$Version",
+        "$ReleasesUrl/download/v$Version",
+        "$ReleasesUrl/download/$Version"
+    )
+
+    $ProbePath = Join-Path $DownloadDir ".origin-probe"
+    foreach ($base in $candidates) {
+        if (Invoke-Download -Url "$base/$Asset" -OutFile $ProbePath) {
+            Remove-Item $ProbePath -Force -ErrorAction SilentlyContinue
+            return $base
+        }
+    }
+
+    Remove-Item $ProbePath -Force -ErrorAction SilentlyContinue
+    return $null
+}
+
 function Get-ChecksumFromManifest {
     param(
         [PSObject]$Manifest,
@@ -137,30 +161,13 @@ $BinaryPath = Join-Path $DownloadDir "jeriko-$Version-$Platform.exe"
 
 Write-Info "Downloading $BinaryName..."
 
-$Downloaded = $false
-
-# Try CDN
-$CdnBinaryUrl = "$CdnUrl/releases/$Version/$BinaryName"
-if (Invoke-Download -Url $CdnBinaryUrl -OutFile $BinaryPath) {
-    $Downloaded = $true
+$ReleaseBase = Resolve-ReleaseBase -Version $Version -Asset $BinaryName
+if (-not $ReleaseBase) {
+    Write-Err "Download failed. Check: $ReleasesUrl"
+    exit 1
 }
 
-# Fallback to GitHub Release
-if (-not $Downloaded) {
-    $GhUrl = "$ReleasesUrl/download/v$Version/$BinaryName"
-    if (Invoke-Download -Url $GhUrl -OutFile $BinaryPath) {
-        $Downloaded = $true
-    }
-}
-
-if (-not $Downloaded) {
-    $GhUrl = "$ReleasesUrl/download/$Version/$BinaryName"
-    if (Invoke-Download -Url $GhUrl -OutFile $BinaryPath) {
-        $Downloaded = $true
-    }
-}
-
-if (-not $Downloaded) {
+if (-not (Invoke-Download -Url "$ReleaseBase/$BinaryName" -OutFile $BinaryPath)) {
     Write-Err "Download failed. Check: $ReleasesUrl"
     exit 1
 }
@@ -172,22 +179,11 @@ Write-Info "Verifying checksum..."
 $ManifestPath = Join-Path $DownloadDir "manifest-$Version.json"
 $Manifest = $null
 
-# Try CDN manifest
 try {
-    Invoke-WebRequest -Uri "$CdnUrl/releases/$Version/manifest.json" -OutFile $ManifestPath -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest -Uri "$ReleaseBase/manifest.json" -OutFile $ManifestPath -UseBasicParsing -ErrorAction Stop
     $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
     Remove-Item $ManifestPath -Force -ErrorAction SilentlyContinue
 } catch {}
-
-# Fallback to GitHub manifest
-if (-not $Manifest) {
-    try {
-        $GhManifestUrl = "$ReleasesUrl/download/v$Version/manifest.json"
-        Invoke-WebRequest -Uri $GhManifestUrl -OutFile $ManifestPath -UseBasicParsing -ErrorAction Stop
-        $Manifest = Get-Content $ManifestPath -Raw | ConvertFrom-Json
-        Remove-Item $ManifestPath -Force -ErrorAction SilentlyContinue
-    } catch {}
-}
 
 if (-not $Manifest) {
     Remove-Item $BinaryPath -Force -ErrorAction SilentlyContinue
@@ -220,16 +216,9 @@ Write-Info "Downloading agent system prompt..."
 
 $AgentDownloaded = $false
 try {
-    Invoke-WebRequest -Uri "$CdnUrl/releases/$Version/agent.md" -OutFile $AgentMdPath -UseBasicParsing -ErrorAction Stop
+    Invoke-WebRequest -Uri "$ReleaseBase/agent.md" -OutFile $AgentMdPath -UseBasicParsing -ErrorAction Stop
     $AgentDownloaded = $true
 } catch {}
-
-if (-not $AgentDownloaded) {
-    try {
-        Invoke-WebRequest -Uri "$ReleasesUrl/download/v$Version/agent.md" -OutFile $AgentMdPath -UseBasicParsing -ErrorAction Stop
-        $AgentDownloaded = $true
-    } catch {}
-}
 
 if ($AgentDownloaded) {
     if ($env:XDG_CONFIG_HOME) { $ConfDir = Join-Path $env:XDG_CONFIG_HOME "jeriko" } else { $ConfDir = Join-Path $HOME ".config" "jeriko" }
