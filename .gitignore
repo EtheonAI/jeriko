@@ -17,8 +17,9 @@ apps/*/out/
 # Bun
 bun.lockb
 
-# Runtime data
-data/
+# Runtime data — only at repo root; do not match nested `data/` dirs
+# (e.g. `src/cli/ui/data/` is a design-system primitive module, not runtime state).
+/data/
 auth_info_baileys/
 screenshots/
 skills/
