@@ -585,8 +585,9 @@ describe("SLASH_COMMANDS", () => {
     expect(SLASH_COMMANDS.has("/model")).toBe(true);
   });
 
-  test("has all 26 slash commands", () => {
-    expect(SLASH_COMMANDS.size).toBe(26);
+  test("has all 27 slash commands", () => {
+    // 26 legacy + /keybindings added in Subsystem 8.
+    expect(SLASH_COMMANDS.size).toBe(27);
   });
 
   test("contains unified v4 commands", () => {

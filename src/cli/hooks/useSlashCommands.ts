@@ -15,6 +15,7 @@
 import { useCallback, useRef } from "react";
 import type { Backend } from "../backend.js";
 import type { AppAction, AppState, WizardConfig } from "../types.js";
+import type { HelpController, ThemeController } from "../boot/index.js";
 import { createSessionHandlers } from "../handlers/session.js";
 import { createModelHandlers } from "../handlers/model.js";
 import { createConnectorHandlers } from "../handlers/connector.js";
@@ -30,6 +31,10 @@ interface UseSlashCommandsOptions {
   state: AppState;
   dispatch: (action: AppAction) => void;
   addSystemMessage: (content: string) => void;
+  /** Imperative theme surface populated by ThemeControllerBridge. */
+  themeControllerRef: React.MutableRefObject<ThemeController>;
+  /** Imperative help-overlay surface populated by HelpControllerBridge. */
+  helpControllerRef: React.MutableRefObject<HelpController>;
 }
 
 type CommandHandler = (args: string) => Promise<void>;
@@ -43,6 +48,8 @@ export function useSlashCommands({
   state,
   dispatch,
   addSystemMessage,
+  themeControllerRef,
+  helpControllerRef,
 }: UseSlashCommandsOptions) {
   const wizardConfigRef = useRef<WizardConfig | null>(null);
 
@@ -77,7 +84,14 @@ export function useSlashCommands({
       const connectorCtx = { backend, dispatch, addSystemMessage, wizardConfigRef };
       const connector = createConnectorHandlers(connectorCtx);
 
-      const systemCtx = { backend, dispatch, addSystemMessage, wizardConfigRef };
+      const systemCtx = {
+        backend,
+        dispatch,
+        addSystemMessage,
+        wizardConfigRef,
+        themeControllerRef,
+        helpControllerRef,
+      };
       const system = createSystemHandlers(systemCtx);
 
       // Dispatch table — plural nouns for collection managers
@@ -123,6 +137,9 @@ export function useSlashCommands({
 
         // Theme
         "/theme":           () => system.theme(args),
+
+        // Keybindings help overlay (Subsystem 3)
+        "/keybindings":     () => system.keybindings(args),
       };
 
       const handler = handlers[name];
@@ -149,7 +166,7 @@ export function useSlashCommands({
       }
       return true;
     },
-    [backend, state.model, state.stats, state.phase, addSystemMessage, dispatch],
+    [backend, state.model, state.stats, state.phase, addSystemMessage, dispatch, themeControllerRef, helpControllerRef],
   );
 
   return { handleSlashCommand, wizardConfigRef };

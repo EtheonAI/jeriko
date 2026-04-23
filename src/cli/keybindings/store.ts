@@ -105,11 +105,20 @@ export function createKeybindingStore(opts: StoreOptions = {}): KeybindingStore 
   let pending: Chord | null = null;
   let pendingTask: ScheduledTask | null = null;
 
+  // Snapshot caching: useSyncExternalStore requires snapshot() to return a
+  // stable reference when underlying state is unchanged. Without caching,
+  // React sees a new object every read, assumes the store is "tearing",
+  // and warns with "The result of getSnapshot should be cached". We rebuild
+  // once per change and invalidate on notify().
+  let cachedSnapshot: StoreSnapshot | null = null;
+  const invalidateSnapshot = (): void => { cachedSnapshot = null; };
+
   // -------------------------------------------------------------------------
   // Internal helpers
   // -------------------------------------------------------------------------
 
   const notify = (): void => {
+    invalidateSnapshot();
     for (const l of [...subscribers]) l();
   };
 
@@ -217,11 +226,15 @@ export function createKeybindingStore(opts: StoreOptions = {}): KeybindingStore 
     return false;
   };
 
-  const snapshot: KeybindingStore["snapshot"] = () => ({
-    activeScopes: [...scopes],
-    pendingChord: pending,
-    bindings: [...bindings.values()],
-  });
+  const snapshot: KeybindingStore["snapshot"] = () => {
+    if (cachedSnapshot !== null) return cachedSnapshot;
+    cachedSnapshot = {
+      activeScopes: [...scopes],
+      pendingChord: pending,
+      bindings: [...bindings.values()],
+    };
+    return cachedSnapshot;
+  };
 
   const subscribe: KeybindingStore["subscribe"] = (listener) => {
     subscribers.add(listener);

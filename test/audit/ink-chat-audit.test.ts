@@ -86,7 +86,7 @@ import { computeVisibleWindow } from "../../src/cli/components/Autocomplete.js";
 // Sub-agent derived state
 import {
   deriveSubAgentState,
-  getAgentTypeColor,
+  getAgentTypeTone,
   AGENT_TYPE_COLORS,
 } from "../../src/cli/hooks/useSubAgents.js";
 
@@ -1275,20 +1275,20 @@ describe("deriveSubAgentState", () => {
   });
 });
 
-describe("getAgentTypeColor", () => {
+describe("getAgentTypeTone", () => {
   test("returns known semantic tones", () => {
     // Subsystem 5 migrated AGENT_TYPE_COLORS from PALETTE-alias strings
     // (cyan/green/blue/red) to semantic Tone literals (info/success/tool/error).
     // The function name is retained as a back-compat alias of getAgentTypeTone.
-    expect(getAgentTypeColor("research")).toBe("info");
-    expect(getAgentTypeColor("task")).toBe("success");
-    expect(getAgentTypeColor("explore")).toBe("tool");
-    expect(getAgentTypeColor("plan")).toBe("purple");
-    expect(getAgentTypeColor("general")).toBe("text");
+    expect(getAgentTypeTone("research")).toBe("info");
+    expect(getAgentTypeTone("task")).toBe("success");
+    expect(getAgentTypeTone("explore")).toBe("tool");
+    expect(getAgentTypeTone("plan")).toBe("purple");
+    expect(getAgentTypeTone("general")).toBe("text");
   });
 
   test("falls back for unknown types", () => {
-    const color = getAgentTypeColor("unknown-type");
+    const color = getAgentTypeTone("unknown-type");
     expect(typeof color).toBe("string");
     expect(color.length).toBeGreaterThan(0);
   });
