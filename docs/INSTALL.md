@@ -47,11 +47,11 @@ For active development with auto-reload:
 ```bash
 git clone https://github.com/etheonai/jeriko.git
 cd jeriko
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
-This starts the server with `node --watch` for automatic restarts on file changes.
+This starts the daemon with `bun --watch` for automatic restarts on file changes.
 
 ---
 
@@ -362,14 +362,14 @@ The Jeriko server provides the Telegram bot, WhatsApp integration, WebSocket orc
 ### Foreground (Development)
 
 ```bash
-# Standard
-npm start
+# Standard — runs the daemon
+bun run dev
 
-# Or directly
-node server/index.js
+# Or directly (no watch)
+bun src/index.ts serve
 
-# With auto-reload on file changes
-npm run dev
+# Compiled binary (after `bun run build`)
+./jeriko serve
 ```
 
 ### Background (Production)

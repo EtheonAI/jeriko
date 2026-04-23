@@ -16,14 +16,21 @@ PRAGMA foreign_keys = ON;        -- enforce relationships
 
 ```
 session 1──* message 1──* part
-                │
-                └── role: user | assistant | system | tool
+  │  (parent_session_id, agent_type for sub-agent sessions)
+  └── role: user | assistant | system | tool
 
-trigger_def     (automation triggers)
-trigger_config  (trigger runtime state)
-audit_log       (security audit trail)
-key_value       (general-purpose KV store)
-_migrations     (schema version tracking)
+session 1──* agent_context    (structured sub-agent artifacts: tool calls, files, errors, metrics)
+session 1──* subagent_task    (sync/async/fork/worktree spawn tracking — migration 0007)
+session 1──* shared_session   (public snapshot for /share)
+
+trigger_config       (trigger runtime state, 6 types)
+audit_log            (security audit trail)
+key_value            (general-purpose KV store)
+billing_subscription (Stripe subscription state, tier, status)
+billing_event        (webhook events for chargeback defense)
+billing_consent      (checkout consent evidence: IP, UA, ToS acceptance)
+billing_license      (local license cache, grace periods)
+_migrations          (schema version tracking)
 ```
 
 ---
@@ -36,18 +43,20 @@ Conversation sessions between user and AI agent.
 
 ```sql
 CREATE TABLE session (
-  id          TEXT    PRIMARY KEY,          -- UUID
-  slug        TEXT    NOT NULL,             -- human-readable slug ("chat-about-api")
-  title       TEXT    NOT NULL,             -- display title
-  model       TEXT    NOT NULL,             -- LLM model used ("claude", "gpt4", "local")
-  created_at  INTEGER NOT NULL,             -- epoch ms
-  updated_at  INTEGER NOT NULL,             -- epoch ms (last activity)
-  archived_at INTEGER,                      -- epoch ms (NULL = active)
-  token_count INTEGER NOT NULL DEFAULT 0    -- running total of tokens used
+  id                TEXT    PRIMARY KEY,          -- UUID
+  slug              TEXT    NOT NULL,             -- human-readable slug ("chat-about-api")
+  title             TEXT    NOT NULL,             -- display title
+  model             TEXT    NOT NULL,             -- LLM model used ("claude", "gpt4", "local")
+  created_at        INTEGER NOT NULL,             -- epoch ms
+  updated_at        INTEGER NOT NULL,             -- epoch ms (last activity)
+  archived_at       INTEGER,                      -- epoch ms (NULL = active)
+  token_count       INTEGER NOT NULL DEFAULT 0,   -- running total of tokens used
+  parent_session_id TEXT    REFERENCES session(id) ON DELETE SET NULL,  -- sub-agent linkage (0002)
+  agent_type        TEXT    NOT NULL DEFAULT 'general'                  -- role preset (0002)
 );
 ```
 
-**Indexes:** `created_at`, `slug`, `archived_at`
+**Indexes:** `created_at`, `slug`, `archived_at`, `parent_session_id`, `agent_type`
 
 **Example data:**
 
@@ -202,26 +211,12 @@ CREATE TABLE audit_log (
 
 ---
 
-### trigger_def
-
-Automation trigger definitions (from migration schema).
-
-```sql
-CREATE TABLE trigger_def (
-  id         TEXT    PRIMARY KEY,                                          -- UUID
-  type       TEXT    NOT NULL CHECK (type IN ('cron','webhook','file','http')),
-  config     TEXT    NOT NULL DEFAULT '{}',                                -- JSON config
-  enabled    INTEGER NOT NULL DEFAULT 1,                                   -- 0=disabled, 1=enabled
-  last_fired INTEGER,                                                      -- epoch ms of last execution
-  created_at INTEGER NOT NULL                                              -- epoch ms
-);
-```
-
-**Indexes:** `type`, `enabled`
-
 ### trigger_config
 
-Runtime trigger configuration (created by TriggerStore at runtime, extends trigger_def).
+Runtime trigger configuration. `trigger_config` is the canonical trigger
+table — the legacy `trigger_def` was consolidated into it in migration 0003
+(see `0003_trigger_consolidate.sql`). Supports 6 trigger types:
+`cron`, `webhook`, `file`, `http`, `email`, `once`.
 
 ```sql
 CREATE TABLE trigger_config (
@@ -318,6 +313,154 @@ CREATE TABLE _migrations (
 | id | name | applied_at |
 |----|------|------------|
 | 1 | 0001_init.sql | 1709100000000 |
+| 2 | 0002_orchestrator.sql | 1709200000000 |
+| 3 | 0003_trigger_consolidate.sql | 1709300000000 |
+| 4 | 0004_share.sql | 1709400000000 |
+| 5 | 0005_billing.sql | 1709500000000 |
+| 6 | 0006_billing_consent.sql | 1709600000000 |
+| 7 | 0007_subagent_tasks.sql | 1709700000000 |
+
+---
+
+### agent_context
+
+Structured artifacts captured from sub-agent runs (fix for the "text-only return" problem). Added in migration 0002.
+
+```sql
+CREATE TABLE agent_context (
+  id         TEXT    PRIMARY KEY,
+  session_id TEXT    NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  kind       TEXT    NOT NULL CHECK (kind IN ('tool_call','file_write','file_edit','artifact','error','metric')),
+  key        TEXT    NOT NULL,
+  value      TEXT    NOT NULL,
+  created_at INTEGER NOT NULL
+);
+```
+
+**Indexes:** `(session_id)`, `(session_id, kind)`.
+
+Written by `orchestrator.writeContext()` during every sub-agent round; the parent reads it back via `readContext(sessionId)` to see what the child actually did (tool calls, files touched, errors) without re-parsing conversation text.
+
+---
+
+### shared_session
+
+Public snapshots produced by the `/share` command. Added in migration 0004.
+
+```sql
+CREATE TABLE shared_session (
+  id         TEXT    PRIMARY KEY,
+  share_id   TEXT    NOT NULL UNIQUE,        -- short URL-safe identifier
+  session_id TEXT    NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  title      TEXT    NOT NULL,
+  model      TEXT    NOT NULL,
+  messages   TEXT    NOT NULL,                -- JSON-encoded snapshot at share time
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,                         -- NULL = no expiry
+  revoked_at INTEGER                          -- NULL = still live
+);
+```
+
+The relay's share-page renderer fetches by `share_id`; CSP on those pages is covered in `docs/SECURITY.md`.
+
+---
+
+### subagent_task
+
+Sync / async / fork / worktree subagent spawn tracking. Added in migration 0007.
+
+```sql
+CREATE TABLE subagent_task (
+  id                TEXT    PRIMARY KEY,
+  parent_session_id TEXT    NOT NULL,
+  child_session_id  TEXT    NOT NULL REFERENCES session(id) ON DELETE CASCADE,
+  mode              TEXT    NOT NULL CHECK (mode IN ('sync','async','fork','worktree')),
+  agent_type        TEXT    NOT NULL,
+  label             TEXT    NOT NULL,
+  prompt            TEXT    NOT NULL,
+  status            TEXT    NOT NULL CHECK (status IN ('pending','running','completed','failed','cancelled')),
+  worktree_path     TEXT,
+  started_at        INTEGER NOT NULL,
+  completed_at      INTEGER,
+  tokens_in         INTEGER NOT NULL DEFAULT 0,
+  tokens_out        INTEGER NOT NULL DEFAULT 0,
+  error             TEXT,
+  result_text       TEXT,
+  notified          INTEGER NOT NULL DEFAULT 0   -- 1 once the parent has seen the completion notification
+);
+```
+
+**Indexes:** `(parent_session_id)`, `(parent_session_id, status)`, `(parent_session_id, notified)`.
+
+The `notified = 0` column drives the fire-and-forget async-subagent re-injection flow: once a task completes, the parent's next agent-loop round calls `injectPendingNotifications()`, writes a synthetic `<task-notification>` user message into the parent session, and flips `notified = 1`.
+
+---
+
+### billing_subscription
+
+Stripe subscription state. Added in migration 0005.
+
+```sql
+CREATE TABLE billing_subscription (
+  id                    TEXT    PRIMARY KEY,   -- Stripe sub_xxx
+  customer_id           TEXT    NOT NULL,
+  email                 TEXT,
+  tier                  TEXT    NOT NULL,      -- free | pro | team | enterprise
+  status                TEXT    NOT NULL,      -- active | past_due | canceled | paused | ...
+  current_period_start  INTEGER,
+  current_period_end    INTEGER,
+  cancel_at_period_end  INTEGER NOT NULL DEFAULT 0,
+  terms_accepted_at     INTEGER,
+  created_at            INTEGER NOT NULL DEFAULT (unixepoch())
+);
+```
+
+---
+
+### billing_event
+
+Full Stripe webhook payloads (audit trail / chargeback defense). Added in migration 0005.
+
+```sql
+CREATE TABLE billing_event (
+  id              TEXT    PRIMARY KEY,   -- Stripe evt_xxx
+  type            TEXT    NOT NULL,      -- e.g. "invoice.paid"
+  subscription_id TEXT,
+  payload         TEXT    NOT NULL,      -- full raw body
+  created_at      INTEGER NOT NULL DEFAULT (unixepoch())
+);
+```
+
+---
+
+### billing_consent
+
+Consent evidence collected at checkout. Added in migration 0006.
+
+```sql
+CREATE TABLE billing_consent (
+  id                        TEXT    PRIMARY KEY,
+  subscription_id           TEXT,
+  customer_id               TEXT,
+  email                     TEXT,
+  client_ip                 TEXT,
+  user_agent                TEXT,
+  terms_url                 TEXT,
+  terms_version             TEXT,
+  terms_accepted_at         INTEGER,
+  privacy_url               TEXT,
+  billing_address_collected INTEGER NOT NULL DEFAULT 0,
+  stripe_consent_collected  INTEGER NOT NULL DEFAULT 0,
+  checkout_session_id       TEXT,
+  created_at                INTEGER NOT NULL DEFAULT (unixepoch())
+);
+```
+
+---
+
+### billing_license
+
+Local license cache. Written by webhook handlers via `syncLicenseFromTier()`; the grace-period math (7 days past-due before downgrade) lives in `src/daemon/billing/config.ts`. Added in migration 0005.
 
 ---
 

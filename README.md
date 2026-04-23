@@ -5,7 +5,7 @@
 <h3 align="center">Unix-first CLI toolkit for AI agents</h3>
 
 <p align="center">
-  One binary. 51 commands. 17 agent tools. 29 connectors. Model-agnostic. Composable via pipes. Zero vendor lock-in.
+  One binary. 51 commands. 19 agent tools. 29 connectors. Model-agnostic. Composable via pipes. Zero vendor lock-in.
 </p>
 
 <p align="center">
@@ -144,13 +144,53 @@ jeriko connectors             # list all with status
 jeriko disconnect github      # revoke credentials
 ```
 
-### 17 Agent Tools
+### 19 Agent Tools
 
-When running as an AI agent, Jeriko provides tools for: shell execution, file I/O, browser automation, web search, screenshots, webcam, connector API calls, sub-agent delegation, skills, persistent memory, parallel tasks, image generation, and web development.
+When running as an AI agent, Jeriko provides tools for: shell execution, file I/O, browser automation, web search, screenshots, webcam, connector API calls, sub-agent delegation (four spawn modes), task status inspection, skills, persistent memory, parallel tasks, image generation, and web development.
+
+### Subagent Subsystem
+
+Four spawn modes for parallel and isolated work, all managed through one `spawn_agent` tool plus a `task_status` inspector:
+
+| Mode | Behaviour |
+|---|---|
+| `sync` | Blocks the parent until the child completes (default). Auto-backgrounds after 2 s if still running. |
+| `async` | Fire-and-forget. Parent keeps working; completion surfaces on its next turn as a `<task-notification>` message. |
+| `fork` | Child inherits the parent's exact rendered system prompt bytes — hits the Anthropic prompt cache for massive token savings. |
+| `worktree` | Spawns in an isolated `git worktree`; preserved if the child made changes, auto-removed if clean. |
+
+Task state persists in SQLite (`subagent_task` table) so the CLI, HTTP API, and subsequent sessions can inspect history.
+
+### Prompt Caching
+
+Anthropic prompt-cache `cache_control` breakpoints are placed automatically at `tools → system → last stable assistant turn`. Long multi-turn sessions hit the cache prefix and pay a fraction of the input-token cost. Cache hit/creation tokens are tracked per-session and exposed through `/cost`.
+
+### Cost & Budget
+
+`UsageLedger` accumulates tokens and USD across every provider — Anthropic, OpenAI, OpenAI-compatible, Anthropic-compatible, local Ollama. Optional `maxBudgetUsd` hard-caps an agent run; exceeding the cap aborts cleanly with a typed error.
+
+### Compaction
+
+Three-strategy conversation compression:
+- **Auto** — kicks in when tokens approach the model's context window (configurable threshold; default 75 %).
+- **LLM summarization** — collapses dropped turns into a preserved `[COMPACTED SUMMARY]` block before truncation, so no facts are lost.
+- **Reactive** — catches HTTP 413 responses on oversize requests, squeezes the buffer to 25 %, retries once.
+
+### Model Context Protocol (MCP)
+
+Zero-dep MCP client with both STDIO and streamable-HTTP transports. Configured servers auto-register their tools into the agent registry under a `mcp_<server>_<tool>` namespace — any Claude Desktop / Cursor MCP server works unchanged in Jeriko.
+
+### Hooks
+
+User-extensible lifecycle events that can `allow`, `block`, `modify`, or `prompt` — wired into `pre_tool_use` / `post_tool_use` today. Configure at `~/.config/jeriko/hooks.json`; hook commands shell-out with the payload on stdin and return a typed JSON decision on stdout.
+
+### Project Instructions Discovery
+
+At boot, Jeriko walks from `cwd` up to the repo root collecting `CLAUDE.md`, `AGENTS.md`, and `.jeriko/instructions.md` files — nearest first. Content is injected into the system prompt under a clearly marked `[PROJECT INSTRUCTIONS]` block, budget-capped so giant files can't crowd out tool schemas.
 
 ### Interactive Chat REPL
 
-`jeriko` with no arguments launches a full terminal chat built with React + Ink: streaming output, tool call visualization, markdown rendering, syntax highlighting, 38 slash commands, 12 themes, and model-aware cost tracking.
+`jeriko` with no arguments launches a full terminal chat built with React + Ink: streaming output, tool call visualization, markdown rendering, syntax highlighting, 29 slash commands (including `/cost`, `/theme`, `/keybindings`, `/status`, `/tasks`, `/compact`), live theme switching, customizable keybindings, and model-aware cost tracking.
 
 ### Channels
 
@@ -186,7 +226,7 @@ Platform           src/platform/ — OS abstraction (darwin/linux/win32)
 | `jeriko <cmd>` | CLI command |
 | `jeriko serve` | Daemon with HTTP API |
 
-TypeScript (strict mode), Bun runtime, compiled to standalone ~66MB binary. React + Ink for terminal UI. SQLite via bun:sqlite. Hono HTTP server.
+TypeScript (strict mode), Bun runtime, compiled to standalone ~68 MB binary. React + Ink for terminal UI with a typed design-system layer (`src/cli/ui/`). SQLite via bun:sqlite. Hono HTTP server. Zero-dep MCP client. Model-agnostic retry + usage tracking across every driver.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full system design.
 
@@ -248,17 +288,21 @@ See [docs/INSTALL.md](docs/INSTALL.md) for detailed configuration options.
 
 ## Security
 
-Defense-in-depth architecture, audited March 2026. Key mechanisms:
+Defense-in-depth architecture, audited March 2026 and extended April 2026 with a production-hygiene sweep. Key mechanisms:
 
 - All data stored locally — never transmitted to Etheon
 - Single execution gateway with lease/sandbox/audit pipeline
 - Sensitive env vars filtered from all subprocesses (3 synchronized lists)
 - Shell and AppleScript escaping at 55+ call sites
-- Timing-safe HMAC-SHA256 auth at 15+ call sites
+- Timing-safe HMAC-SHA256 auth (length-agnostic, constant time) at 15+ call sites
 - Plugin sandbox with env isolation and integrity verification
-- Webhook signature verification (fail-closed)
+- Webhook signature verification with zod-validated Stripe event schemas (fail-closed)
+- Secret-file writes go through `writeSecretFile()` (0o600 + chmod, belt-and-braces)
+- Every HTTP client wrapped with `withHttpRetry` — exponential backoff + Retry-After + redacted error bodies
+- Every `spawn()` site uses `safeSpawn` with timeout + SIGTERM→SIGKILL escalation
+- Build provenance — each binary embeds `BUILD_REF` (git short SHA) surfaced in `jeriko --version`, `/health`, telemetry, and crash breadcrumbs
 
-See [docs/SECURITY.md](docs/SECURITY.md) and [docs/SECURITY-AUDIT-2026-03-06.md](docs/SECURITY-AUDIT-2026-03-06.md).
+See [docs/SECURITY.md](docs/SECURITY.md), [docs/SECURITY-AUDIT-2026-03-06.md](docs/SECURITY-AUDIT-2026-03-06.md), and [docs/adr/002-production-hygiene-audit-2026-04.md](docs/adr/002-production-hygiene-audit-2026-04.md).
 
 ---
 

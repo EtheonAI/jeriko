@@ -1,16 +1,30 @@
 # Jeriko Server API Reference
 
+> **Note (April 2026):** This document predates the TypeScript refactor and still
+> refers to the Express + Telegraf stack. The current daemon runs on **Hono** with
+> **grammy** (Telegram) and **Baileys** (WhatsApp). Endpoint routes, middleware
+> names, and file paths below are partially stale. Routes that exist today:
+>
+> - `GET /health` — returns `version`, `build_ref`, `platform`, `os_release`,
+>   `runtime`, `uptime_seconds`, `memory` (see `src/daemon/api/routes/health.ts`).
+> - `POST /hooks/:triggerId` — webhook dispatch into the trigger engine.
+> - `POST /hooks/plugin/:namespace/:name` — plugin webhook receiver.
+> - `/ws` WebSocket — only for internal relay client; remote node orchestration
+>   was removed.
+>
+> A full rewrite of this file is tracked.
+
 Complete reference for the Jeriko server: HTTP endpoints, WebSocket protocol, Telegram bot commands, AI routing, and webhook receivers.
 
 ## Overview
 
-The Jeriko server is a unified runtime combining four interfaces:
+The Jeriko daemon is a unified runtime combining:
 
 | Interface  | Transport          | Purpose                          |
 |------------|--------------------|----------------------------------|
-| HTTP API   | Express on `:3000` | Health, admin endpoints, webhooks |
-| WebSocket  | `/ws` upgrade      | Remote node orchestration        |
-| Telegram   | Telegraf polling    | User-facing bot commands + AI    |
+| HTTP API   | Hono on `:7741`    | Health, admin endpoints, webhooks |
+| WebSocket  | Relay client        | Inbound webhooks / OAuth callbacks routed through the hosted relay |
+| Telegram   | grammy (long-poll) | User-facing bot commands + AI    |
 | WhatsApp   | Baileys            | Alternative messaging interface  |
 
 Default port: `JERIKO_PORT` environment variable (default `7741`).

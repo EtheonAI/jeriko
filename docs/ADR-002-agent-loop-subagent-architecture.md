@@ -1,16 +1,26 @@
 # ADR-002: Agent Loop & Subagent Architecture for Jeriko Daemon
 
-**Status:** APPROVED
+**Status:** SHIPPED (April 2026)
 **Date:** 2026-02-27
 **Authors:** Khaleel Musleh (Etheon)
 **Supersedes:** None
 **Related:** ADR-001 (Unix-First Agent Paradigm), Claude Code Issue #5812
 
+> **As-built (April 2026):** The subagent system described below shipped in
+> `src/daemon/agent/subagent/` with four spawn modes (sync, async, fork,
+> worktree). The `parallel_tasks` tool is now a Node/Bun-native concurrent
+> runner (no Go binary) in `src/daemon/agent/tools/parallel.ts` using
+> `Promise.allSettled()` waves via `orchestrator.fanOut()`. Task state is
+> persisted in the `subagent_task` SQLite table (migration 0007).
+> Path references to `server/router.js` below are historical; the
+> equivalent surface today is `src/daemon/agent/agent.ts` (runAgent) +
+> `src/daemon/kernel.ts` (boot).
+
 ---
 
 ## 1. Context & Problem Statement
 
-Jeriko's daemon (`server/router.js`) has a working unified agent loop: one loop, three API callers (Claude, OpenAI, Local/Ollama), nine tools, context compaction, and security validation. The `parallel_tasks` tool shells out to `jeriko parallel` which spawns a Go binary to run concurrent AI tasks—but these are **text-only, fire-and-forget workers** with no tool access, no context bridging, and no parent coordination.
+Jeriko's daemon (`server/router.js` — now `src/daemon/agent/agent.ts`) has a working unified agent loop: one loop, four LLM drivers (Anthropic, OpenAI, Local/Ollama, Claude Code), 19 tools, context compaction, and security validation. Previously the `parallel_tasks` tool spawned text-only, fire-and-forget workers with no tool access, no context bridging, and no parent coordination.
 
 We want to build a **Claude Code–grade subagent system** inside Jeriko's daemon that:
 

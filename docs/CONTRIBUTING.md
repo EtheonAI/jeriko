@@ -105,13 +105,13 @@ echo "input" | jeriko mycommand       # pipe input
 
 ### 5. Update the Reserved List
 
-Add your command name to `RESERVED` in `lib/plugins.js`:
+Add your command name to the reserved set in `src/daemon/plugin/registry.ts` so a plugin cannot shadow it:
 
-```javascript
-const RESERVED = [
+```ts
+const RESERVED_NAMESPACES = new Set<string>([
   // ... existing ...
-  'mycommand',
-];
+  "mycommand",
+]);
 ```
 
 ## Command Template

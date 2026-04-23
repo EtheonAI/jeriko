@@ -23,7 +23,7 @@ Jeriko is a Unix-first AI agent platform. Every capability is a CLI command — 
 ┌──────────────▼───────────────────────────────────────────────────┐
 │                        Daemon Layer                              │
 │  kernel.ts → 15-step boot sequence                               │
-│  agent/ → runAgent() loop, 5 LLM drivers, 15 tools, orchestrator│
+│  agent/ → runAgent() loop, 5 LLM drivers, 19 tools, orchestrator│
 │  api/ → Hono HTTP server + Unix socket IPC                       │
 │  services/ → channels, connectors, triggers                      │
 │  storage/ → SQLite (bun:sqlite) + Drizzle ORM + KV store         │
@@ -165,7 +165,7 @@ setup → idle (after first-launch wizard)
 - Single `AppState` object: phase, messages, streamText, liveToolCalls, subAgents, stats, context, model, sessionSlug
 - Actions: SET_PHASE, ADD_MESSAGE, APPEND_STREAM_TEXT, TOOL_CALL_START, TOOL_CALL_RESULT, SUB_AGENT_STARTED/COMPLETE, FREEZE_ASSISTANT_MESSAGE, RESET_TURN, etc.
 
-### 23 Slash Commands (`commands.ts`)
+### 29 Slash Commands (`commands.ts`)
 
 Interactive REPL meta-commands (not CLI args):
 
@@ -190,7 +190,7 @@ Unified `Backend` interface with two implementations:
 
 **In-process backend** (`createInProcessBackend()`):
 - Direct `runAgent()` call — no daemon needed
-- Tool registration mirrors kernel.ts step 6 (all 15 tools)
+- Tool registration mirrors kernel.ts step 6 (all 19 tools)
 - System prompt loaded with skill summaries
 - Orchestrator bus subscriptions for sub-agent events
 
@@ -360,7 +360,7 @@ Manages sub-agent spawning with structured context capture (not text-only return
 
 | Type | Allowed Tools |
 |------|--------------|
-| `general` | All 15 tools |
+| `general` | All 19 tools (full tool registry) |
 | `research` | web_search, browser, read_file, list_files, search_files, use_skill |
 | `task` | bash, browser, read_file, write_file, edit_file, list_files, search_files, camera, screenshot, connector, use_skill |
 | `explore` | read_file, list_files, search_files |
@@ -460,7 +460,7 @@ anthropic: { claude → claude-sonnet-4-6, opus → claude-opus-4-6 }
 openai:    { gpt → gpt-4o, gpt5 → gpt-5 }
 ```
 
-### 15 Agent Tools (`src/daemon/agent/tools/`)
+### 19 Agent Tools (`src/daemon/agent/tools/`)
 
 Tools self-register on import via `registerTool()`. The registry supports aliases for resilient name resolution across different LLMs.
 
@@ -676,7 +676,7 @@ interface ChannelAdapter {
 - `ConnectorBase` — API key authentication (Stripe, PayPal, Twilio)
 - `BearerConnector` — OAuth2 token flow (GitHub, X, GDrive, OneDrive, Gmail, Outlook, Vercel, Instagram, Threads, HubSpot, Shopify)
 
-**14 connectors:**
+**29 connectors** (see `src/daemon/services/connectors/` for the authoritative list; a representative subset is shown below):
 
 | Connector | Type | Required Env |
 |-----------|------|-------------|
@@ -706,15 +706,15 @@ interface ChannelAdapter {
 
 #### Triggers (`src/daemon/services/triggers/`)
 
-5 trigger types, SQLite-persisted, with auto-disable on failure.
+6 trigger types, SQLite-persisted, with auto-disable on failure. Shell-action triggers run through `safeSpawn` with a 5-minute wall-clock cap.
 
 **TriggerConfig:**
 ```typescript
 interface TriggerConfig {
   id: string;
-  type: "cron" | "webhook" | "file" | "http" | "email";
+  type: "cron" | "webhook" | "file" | "http" | "email" | "once";
   enabled: boolean;
-  config: CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig;
+  config: CronConfig | WebhookConfig | FileConfig | HttpConfig | EmailConfig | OnceConfig;
   action: TriggerAction;   // { type: "shell"|"agent", command?, prompt?, notify? }
   label?: string;
   run_count?: number;
@@ -724,7 +724,7 @@ interface TriggerConfig {
 }
 ```
 
-**5 trigger types:**
+**6 trigger types:**
 
 | Type | Config | Description |
 |------|--------|-------------|
@@ -732,7 +732,8 @@ interface TriggerConfig {
 | `webhook` | `{ secret?, service? }` | HTTP webhook with signature verification |
 | `file` | `{ paths[], events?, debounceMs? }` | File system watcher |
 | `http` | `{ url, method?, headers?, intervalMs?, jqFilter? }` | Polling HTTP endpoint |
-| `email` | `{ connector?, user?, password?, host?, port?, intervalMs? }` | Email monitoring |
+| `email` | `{ connector?, user?, password?, host?, port?, intervalMs? }` | Email monitoring (IMAP or connector-backed) |
+| `once` | `{ at: ISO datetime }` | Fire once at a specific time, then auto-disable |
 
 **Webhook verification:** HMAC-SHA256 + 5 service-specific formats:
 - **Stripe:** `Stripe-Signature` header
@@ -750,6 +751,51 @@ interface TriggerConfig {
 **Auto-disable:** 5 consecutive errors or `max_runs` reached.
 
 **Agent actions:** trigger fires → `runAgent()` with session + payload context. Notifications via Telegram admin IDs.
+
+#### MCP Client (`src/daemon/services/mcp/`)
+
+Zero-dep Model Context Protocol client — any MCP server configured at
+`~/.config/jeriko/mcp.json` auto-registers its tools into the shared
+`ToolDefinition` registry under an `mcp_<server>_<tool>` namespace.
+
+- **Protocol:** JSON-RPC 2.0 (no `@modelcontextprotocol/sdk` — ~500 lines of typed code keeps the single-binary build lean).
+- **Transports:** STDIO (child process) + streamable-HTTP (SSE or plain JSON response).
+- **Startup:** kernel boot step 6.5 calls `startMcpServers()`; per-server failures are isolated (one broken server doesn't block the others).
+- **Safety:** per-RPC timeouts — 30 s for `initialize`, 60 s for `tools/call` — prevent hung MCP servers from blocking the agent loop.
+
+#### Hooks (`src/daemon/services/hooks/`)
+
+User-extensible lifecycle gates. Six events today: `pre_tool_use`,
+`post_tool_use`, `session_start`, `session_end`, `pre_compact`, `post_compact`.
+
+Hook entries live in `~/.config/jeriko/hooks.json`:
+
+```json
+{
+  "hooks": [
+    {
+      "event": "pre_tool_use",
+      "matcher": { "tool": "bash", "argumentsPattern": "rm\\s+-rf" },
+      "command": "/usr/local/bin/review-bash.sh",
+      "timeoutMs": 3000
+    }
+  ]
+}
+```
+
+The runner shells out, writes the payload to stdin as JSON, and expects a
+zod-validated decision on stdout:
+
+- `{"decision":"allow"}` — continue unchanged
+- `{"decision":"modify","arguments":{...}}` — replace the tool args
+- `{"decision":"block","message":"..."}` — short-circuit with the message
+- `{"decision":"prompt","question":"..."}` — ask the user yes/no before continuing
+
+Default is `allow` on timeout / crash / malformed JSON so broken hooks can never block the agent.
+
+#### Billing (`src/daemon/billing/`)
+
+Stripe-backed subscription gate. Kernel step 5.5 boots the license refresh, falling back to a 7-day grace period when the relay is offline. Webhook payloads validated through `src/daemon/billing/stripe-events.ts` (zod). Four tables (`billing_subscription`, `billing_event`, `billing_consent`, `billing_license`) record everything needed for chargeback defense.
 
 ### HTTP API (`src/daemon/api/`)
 

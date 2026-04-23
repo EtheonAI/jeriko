@@ -36,7 +36,7 @@ import { ThemeProvider } from "./themes/index.js";
 // Subsystem 3: keybinding registry + user config.
 import { KeybindingProvider } from "./keybindings/index.js";
 // Subsystem 7: permission store + bridge.
-import { PermissionProvider, createAutoApproveBridge } from "./permission/index.js";
+import { PermissionProvider, createInMemoryBridge } from "./permission/index.js";
 // Subsystem 8 (this integration): unified boot-time config.
 import { loadCLIBootConfig, actionableDiagnostics } from "./boot/index.js";
 
@@ -89,8 +89,15 @@ export async function startChat(): Promise<void> {
   // missing/malformed and we still boot with sensible defaults.
   const bootConfig = await loadCLIBootConfig();
 
+  // ── Permission bridge ───────────────────────────────────────────────
+  // Single instance shared between the backend (registers a daemon-side
+  // broker) and the PermissionProvider (attaches the UI-side handler).
+  // When the two endpoints rendezvous, medium+/high-risk lease decisions
+  // round-trip through the Ink dialog instead of auto-approving.
+  const permissionBridge = createInMemoryBridge();
+
   // ── Backend (daemon or in-process) ──────────────────────────────────
-  const backend = await createBackend();
+  const backend = await createBackend({ permissionBridge });
   const model = backend.model;
   const cwd = process.cwd();
 
@@ -120,9 +127,10 @@ export async function startChat(): Promise<void> {
   //   KeybindingProvider  — feeds the dialog scope and help overlay
   //   PermissionProvider  — feeds the PermissionOverlay mounted inside App
   //
-  // The `bridge` for PermissionProvider is the auto-approve stub until the
-  // daemon exec-gateway emits lease-pending events (see ADR-012). Swapping
-  // the bridge is a one-line change once the adapter lands.
+  // The same `permissionBridge` flows through the backend (which
+  // registers it as the daemon-side {@link PermissionBroker}) and into
+  // the PermissionProvider (which attaches the UI handler). This is the
+  // rendezvous point documented in ADR-014.
   const tree = (
     <ThemeProvider
       initialTheme={bootConfig.themeId ?? undefined}
@@ -134,7 +142,7 @@ export async function startChat(): Promise<void> {
       >
         <PermissionProvider
           initialPersistentRules={bootConfig.permissionRules}
-          bridge={createAutoApproveBridge()}
+          bridge={permissionBridge}
         >
           <App backend={backend} initialModel={model} initialPhase={initialPhase} />
         </PermissionProvider>

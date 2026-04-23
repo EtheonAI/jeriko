@@ -12,6 +12,7 @@ import { createLease, validateLease } from "./lease.js";
 import type { ExecutionLease, LeaseDecision } from "./lease.js";
 import { auditAllow, auditDeny, auditComplete } from "./audit.js";
 import { isCommandBlocked } from "./sandbox.js";
+import { getActiveBroker } from "./broker.js";
 
 import { spawn } from "node:child_process";
 
@@ -323,6 +324,33 @@ export async function exec(
 
   // 4. Audit the allow decision
   auditAllow(lease, decision.lease_id);
+
+  // 4b. Interactive consent — if a broker is registered and the lease
+  // clears its `shouldAsk` policy, route the decision to the broker
+  // before spawning. A rejected broker (either `false` or a thrown
+  // error) converts the audited-allow into an audited-deny so the
+  // trail stays accurate. When no broker is registered the pipeline
+  // runs unchanged — that is the headless/CI default.
+  const broker = getActiveBroker();
+  if (broker !== null && broker.shouldAsk(lease)) {
+    let consent = false;
+    try {
+      consent = await broker.ask({ lease, leaseId: decision.lease_id });
+    } catch {
+      consent = false;
+    }
+    if (!consent) {
+      auditDeny(lease, decision.lease_id, "user denied via permission broker");
+      return {
+        stdout: "",
+        stderr: "[jeriko] execution denied: user rejected via permission prompt",
+        exit_code: 126,
+        duration_ms: 0,
+        lease_id: decision.lease_id,
+        truncated: false,
+      };
+    }
+  }
 
   // 5. Sanitize environment and spawn
   const sanitizedEnv = sanitizeEnv(options.env);

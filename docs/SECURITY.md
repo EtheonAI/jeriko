@@ -1,5 +1,11 @@
 # Jeriko Security Model
 
+> **Note (April 2026):** This document predates the production-hygiene audit.
+> Several file paths below refer to the pre-TypeScript structure (e.g. `lib/plugins.js` → `src/daemon/plugin/`).
+> For the current HTTP-retry, spawn-hygiene, secret-file, redaction, and diagnostics surface see
+> **[docs/adr/002-production-hygiene-audit-2026-04.md](adr/002-production-hygiene-audit-2026-04.md)**.
+> A full rewrite of this file is tracked.
+
 ## Current State
 
 Jeriko's security is **application-level**. There is no kernel-level sandboxing.
@@ -8,19 +14,28 @@ Jeriko's security is **application-level**. There is no kernel-level sandboxing.
 
 | Layer | Mechanism | File |
 |-------|-----------|------|
-| Env stripping | `SENSITIVE_KEYS` filtered from `jeriko exec` subprocesses | `tools/shell.js` |
-| Plugin env isolation | Plugins only receive declared env vars + safe system vars | `lib/plugins.js:buildPluginEnv` |
-| AppleScript injection | `escapeAppleScript()` sanitizes all interpolated strings | `lib/cli.js:197` |
-| WebSocket auth | HMAC-SHA256 token, timing-safe comparison | `server/auth.js:14` |
-| Telegram allowlist | `ADMIN_TELEGRAM_IDS` — deny-all when empty | `server/auth.js:22` |
-| Bearer auth | Admin API endpoints require `NODE_AUTH_SECRET` | `server/auth.js:29` |
-| Webhook signatures | GitHub, Stripe, raw HMAC — fail-closed | `server/triggers/webhooks.js:65` |
-| Plugin trust | Untrusted by default — no webhooks, no prompt injection | `lib/plugins.js:isTrusted` |
-| Plugin integrity | SHA-512 hash of manifest, verified on trust ops | `lib/plugins.js:computeIntegrity` |
-| Audit logging | All security ops logged, auto-rotated at 2MB | `lib/plugins.js:auditLog` |
-| Namespace reservation | 32 core command names blocked from plugins | `lib/plugins.js:RESERVED` |
-| Conflict detection | Duplicate namespaces/commands rejected on install | `lib/plugins.js:checkConflicts` |
-| NODE_AUTH_SECRET required | Server refuses to start if not set | `server/auth.js:6` |
+| Env stripping | `SENSITIVE_KEYS` filtered from every `jeriko exec` subprocess | `src/daemon/exec/gateway.ts` |
+| Plugin env isolation | Plugins only receive declared env vars + safe system vars | `src/daemon/plugin/sandbox.ts` |
+| AppleScript injection | `escapeAppleScript()` at 30+ call sites | `src/shared/escape.ts` |
+| Shell injection | `escapeShellArg()` at 25+ call sites | `src/shared/escape.ts` |
+| HMAC auth | `safeCompare()` — HMAC-SHA256 canonicalized, length-agnostic constant time | `src/daemon/api/middleware/auth.ts` |
+| Telegram allowlist | `ADMIN_TELEGRAM_IDS` — deny-all when empty | `src/daemon/services/channels/telegram/` |
+| Bearer auth | HTTP API endpoints require `NODE_AUTH_SECRET` | `src/daemon/api/middleware/auth.ts` |
+| Webhook signatures | GitHub, Stripe, PayPal, Twilio, raw HMAC — fail-closed | `src/daemon/services/connectors/<name>/webhook.ts` |
+| Stripe payload schemas | Zod-validated event parsing (no unsafe `as` casts) | `src/daemon/billing/stripe-events.ts` |
+| Plugin trust | Untrusted by default — no webhooks, no prompt injection | `src/daemon/plugin/registry.ts` |
+| Plugin integrity | SHA-512 hash of manifest, verified on trust ops | `src/daemon/plugin/registry.ts` |
+| Plugin trust store perms | Owner-only (`0o600`) via `writeSecretFile()` | `src/daemon/plugin/registry.ts` |
+| Audit logging | All exec-gateway ops logged, JSONL with 10 MB rotation | `src/daemon/audit/` |
+| Namespace reservation | Core command names blocked from plugins | `src/daemon/plugin/registry.ts` |
+| Conflict detection | Duplicate namespaces/commands rejected on install | `src/daemon/plugin/loader.ts` |
+| `NODE_AUTH_SECRET` required | Daemon refuses to serve HTTP if not set | `src/daemon/api/middleware/auth.ts` |
+| Secret-file hygiene | `.env`, daemon env snapshot, plugin trust, channels config, memory file all written via `writeSecretFile()` (0o600 + chmod) | `src/shared/secret-file.ts` |
+| HTTP transport resilience | Every driver + every connector wraps `fetch()` in `withHttpRetry` (429/5xx + Retry-After + jitter) | `src/shared/http-retry.ts` |
+| Error-body redaction | `redact()` applied to every `response.text()` dumped to logs or yielded to users | `src/daemon/security/redaction.ts` |
+| Process hygiene | Every `spawn()` through `safeSpawn` — timeout + AbortSignal + stderr cap + SIGTERM→SIGKILL escalation | `src/shared/spawn-safe.ts` |
+| Env-var parsing | `parseEnvInt`/`Bool`/`String` — never yields silent NaN from malformed input | `src/shared/env-parse.ts` |
+| Build provenance | `BUILD_REF` baked at build, surfaced in `--version` / `/health` / telemetry / crash breadcrumbs | `src/shared/diagnostics.ts` |
 
 ### What Does NOT Exist
 

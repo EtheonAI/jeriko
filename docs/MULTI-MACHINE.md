@@ -1,5 +1,16 @@
 # Multi-Machine Setup
 
+> **Status (April 2026): Deprecated as documented.** The hub/node model
+> described below (`server/index.js`, `server/websocket.js`,
+> `agent/install.sh`) predates the TypeScript daemon refactor and does
+> not reflect current code. Today Jeriko's **relay** (`apps/relay/` Bun +
+> `apps/relay-worker/` Cloudflare Worker) plus the in-daemon
+> `RelayClient` (`src/daemon/services/relay/client.ts`) provide remote
+> webhook forwarding and OAuth callbacks for a single-daemon-per-machine
+> model. Fleet orchestration / `@name` routing across multiple daemons
+> is on the roadmap but not shipped. The file-path references in this
+> document should be treated as historical.
+
 Jeriko can orchestrate multiple machines from a single control plane. A central **hub** runs the server (Express + WebSocket), and remote **nodes** run the lightweight agent that connects back over WebSocket. Commands are routed to specific machines using `@name` prefix syntax from Telegram, WhatsApp, or the API.
 
 ---

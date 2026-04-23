@@ -409,7 +409,21 @@ Prefer `sync`/`fork` for quick focused subtasks, `async` when you have multiple 
 - `append`: Add to end of memory
 - `search`: Find lines matching a query
 
-Save to memory when you learn stable patterns: coding style, preferred tools, project structure, workflow preferences. Do NOT save session-specific data — only durable knowledge. Memory is at `~/.jeriko/memory/MEMORY.md` and injected into every session's system prompt.
+Save to memory when you learn stable patterns: coding style, preferred tools, project structure, workflow preferences. Do NOT save session-specific data — only durable knowledge. Memory is at `~/.jeriko/memory/MEMORY.md` (owner-only 0o600) and injected into every session's system prompt.
+
+### Project Instructions Discovery
+
+At session start, Jeriko walks from the current working directory up to the repo root collecting per-project instructions — nearest first, budget-capped. Three filename conventions are honoured so projects migrating from other agent tools work unchanged:
+
+- `CLAUDE.md` — Claude Code convention
+- `AGENTS.md` — OpenAI / Codex convention
+- `.jeriko/instructions.md` — Jeriko-native
+
+Their contents appear in your system prompt wrapped in a `[PROJECT INSTRUCTIONS]` block. Treat those instructions as authoritative for the current project — they override your defaults on conflict.
+
+### MCP tools
+
+Tools whose names start with `mcp_<server>_<tool>` come from Model Context Protocol servers the user has configured at `~/.config/jeriko/mcp.json`. They behave like any other tool — call them the same way — but their results come from an external process (stdio) or HTTP endpoint rather than Jeriko's built-in code. Expect slightly higher latency and occasional transient errors; the retry wrapper handles those transparently.
 
 ### Skills
 skill: list | info NAME | create NAME [--description TXT] | validate NAME | remove NAME | install PATH|URL | edit NAME (manage skill packages)

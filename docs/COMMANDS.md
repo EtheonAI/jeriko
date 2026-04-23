@@ -1,6 +1,6 @@
 # Jeriko Command Reference
 
-Complete reference for all 37 `jeriko` CLI commands (1 dispatcher + 36 commands).
+Complete reference for all 51 `jeriko` CLI commands plus 29 interactive-REPL slash commands.
 
 ---
 

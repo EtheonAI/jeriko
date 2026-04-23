@@ -1,6 +1,6 @@
 # Jeriko
 
-Unix-first CLI toolkit that gives any AI model full machine control. 28+ commands. Model-agnostic. Composable via pipes. Zero runtime overhead.
+Unix-first CLI toolkit that gives any AI model full machine control. 51 commands, 19 agent tools, 29 connectors. Model-agnostic. Composable via pipes. Zero runtime overhead.
 
 ```
 Human (or AI) --> jeriko <command> --> stdout JSON --> next command or AI
@@ -233,11 +233,11 @@ jeriko server --stop
 
 | Dependency | Required | Notes |
 |-----------|----------|-------|
-| Node.js >= 18 | Yes | ES2022 features, native fetch |
-| npm | Yes | Package management |
-| macOS | Full support | All 28+ commands |
-| Linux | Core support | sys, fs, exec, search, browse, net, proc, stripe, notify |
-| Windows | Via WSL | Run inside WSL for full compatibility |
+| Bun >= 1.1 | Yes (for source / dev) | Single runtime for TypeScript + compiled binary |
+| Node.js >= 18 | Optional | Compiled binary needs no Node; source-mode uses Bun directly |
+| macOS | Full support | All 51 commands + native apps (Notes, Reminders, etc.) |
+| Linux | Full support | 51 commands; a few native-app features are macOS-only |
+| Windows | Full support | Compiled binary runs natively; dev-from-source via WSL or Bun-on-Windows |
 
 ### Optional Dependencies
 

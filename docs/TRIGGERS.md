@@ -1,22 +1,29 @@
 # Trigger System Guide
 
-Triggers are reactive AI automation. Define a condition, and Jeriko executes an action when it fires -- either by sending the event to Claude for intelligent processing, or by running a shell command directly.
+Triggers are reactive AI automation. Define a condition, and Jeriko executes an action when it fires — either by sending the event to the agent loop for intelligent processing, or by running a shell command directly.
 
 ## Overview
 
 ```
-Event Source          Trigger Engine         Action
------------          --------------         ------
-Cron schedule   -->  engine.js fires   -->  Claude processes event
-Webhook POST    -->  webhooks.js fires -->  Shell command runs
-New email       -->  poller checks     -->  Notification sent
-HTTP status     -->  monitor checks    -->  AI decides response
-File change     -->  fs.watch fires    -->  Command pipeline
+Event Source          Trigger Engine                     Action
+-----------          ------------------                  ------
+Cron schedule   -->  src/daemon/services/triggers/  -->  Agent run (full tool access)
+Webhook POST    -->  engine.ts + cron.ts +          -->  Shell command (safeSpawn, 5 min cap)
+New email (IMAP)-->  webhook.ts + file-watch.ts +   -->  Notification via channel
+HTTP status     -->  email.ts + http-poll + once    -->  Chained trigger
+File change     -->                                 -->  ...
+One-time at     -->                                 -->
 ```
 
-All trigger management happens through Telegram commands. Results are sent back via Telegram message and macOS notification.
+Trigger management is available through three surfaces:
 
-## 5 Trigger Types
+- **CLI**: `jeriko task list | add | remove | run | enable | disable`
+- **REPL slash**: `/tasks` (lists, inspect, stop)
+- **Telegram / WhatsApp**: same commands through the channel bus
+
+Shell-action triggers execute inside `safeSpawn()` with a 5-minute wall-clock ceiling and `SIGTERM → SIGKILL` escalation so a runaway action can never stall the engine.
+
+## 6 Trigger Types
 
 ### Cron
 
@@ -139,17 +146,27 @@ Event data:
 }
 ```
 
+### Once
+
+Fire once at a specific ISO datetime, then auto-disable. Great for "remind me at 4pm" and "deploy the thing on Monday morning."
+
+```
+/watch once "2026-04-24T16:00:00-07:00" deploy the release branch and run smoke tests
+```
+
+Internally the engine sets a `setTimeout` to the target timestamp and fires the action exactly once; `max_runs: 1` and the auto-disable path ensure the trigger cannot re-fire after restart.
+
 ## Action Types
 
-### Claude Mode (default)
+### Agent Mode (default)
 
-The event data is sent to Claude with the trigger's action text as instructions. Claude processes the event intelligently and can run `jeriko` commands to take action.
+The event data is sent to the agent with the trigger's action text as instructions — whichever LLM is configured (Anthropic, OpenAI, local Ollama, Claude Code, or any OpenAI/Anthropic-compatible provider). The agent processes the event and can run `jeriko` commands to take action.
 
 ```
 /watch cron "0 9 * * *" check system health, summarize issues, and notify me
 ```
 
-Claude receives:
+The agent receives:
 ```
 [Trigger Event: cron]
 Trigger: Cron: check system health
@@ -159,7 +176,7 @@ Event data:
 Instructions: check system health, summarize issues, and notify me
 ```
 
-Claude then runs `jeriko sys`, analyzes the output, and may run `jeriko notify` to send results.
+The agent then runs `jeriko sys`, analyzes the output, and may run `jeriko notify` to send results.
 
 ### Shell Mode
 

@@ -460,7 +460,7 @@ This hash is stored in `registry.json` under the plugin's `integrity` field. It 
 
 The integrity hash is:
 
-- Computed by `computeIntegrity()` in `lib/plugins.js`.
+- Computed in `src/daemon/plugin/registry.ts` and persisted via `writeSecretFile()` (0o600) to `~/.local/share/jeriko/plugin-trust.json`.
 - Stored in the registry at install and upgrade time.
 - Visible via `jeriko install --info <name>`.
 - Recomputed on upgrade. The new hash replaces the old one.

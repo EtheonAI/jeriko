@@ -28,11 +28,18 @@ import { t } from "../theme.js";
 import type { ThemeId } from "../themes/index.js";
 import type { HelpController, ThemeController } from "../boot/index.js";
 import { saveThemeConfig, themeConfigPath } from "../boot/index.js";
-import { getProviderOptions, validateApiKey, MIN_API_KEY_LENGTH } from "../lib/setup.js";
 import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList, verifyLMStudioRunning } from "../wizard/verify.js";
-import { persistSetup, type OnboardingResult } from "../wizard/onboarding.js";
-import { getProviderAuth, getOAuthConfig, getAvailableAuthChoices } from "../lib/provider-auth.js";
+import { getOAuthConfig } from "../lib/provider-auth.js";
 import { runOAuthFlow } from "../lib/oauth-flow.js";
+import { createOnboardingFlow } from "../flows/onboarding.js";
+import { toWizardConfig } from "../flows/types.js";
+import {
+  createOnboardingExecutor,
+  type OnboardingHost,
+  type OnboardingDependencies,
+  type OnboardingPickOptions,
+} from "./onboarding.js";
+import { persistOnboardingResult } from "./onboarding-persist.js";
 import { openInBrowser } from "../lib/open-browser.js";
 import {
   validateEmail,
@@ -648,8 +655,30 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
     // ── Onboarding wizard ──
 
     async onboard(): Promise<void> {
-      // Step 1: Provider selection
-      onboardProvider(ctx);
+      const host: OnboardingHost = {
+        announce: addSystemMessage,
+        setModel: (model) => dispatch({ type: "SET_MODEL", model }),
+        updateSessionModel: (model) => backend.updateSessionModel(model),
+        pickFromList: (pick) => launchModelPicker(ctx, pick),
+      };
+      const deps: OnboardingDependencies = {
+        verifyApiKey,
+        verifyOllamaRunning,
+        fetchOllamaModelList,
+        verifyLMStudioRunning,
+        runOAuthFlow,
+        getOAuthConfig,
+        persistSetup: persistOnboardingResult,
+      };
+      const executor = createOnboardingExecutor({ host, deps });
+      const flow = createOnboardingFlow({
+        daemonAvailable: backend.mode === "daemon",
+        onComplete: async (result) => {
+          dispatch({ type: "SET_PHASE", phase: "idle" });
+          await executor.execute(result);
+        },
+      });
+      launchWizard(ctx, toWizardConfig(flow));
     },
 
     /**
@@ -1088,284 +1117,36 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
 }
 
 // ---------------------------------------------------------------------------
-// Onboarding wizard chain — composable steps
+// Onboarding — glue between the wizard subsystem and the executor.
 //
-// Flow: Provider → Auth (OAuth or API key) → Finalize
-// Channels are added post-setup via /connect.
+// All branch logic (provider → auth → verify → persist) lives in
+// ./onboarding.ts behind an injected dependency surface. This file only
+// adapts {@link OnboardingHost.pickFromList} to the existing wizard engine
+// so the executor can stay React-free and synchronously testable.
 // ---------------------------------------------------------------------------
 
-import type { ProviderOption } from "../lib/setup.js";
-
-/** Accumulated state passed through the wizard chain. */
-interface OnboardState {
-  provider?: ProviderOption;
-  apiKey?: string;
-  /** Specific Ollama model selected (written as LOCAL_MODEL in .env). */
-  localModel?: string;
-}
-
 /**
- * Step 1: AI provider selection → auth method or finalize.
+ * Resolve an interactive single-select picker using the existing wizard
+ * engine. Returns the selected value, or `null` if the user cancelled.
  */
-function onboardProvider(ctx: SystemCommandContext): void {
-  const providerOptions = getProviderOptions();
-  launchWizard(ctx, {
-    title: "Setup Wizard",
-    steps: [
-      {
-        type: "select",
-        message: "Choose your AI provider",
-        options: providerOptions.map((p, i) => ({
-          value: p.id,
-          label: p.name,
-          hint: i === 0 ? "recommended" : !p.needsApiKey ? "no API key needed" : undefined,
-        })),
-      },
-    ],
-    onComplete: async ([providerId]) => {
-      ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-      const provider = providerOptions.find((p) => p.id === providerId);
-      if (!provider) return;
-
-      const state: OnboardState = { provider };
-
-      if (provider.needsApiKey) {
-        onboardAuth(ctx, state);
-      } else if (provider.id === "local") {
-        await onboardOllama(ctx, state);
-      } else if (provider.id === "lmstudio") {
-        await onboardLMStudio(ctx, state);
-      } else {
-        await onboardFinalize(ctx, state);
-      }
-    },
-  });
-}
-
-/**
- * Step 2: Auth method — OAuth picker or direct API key.
- * Providers with OAuth support show a choice; others go straight to key input.
- */
-function onboardAuth(ctx: SystemCommandContext, state: OnboardState): void {
-  if (!state.provider) return;
-  const provider = state.provider;
-  const daemonAvailable = ctx.backend.mode === "daemon";
-  const choices = getAvailableAuthChoices(provider.id, daemonAvailable);
-
-  // Provider has multiple auth methods — show picker
-  if (choices && choices.length > 1) {
+function launchModelPicker(
+  ctx: SystemCommandContext,
+  pick: OnboardingPickOptions,
+): Promise<string | null> {
+  return new Promise((resolve) => {
     launchWizard(ctx, {
-      title: `Connect ${provider.name}`,
+      title: pick.title,
       steps: [
         {
           type: "select",
-          message: `How would you like to authenticate?`,
-          options: choices.map((c) => ({
-            value: c.id,
-            label: c.label,
-            hint: c.hint,
-          })),
+          message: pick.message,
+          options: pick.options.map((o) => ({ value: o.value, label: o.label })),
         },
       ],
-      onComplete: async ([choiceId]) => {
+      onComplete: async ([selected]) => {
         ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-        const choice = choices.find((c) => c.id === choiceId);
-        if (!choice) return;
-
-        if (choice.method === "oauth-pkce") {
-          await onboardOAuth(ctx, state);
-        } else {
-          onboardApiKey(ctx, state);
-        }
+        resolve(selected && selected.length > 0 ? selected : null);
       },
     });
-    return;
-  }
-
-  // Single choice or no OAuth — straight to API key
-  onboardApiKey(ctx, state);
-}
-
-/**
- * OAuth flow — opens browser, waits for callback.
- */
-async function onboardOAuth(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
-  if (!state.provider) return;
-  const provider = state.provider;
-  const oauthConfig = getOAuthConfig(provider.id);
-  if (!oauthConfig) {
-    ctx.addSystemMessage(formatError("OAuth not configured for this provider"));
-    onboardApiKey(ctx, state);
-    return;
-  }
-
-  ctx.addSystemMessage(t.muted("Opening browser for authentication..."));
-
-  try {
-    const result = await runOAuthFlow({
-      authUrl: oauthConfig.authUrl,
-      tokenUrl: oauthConfig.tokenUrl,
-      clientId: oauthConfig.clientId,
-      pkce: oauthConfig.pkce,
-      scopes: oauthConfig.scopes,
-      extraAuthParams: oauthConfig.extraAuthParams,
-      responseKeyField: oauthConfig.responseKeyField,
-      callbackPort: oauthConfig.callbackPort,
-      useRelay: oauthConfig.useRelay,
-      relayProvider: oauthConfig.relayProvider,
-    });
-
-    state.apiKey = result.key;
-    ctx.addSystemMessage(t.green("\u2713 Authenticated successfully"));
-    await onboardFinalize(ctx, state);
-  } catch (err) {
-    ctx.addSystemMessage(formatError(`OAuth failed: ${getErrorMessage(err)}`));
-    ctx.addSystemMessage(t.muted("Falling back to API key input..."));
-    onboardApiKey(ctx, state);
-  }
-}
-
-/**
- * API key input → verify → finalize.
- */
-function onboardApiKey(ctx: SystemCommandContext, state: OnboardState): void {
-  if (!state.provider) return;
-  const provider = state.provider;
-  launchWizard(ctx, {
-    title: `${provider.name} API Key`,
-    steps: [
-      {
-        type: "password",
-        message: `Enter your ${provider.name} API key`,
-        validate: (value) => {
-          if (!validateApiKey(value)) {
-            return value.trim().length < MIN_API_KEY_LENGTH
-              ? `API key must be at least ${MIN_API_KEY_LENGTH} characters`
-              : "API key must not contain whitespace";
-          }
-        },
-      },
-    ],
-    onComplete: async ([apiKey]) => {
-      ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-      const key = (apiKey ?? "").trim();
-      state.apiKey = key;
-
-      ctx.addSystemMessage(t.muted("Verifying API key..."));
-      const valid = await verifyApiKey(provider.id, key);
-      if (valid) {
-        ctx.addSystemMessage(t.green("\u2713 API key verified"));
-      } else {
-        ctx.addSystemMessage(t.warning("API key could not be verified (will try anyway)"));
-      }
-
-      await onboardFinalize(ctx, state);
-    },
   });
-}
-
-/**
- * Ollama detection — check if running, detect models, let user pick.
- */
-async function onboardOllama(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
-  ctx.addSystemMessage(t.muted("Checking Ollama..."));
-
-  const running = await verifyOllamaRunning();
-  if (!running) {
-    ctx.addSystemMessage(
-      formatError("Ollama not detected") + "\n" +
-      t.muted("  Install: https://ollama.com") + "\n" +
-      t.muted("  Then run: ollama pull llama3"),
-    );
-    await onboardFinalize(ctx, state);
-    return;
-  }
-
-  const models = await fetchOllamaModelList();
-  if (models.length === 0) {
-    ctx.addSystemMessage(
-      t.warning("Ollama is running but no models installed") + "\n" +
-      t.muted("  Run: ollama pull <model>") + "\n" +
-      t.muted("  Examples: llama3, deepseek-coder, mistral, qwen2"),
-    );
-    await onboardFinalize(ctx, state);
-    return;
-  }
-
-  if (models.length === 1) {
-    state.localModel = models[0]!;
-    ctx.addSystemMessage(t.green(`\u2713 Ollama detected — using ${models[0]!}`));
-    await onboardFinalize(ctx, state);
-    return;
-  }
-
-  // Multiple models — let user pick
-  launchWizard(ctx, {
-    title: "Ollama Models",
-    steps: [
-      {
-        type: "select",
-        message: `${models.length} models found — choose one:`,
-        options: models.map((m) => ({ value: m, label: m })),
-      },
-    ],
-    onComplete: async ([selected]) => {
-      ctx.dispatch({ type: "SET_PHASE", phase: "idle" });
-      if (selected) state.localModel = selected;
-      await onboardFinalize(ctx, state);
-    },
-  });
-}
-
-/**
- * LM Studio detection — check if running.
- */
-async function onboardLMStudio(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
-  ctx.addSystemMessage(t.muted("Checking LM Studio..."));
-
-  const running = await verifyLMStudioRunning();
-  if (running) {
-    ctx.addSystemMessage(t.green("\u2713 LM Studio detected"));
-  } else {
-    ctx.addSystemMessage(
-      t.warning("LM Studio not detected") + "\n" +
-      t.muted("  Download: https://lmstudio.ai") + "\n" +
-      t.muted("  Start LM Studio and load a model") + "\n" +
-      t.muted("  API server runs on http://127.0.0.1:1234"),
-    );
-  }
-
-  await onboardFinalize(ctx, state);
-}
-
-/**
- * Final step: persist config + env, update backend model, show summary.
- */
-async function onboardFinalize(ctx: SystemCommandContext, state: OnboardState): Promise<void> {
-  if (!state.provider) return;
-  const provider = state.provider;
-
-  const result: OnboardingResult = {
-    provider: provider.id,
-    model: provider.model,
-    apiKey: state.apiKey ?? "",
-    envKey: provider.envKey,
-    localModel: state.localModel,
-  };
-
-  await persistSetup(result);
-
-  const displayModel = state.localModel ?? provider.model;
-  ctx.dispatch({ type: "SET_MODEL", model: provider.model });
-  await ctx.backend.updateSessionModel(provider.model);
-
-  const parts = [
-    t.green("\u2713 Setup complete!"),
-    t.muted(`  Provider: ${provider.name}`),
-    t.muted(`  Model:    ${displayModel}`),
-    "",
-    t.dim("Type a message to start chatting. Use /connect to add channels."),
-  ];
-
-  ctx.addSystemMessage(parts.join("\n"));
 }

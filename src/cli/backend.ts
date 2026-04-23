@@ -735,10 +735,20 @@ export async function createDaemonBackend(): Promise<Backend> {
 // In-process backend — direct agent loop
 // ---------------------------------------------------------------------------
 
-export async function createInProcessBackend(): Promise<Backend> {
+export async function createInProcessBackend(opts: CreateBackendOptions = {}): Promise<Backend> {
   // Load secrets from .env so JERIKO_USER_ID and API keys are available
   const { loadSecrets } = await import("../shared/secrets.js");
   loadSecrets();
+
+  // Register the CLI ↔ exec-gateway permission broker when a bridge is
+  // supplied. This is the single wiring point that makes medium+/high-
+  // risk leases route to the CLI dialog. Without a bridge the gateway
+  // runs unchanged (headless / CI default).
+  if (opts.permissionBridge !== undefined) {
+    const { registerBroker } = await import("../daemon/exec/broker.js");
+    const { createBrokerFromBridge } = await import("./permission/daemon-broker.js");
+    registerBroker(createBrokerFromBridge(opts.permissionBridge));
+  }
 
   // Initialize database
   const { getDatabase } = await import("../daemon/storage/db.js");
@@ -1167,7 +1177,23 @@ export async function createInProcessBackend(): Promise<Backend> {
 // ---------------------------------------------------------------------------
 
 /** Create the appropriate backend based on daemon availability. */
-export async function createBackend(): Promise<Backend> {
+/**
+ * Options accepted by {@link createBackend}. Kept minimal and forward-
+ * compatible — each field is optional so existing callers compile
+ * unchanged while tests and `chat.tsx` can thread new integrations.
+ */
+export interface CreateBackendOptions {
+  /**
+   * CLI-side permission bridge. When supplied, in-process mode registers a
+   * {@link PermissionBroker} (via `./permission/daemon-broker.js`) against
+   * the daemon exec gateway so medium+/high-risk commands are gated by the
+   * CLI dialog. Daemon mode ignores this (the daemon-side gateway runs in
+   * a different process and carries its own broker registry).
+   */
+  readonly permissionBridge?: import("./permission/bridge.js").InMemoryBridge;
+}
+
+export async function createBackend(opts: CreateBackendOptions = {}): Promise<Backend> {
   const { ensureDaemon } = await import("./lib/daemon.js");
 
   const ready = await ensureDaemon(10_000);
@@ -1181,7 +1207,7 @@ export async function createBackend(): Promise<Backend> {
     "  Channels, connectors, and triggers are offline.\n" +
     "  Start daemon: jeriko server start\n",
   );
-  return createInProcessBackend();
+  return createInProcessBackend(opts);
 }
 
 // ---------------------------------------------------------------------------
