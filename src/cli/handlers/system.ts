@@ -74,7 +74,7 @@ function launchWizard(ctx: SystemCommandContext, config: WizardConfig): void {
   const originalOnComplete = config.onComplete;
   ctx.wizardConfigRef.current = {
     ...config,
-    onComplete: async (results: string[]) => {
+    onComplete: async (results: readonly string[]) => {
       try {
         await originalOnComplete(results);
       } catch (err: unknown) {

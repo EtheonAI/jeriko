@@ -29,7 +29,7 @@ import {
 
 describe("isPhase", () => {
   test("returns true for all valid phases", () => {
-    const validPhases: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "setup"];
+    const validPhases: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "wizard"];
     for (const phase of validPhases) {
       expect(isPhase(phase)).toBe(true);
     }

@@ -35,11 +35,23 @@ export async function withRetry<T>(
 interface TokenBucket {
   tokens: number;
   last_refill: number;
+  last_accessed: number;
   max: number;
   window_ms: number;
 }
 
 const buckets = new Map<string, TokenBucket>();
+
+/** Evict rate-limit buckets unused for more than this duration. */
+const BUCKET_IDLE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function pruneIdleBuckets(now: number, keepName: string): void {
+  for (const [k, b] of buckets) {
+    if (k !== keepName && now - b.last_accessed > BUCKET_IDLE_TTL_MS) {
+      buckets.delete(k);
+    }
+  }
+}
 
 /**
  * Returns a rate-limited wrapper around an async function.
@@ -58,6 +70,7 @@ export function withRateLimit(
     buckets.set(name, {
       tokens: maxRequests,
       last_refill: Date.now(),
+      last_accessed: Date.now(),
       max: maxRequests,
       window_ms: windowMs,
     });
@@ -68,6 +81,8 @@ export function withRateLimit(
 
     // Refill tokens based on elapsed time.
     const now = Date.now();
+    pruneIdleBuckets(now, name);
+    bucket.last_accessed = now;
     const elapsed = now - bucket.last_refill;
     const refill = Math.floor((elapsed / bucket.window_ms) * bucket.max);
     if (refill > 0) {
@@ -151,9 +166,21 @@ export async function withIdempotency<T>(
 interface TokenEntry {
   token: string;
   refreshing: Promise<string> | null;
+  last_accessed: number;
 }
 
 const tokenStore = new Map<string, TokenEntry>();
+
+/** Evict token entries unused for more than this duration (and not refreshing). */
+const TOKEN_IDLE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+function pruneIdleTokens(now: number, keepName: string): void {
+  for (const [k, e] of tokenStore) {
+    if (k !== keepName && !e.refreshing && now - e.last_accessed > TOKEN_IDLE_TTL_MS) {
+      tokenStore.delete(k);
+    }
+  }
+}
 
 /**
  * Get a fresh token for `name`. If another call is already refreshing,
@@ -163,27 +190,38 @@ export async function refreshToken(
   name: string,
   refreshFn: () => Promise<string>,
 ): Promise<string> {
+  const now = Date.now();
+  pruneIdleTokens(now, name);
   const entry = tokenStore.get(name);
 
   // If a refresh is already in-flight, wait for it.
   if (entry?.refreshing) {
+    entry.last_accessed = now;
     return entry.refreshing;
   }
 
   const refreshPromise = refreshFn();
 
   // Store the in-flight promise so concurrent callers share it.
-  const current: TokenEntry = { token: entry?.token ?? "", refreshing: refreshPromise };
+  const current: TokenEntry = {
+    token: entry?.token ?? "",
+    refreshing: refreshPromise,
+    last_accessed: now,
+  };
   tokenStore.set(name, current);
 
   try {
     const token = await refreshPromise;
-    tokenStore.set(name, { token, refreshing: null });
+    tokenStore.set(name, { token, refreshing: null, last_accessed: Date.now() });
     return token;
   } catch (err) {
     // Clear the in-flight marker so the next call retries.
     if (tokenStore.get(name)?.refreshing === refreshPromise) {
-      tokenStore.set(name, { token: current.token, refreshing: null });
+      tokenStore.set(name, {
+        token: current.token,
+        refreshing: null,
+        last_accessed: Date.now(),
+      });
     }
     throw err;
   }

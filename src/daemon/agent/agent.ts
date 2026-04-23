@@ -16,10 +16,22 @@ import { resolveModel, getCapabilities, probeLocalModel, type ModelCapabilities 
 import { getTool, resolveDottedTool, listTools, toDriverFormat } from "./tools/registry.js";
 import { addMessage, addPart } from "./session/message.js";
 import { touchSession } from "./session/session.js";
-import { estimateTokens, DEFAULT_CONTEXT_LIMIT, COMPACTION_CONTEXT_RATIO, MIN_MESSAGES_FOR_COMPACTION } from "../../shared/tokens.js";
+import { estimateTokens, DEFAULT_CONTEXT_LIMIT } from "../../shared/tokens.js";
 import { ExecutionGuard } from "./guard.js";
-import { trimHistory, compactHistory, sanitizeToolPairs } from "./history.js";
+import { trimHistory, sanitizeToolPairs } from "./history.js";
 import { setActiveContext, clearActiveContext } from "./orchestrator-context.js";
+import { injectPendingNotifications } from "./subagent/notification.js";
+import { UsageLedger, BudgetExceededError, type UsageTotals, type UsageCost } from "./usage/index.js";
+import {
+  autoCompact,
+  shouldAutoCompact,
+  reactiveCompact,
+  isOversizedError,
+  mergePolicy,
+  type CompactionPolicy,
+  type CompactionStrategyName,
+} from "./compaction/index.js";
+import { runHooks } from "../services/hooks/index.js";
 import { getLogger } from "../../shared/logger.js";
 
 const log = getLogger();
@@ -56,6 +68,10 @@ export interface AgentRunConfig {
   signal?: AbortSignal;
   /** Nesting depth for sub-agent orchestration (0 = top-level). */
   depth?: number;
+  /** Optional hard cap on spend (USD). Ledger throws `BudgetExceededError` when exceeded. */
+  maxBudgetUsd?: number;
+  /** Optional compaction policy overrides. Merged with defaults at loop start. */
+  compactionPolicy?: Partial<CompactionPolicy>;
 }
 
 /** A yielded event from the agent loop. */
@@ -64,8 +80,15 @@ export type AgentEvent =
   | { type: "thinking"; content: string }
   | { type: "tool_call_start"; toolCall: ToolCall }
   | { type: "tool_result"; toolCallId: string; result: string; isError: boolean }
+  | { type: "usage"; totals: UsageTotals; cost: UsageCost }
   | { type: "turn_complete"; tokensIn: number; tokensOut: number }
-  | { type: "compaction"; beforeTokens: number; afterTokens: number }
+  | {
+      type: "compaction";
+      beforeTokens: number;
+      afterTokens: number;
+      strategy: CompactionStrategyName;
+      turnsRemoved: number;
+    }
   | { type: "error"; message: string };
 
 // ---------------------------------------------------------------------------
@@ -148,9 +171,9 @@ export async function* runAgent(
     signal: config.signal,
   };
 
-  // ─── Step 4: Dynamic compaction threshold from context window ────────
+  // ─── Step 4: Dynamic compaction policy ────────────────────────────────
   const contextLimit = caps.context || DEFAULT_CONTEXT_LIMIT;
-  const compactionThreshold = Math.floor(contextLimit * COMPACTION_CONTEXT_RATIO);
+  const compactionPolicy = mergePolicy(config.compactionPolicy);
 
   // ─── Step 5: Initialize execution guard ──────────────────────────────
   const guard = new ExecutionGuard();
@@ -178,6 +201,14 @@ export async function* runAgent(
   let totalTokensIn = 0;
   let totalTokensOut = 0;
 
+  // Provider-reported usage ledger — converts tokens to USD via the model
+  // registry, tracks cache hits/misses, enforces optional spend caps.
+  const ledger = new UsageLedger({
+    backend: provider,
+    model: resolvedModelId,
+    maxBudgetUsd: config.maxBudgetUsd,
+  });
+
   // Set active context so orchestrator tools (delegate, parallel) can access
   // the parent's system prompt, conversation, depth, and model during tool execution.
   setActiveContext({
@@ -199,25 +230,49 @@ export async function* runAgent(
       return;
     }
 
-    // Check for context compaction using dynamic threshold
-    const currentTokens = estimateTokens(
-      messages.map((m) => messageText(m)).join(""),
-    );
-    if (currentTokens >= compactionThreshold && messages.length >= MIN_MESSAGES_FOR_COMPACTION) {
-      const beforeTokens = currentTokens;
-      const compacted = compactHistory(messages, contextLimit);
-      const afterTokens = estimateTokens(
-        compacted.map((m) => messageText(m)).join(""),
+    // ── Subagent task notifications ───────────────────────────────────
+    // Drain any async subagent completions for this session and inject
+    // them as a synthetic user message. The model then sees the results
+    // on its very next turn, matching Claude Code's behaviour.
+    const injected = injectPendingNotifications(config.sessionId, messages);
+    if (injected.length > 0) {
+      log.debug(
+        `Agent: injected ${injected.length} subagent notification(s) into session ${config.sessionId}`,
       );
-      messages.length = 0;
-      messages.push(...compacted);
-      yield { type: "compaction", beforeTokens, afterTokens };
+    }
+
+    // Proactive compaction — the compaction module owns threshold detection,
+    // turn selection, and optional LLM summarization. The agent loop only
+    // observes the result and publishes telemetry.
+    if (shouldAutoCompact(messages, contextLimit, compactionPolicy)) {
+      const result = await autoCompact({
+        messages,
+        contextLimit,
+        policy: compactionPolicy,
+        backend: provider,
+        model: resolvedModelId,
+        signal: config.signal,
+      });
+      if (result.turnsRemoved > 0) {
+        messages.length = 0;
+        messages.push(...result.messages);
+        yield {
+          type: "compaction",
+          beforeTokens: result.beforeTokens,
+          afterTokens: result.afterTokens,
+          strategy: result.strategy,
+          turnsRemoved: result.turnsRemoved,
+        };
+      }
     }
 
     // Stream response from LLM
     let fullText = "";
     const toolCalls: ToolCall[] = [];
     let hadError = false;
+    let budgetAbort: BudgetExceededError | undefined;
+
+    ledger.startResponse();
 
     try {
       for await (const chunk of driver.chat(messages, driverConfig)) {
@@ -229,6 +284,21 @@ export async function* runAgent(
 
           case "thinking":
             yield { type: "thinking", content: chunk.content };
+            break;
+
+          case "usage":
+            if (chunk.usage) {
+              try {
+                ledger.record(chunk.usage);
+                yield { type: "usage", totals: ledger.totals, cost: ledger.cost() };
+              } catch (err) {
+                if (err instanceof BudgetExceededError) {
+                  budgetAbort = err;
+                } else {
+                  throw err;
+                }
+              }
+            }
             break;
 
           case "tool_call":
@@ -248,9 +318,44 @@ export async function* runAgent(
         }
       }
     } catch (err) {
+      // Reactive compaction on 413 / "context length exceeded" — one aggressive
+      // squeeze + retry. If the retry also throws we fall through to the
+      // generic error yield below.
+      if (isOversizedError(err)) {
+        const result = await reactiveCompact({
+          messages,
+          contextLimit,
+          policy: compactionPolicy,
+          backend: provider,
+          model: resolvedModelId,
+          signal: config.signal,
+        });
+        if (result.turnsRemoved > 0) {
+          messages.length = 0;
+          messages.push(...result.messages);
+          yield {
+            type: "compaction",
+            beforeTokens: result.beforeTokens,
+            afterTokens: result.afterTokens,
+            strategy: result.strategy,
+            turnsRemoved: result.turnsRemoved,
+          };
+          log.info(`Agent: reactive compaction after 413 — retrying round ${round}`);
+          // Decrement so the outer for-loop retries with the squeezed buffer.
+          round--;
+          continue;
+        }
+      }
+
       const errMsg = err instanceof Error ? err.message : String(err);
       yield { type: "error", message: errMsg };
       log.error(`Agent loop error on round ${round}: ${errMsg}`);
+      return;
+    }
+
+    if (budgetAbort) {
+      yield { type: "error", message: budgetAbort.message };
+      yield { type: "turn_complete", tokensIn: totalTokensIn, tokensOut: totalTokensOut };
       return;
     }
 
@@ -304,6 +409,7 @@ export async function* runAgent(
 
       let result: string;
       let isError = false;
+      const startedAt = Date.now();
 
       if (!tool) {
         result = `Tool "${tc.name}" not found`;
@@ -315,17 +421,60 @@ export async function* runAgent(
           result = rateCheck;
           isError = true;
         } else {
+          let args: Record<string, unknown>;
           try {
-            const args = parseToolArgs(tc.arguments);
-            // Inject inferred action from dotted name (e.g. "browser.click" → action:"click")
-            if (inferredAction && !args.action) {
-              args.action = inferredAction;
-            }
-            result = await tool.execute(args);
+            args = parseToolArgs(tc.arguments);
           } catch (err) {
-            result = err instanceof Error ? err.message : String(err);
-            isError = true;
+            args = {};
+            log.debug(`Agent: tool arg parse failed for ${tool.name}: ${err}`);
           }
+          if (inferredAction && !args.action) args.action = inferredAction;
+
+          // Pre-tool-use hook — user-extensible policy layer. The hook may
+          // block, modify arguments, or allow; we honour the decision before
+          // the tool actually runs.
+          const preDecision = await runHooks({
+            event: "pre_tool_use",
+            payload: {
+              event: "pre_tool_use",
+              sessionId: config.sessionId,
+              toolName: tool.name,
+              toolCallId: tc.id,
+              arguments: args,
+            },
+          });
+
+          if (preDecision.decision.decision === "block") {
+            result = preDecision.decision.message;
+            isError = true;
+          } else {
+            if (preDecision.decision.decision === "modify") {
+              args = preDecision.decision.arguments;
+            }
+            try {
+              result = await tool.execute(args);
+            } catch (err) {
+              result = err instanceof Error ? err.message : String(err);
+              isError = true;
+            }
+          }
+
+          // Post-tool-use hook — observation and optional result rewrite
+          // (currently we do not mutate results; hooks that want to can log
+          // or raise alerts as a side-effect).
+          await runHooks({
+            event: "post_tool_use",
+            payload: {
+              event: "post_tool_use",
+              sessionId: config.sessionId,
+              toolName: tool.name,
+              toolCallId: tc.id,
+              arguments: args,
+              result,
+              isError,
+              durationMs: Date.now() - startedAt,
+            },
+          });
         }
       }
 

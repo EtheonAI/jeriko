@@ -658,8 +658,8 @@ describe("createInitialState", () => {
   });
 
   test("respects provided options", () => {
-    const state = createInitialState({ phase: "setup", model: "gpt4", sessionSlug: "my-session" });
-    expect(state.phase).toBe("setup");
+    const state = createInitialState({ phase: "wizard", model: "gpt4", sessionSlug: "my-session" });
+    expect(state.phase).toBe("wizard");
     expect(state.model).toBe("gpt4");
     expect(state.sessionSlug).toBe("my-session");
   });

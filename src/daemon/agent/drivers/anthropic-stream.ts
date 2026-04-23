@@ -7,7 +7,7 @@
 //   - message_stop, error events
 //   - Tool call accumulation across content blocks
 
-import type { StreamChunk, ToolCall } from "./index.js";
+import type { StreamChunk, ToolCall, UsageInfo } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -76,6 +76,16 @@ export async function* parseAnthropicStream(
 
         const eventType = event.type as string;
 
+        if (eventType === "message_start") {
+          const usage = extractUsage(event.message);
+          if (usage) yield { type: "usage", content: "", usage };
+        }
+
+        if (eventType === "message_delta") {
+          const usage = extractUsage(event);
+          if (usage) yield { type: "usage", content: "", usage };
+        }
+
         if (eventType === "content_block_start") {
           const block = event.content_block as Record<string, unknown> | undefined;
           if (block?.type === "tool_use") {
@@ -130,4 +140,34 @@ export async function* parseAnthropicStream(
   }
 
   yield { type: "done", content: "" };
+}
+
+// ---------------------------------------------------------------------------
+// Usage extraction
+// ---------------------------------------------------------------------------
+
+/**
+ * Extract usage telemetry from a message_start / message_delta event.
+ *
+ * Anthropic sends cumulative `usage` objects at start (cache info + input)
+ * and at the final message_delta (final output_tokens). We forward both so
+ * the driver-agnostic accumulator can collapse them.
+ */
+function extractUsage(source: unknown): UsageInfo | undefined {
+  if (!source || typeof source !== "object") return undefined;
+  const raw = (source as { usage?: unknown }).usage;
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+
+  const usage: UsageInfo = {};
+  if (typeof u.input_tokens === "number") usage.input_tokens = u.input_tokens;
+  if (typeof u.output_tokens === "number") usage.output_tokens = u.output_tokens;
+  if (typeof u.cache_creation_input_tokens === "number") {
+    usage.cache_creation_input_tokens = u.cache_creation_input_tokens;
+  }
+  if (typeof u.cache_read_input_tokens === "number") {
+    usage.cache_read_input_tokens = u.cache_read_input_tokens;
+  }
+
+  return Object.keys(usage).length > 0 ? usage : undefined;
 }

@@ -176,35 +176,44 @@ export function startChannelRouter(opts: ChannelRouterOptions): void {
     // response mixing, session corruption, and activeRun overwrites.
     // Each processMessage is wrapped with a timeout so a stuck LLM call
     // auto-aborts and doesn't block subsequent messages.
+    // Queue: each chat processes one message at a time. Cleanup is handled
+    // inline in finally so the queue entry is always removed — no floating
+    // continuation to surface as unhandledRejection.
     const prev = chatQueues.get(chatId) ?? Promise.resolve();
-    const next = prev.then(async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          processMessage(chatId, text, metadata),
-          new Promise<void>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("Process timeout")), PROCESS_TIMEOUT_MS);
-          }),
-        ]);
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        log.error(`Router: message processing failed for chat ${chatId}: ${msg}`);
-        // Auto-abort the stuck run so subsequent messages can proceed
-        const stuckRun = activeRuns.get(chatId);
-        if (stuckRun) {
-          stuckRun.controller.abort();
-          activeRuns.delete(chatId);
-        }
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    });
+    const next = prev.then(() => processQueuedMessage(chatId, text, metadata));
     chatQueues.set(chatId, next);
-    // Clean up queue entry when done to avoid unbounded memory growth
-    next.then(() => {
+    next.finally(() => {
       if (chatQueues.get(chatId) === next) chatQueues.delete(chatId);
     });
   });
+
+  // Single well-defined queue entry point — all errors swallowed here.
+  async function processQueuedMessage(
+    chatId: string,
+    text: string,
+    metadata: MessageMetadata,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        processMessage(chatId, text, metadata),
+        new Promise<void>((_, reject) => {
+          timer = setTimeout(() => reject(new Error("Process timeout")), PROCESS_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(`Router: message processing failed for chat ${chatId}: ${msg}`);
+      // Auto-abort the stuck run so subsequent messages can proceed
+      const stuckRun = activeRuns.get(chatId);
+      if (stuckRun) {
+        stuckRun.controller.abort();
+        activeRuns.delete(chatId);
+      }
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
 
   // ── Process a single message ────────────────────────────────────────
 

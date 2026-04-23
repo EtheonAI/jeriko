@@ -1,6 +1,6 @@
 // Daemon middleware — Bearer token authentication with timing-safe comparison.
 
-import { timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 import type { Context, Next } from "hono";
 import { getLogger } from "../../../shared/logger.js";
 
@@ -20,25 +20,40 @@ export interface AuthMiddlewareOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Timing-safe comparison
+// Timing-safe comparison — HMAC-based, length-agnostic
 // ---------------------------------------------------------------------------
 
 /**
- * Compare two strings in constant time to prevent timing attacks.
+ * Process-lifetime HMAC key used to canonicalize strings to fixed-length
+ * digests. Generated fresh on module load so digests aren't reproducible
+ * across runs, which prevents precomputed timing-probe tables from being
+ * reused against new processes.
+ *
+ * The key does not need to be secret: HMAC's timing cost is input-length
+ * dependent, but both sides of the comparison pass through the same
+ * HMAC before the constant-time `timingSafeEqual` runs. The digests
+ * themselves are always 32 bytes, so the final comparison is length-agnostic.
+ */
+const COMPARE_HMAC_KEY = randomBytes(32);
+
+function canonicalize(value: string): Buffer {
+  return createHmac("sha256", COMPARE_HMAC_KEY).update(value, "utf-8").digest();
+}
+
+/**
+ * Compare two strings in constant time, independent of input lengths.
+ *
+ * Implementation: HMAC-SHA256 both inputs to produce fixed-length 32-byte
+ * digests, then `timingSafeEqual` the digests. Length differences are
+ * absorbed by the HMAC (variable-time there, but the attacker sees the
+ * same downstream comparison cost regardless). We also check actual
+ * length equality — HMAC digest collisions are astronomically unlikely
+ * but the explicit check is cheap insurance and keeps intent obvious.
  */
 export function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) {
-    // Perform a dummy comparison so timing does not leak length info
-    const maxLen = Math.max(a.length, b.length);
-    const bufA = Buffer.from(a.padEnd(maxLen, "\0"), "utf-8");
-    const bufB = Buffer.from(b.padEnd(maxLen, "\0"), "utf-8");
-    timingSafeEqual(bufA, bufB);
-    return false;
-  }
-
-  const bufA = Buffer.from(a, "utf-8");
-  const bufB = Buffer.from(b, "utf-8");
-  return timingSafeEqual(bufA, bufB);
+  const digestsEqual = timingSafeEqual(canonicalize(a), canonicalize(b));
+  const lengthsEqual = a.length === b.length;
+  return digestsEqual && lengthsEqual;
 }
 
 // ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 /**
- * Messages — Static message history and live streaming text.
+ * Messages — static message history and live streaming text.
  *
- * Uses Ink's <Static> for completed messages (never re-rendered once committed).
- * The streaming text area shows the current assistant response as tokens arrive
- * with markdown rendering and an animated cursor.
+ * Uses Ink's <Static> for completed messages (never re-rendered once
+ * committed). The streaming text area shows the current assistant response
+ * as tokens arrive with markdown rendering and an animated cursor.
  *
  * Message roles:
  *   user:      > message text
@@ -13,11 +13,15 @@
  * Tool calls in history show in collapsed tree format:
  *   ⏺ Read(src/cli/app.tsx)
  *   ⎿ 588 lines
+ *
+ * Every color flows through useTheme() so a setTheme call restyles every
+ * sub-component on the next render. No direct PALETTE reads.
  */
 
 import React from "react";
 import { Text, Box, Static } from "ink";
-import { PALETTE, ICONS } from "../theme.js";
+import { ICONS } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
 import { ToolCallView } from "./ToolCall.js";
 import { SubAgentView } from "./SubAgent.js";
 import { Markdown } from "./Markdown.js";
@@ -34,21 +38,29 @@ import type { DisplayMessage, DisplayToolCall, Phase } from "../types.js";
 // ---------------------------------------------------------------------------
 
 interface MessagesProps {
-  messages: DisplayMessage[];
+  readonly messages: DisplayMessage[];
 }
 
-export const Messages: React.FC<MessagesProps> = ({ messages }) => (
+const MessagesImpl: React.FC<MessagesProps> = ({ messages }) => (
   <Static items={messages}>
     {(msg, idx) => <MessageView key={`${msg.id}-${idx}`} message={msg} />}
   </Static>
 );
+
+/**
+ * Memoized so that updates to streamText, liveToolCalls, or any other app
+ * state that does NOT mutate the messages array reference are a no-op here.
+ * Critical for streaming perf — during a response, app.tsx re-renders on
+ * every token delta, but Messages stays still.
+ */
+export const Messages = React.memo(MessagesImpl);
 
 // ---------------------------------------------------------------------------
 // Single message view — role-based rendering
 // ---------------------------------------------------------------------------
 
 interface MessageViewProps {
-  message: DisplayMessage;
+  readonly message: DisplayMessage;
 }
 
 const MessageView: React.FC<MessageViewProps> = ({ message }) => {
@@ -66,20 +78,23 @@ const MessageView: React.FC<MessageViewProps> = ({ message }) => {
 // User message — prominent prompt marker
 // ---------------------------------------------------------------------------
 
-const UserMessage: React.FC<{ content: string }> = ({ content }) => (
-  <Box marginTop={1}>
-    <Text color={PALETTE.brand} bold>{">"} </Text>
-    <Text color={PALETTE.text}>{content}</Text>
-  </Box>
-);
+const UserMessage: React.FC<{ readonly content: string }> = ({ content }) => {
+  const { colors } = useTheme();
+  return (
+    <Box marginTop={1}>
+      <Text color={colors.brand} bold>{">"} </Text>
+      <Text color={colors.text}>{content}</Text>
+    </Box>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Assistant message — markdown + tool call tree
 // ---------------------------------------------------------------------------
 
 const AssistantMessage: React.FC<{
-  content: string;
-  toolCalls?: DisplayToolCall[];
+  readonly content: string;
+  readonly toolCalls?: DisplayToolCall[];
 }> = ({ content, toolCalls }) => (
   <Box flexDirection="column" marginTop={1}>
     {content && <Markdown text={content} />}
@@ -93,18 +108,21 @@ const AssistantMessage: React.FC<{
 // System message — muted with contextual icon
 // ---------------------------------------------------------------------------
 
-const SystemMessage: React.FC<{ content: string }> = ({ content }) => (
-  <Box marginTop={1}>
-    <Text color={PALETTE.muted}>{content}</Text>
-  </Box>
-);
+const SystemMessage: React.FC<{ readonly content: string }> = ({ content }) => {
+  const { colors } = useTheme();
+  return (
+    <Box marginTop={1}>
+      <Text color={colors.muted}>{content}</Text>
+    </Box>
+  );
+};
 
 // ---------------------------------------------------------------------------
 // Tool call summary (collapsed tree view in history)
 // ---------------------------------------------------------------------------
 
 interface ToolCallSummaryProps {
-  toolCalls: DisplayToolCall[];
+  readonly toolCalls: DisplayToolCall[];
 }
 
 /**
@@ -128,7 +146,8 @@ const ToolCallSummary: React.FC<ToolCallSummaryProps> = ({ toolCalls }) => (
  *   ⏺ Read(src/cli/app.tsx)
  *   ⎿ 588 lines
  */
-const CompactToolCall: React.FC<{ toolCall: DisplayToolCall }> = ({ toolCall }) => {
+const CompactToolCall: React.FC<{ readonly toolCall: DisplayToolCall }> = ({ toolCall }) => {
+  const { colors } = useTheme();
   const name = capitalize(toolCall.name);
   const rawSummary = extractToolSummary(toolCall.args);
   const summary = shortenHome(rawSummary);
@@ -140,14 +159,14 @@ const CompactToolCall: React.FC<{ toolCall: DisplayToolCall }> = ({ toolCall }) 
   return (
     <Box flexDirection="column">
       <Text>
-        <Text color={PALETTE.blue}>{ICONS.tool} </Text>
-        <Text bold color={PALETTE.text}>{name}</Text>
-        <Text color={PALETTE.muted}>{argStr}</Text>
+        <Text color={colors.tool}>{ICONS.tool} </Text>
+        <Text bold color={colors.text}>{name}</Text>
+        <Text color={colors.muted}>{argStr}</Text>
       </Text>
       {resultLine && (
         <Box marginLeft={2}>
-          <Text color={toolCall.isError ? PALETTE.red : PALETTE.dim}>{ICONS.result}  </Text>
-          <Text color={toolCall.isError ? PALETTE.red : PALETTE.muted} wrap="truncate-end">{resultLine}</Text>
+          <Text color={toolCall.isError ? colors.error : colors.dim}>{ICONS.result}  </Text>
+          <Text color={toolCall.isError ? colors.error : colors.muted} wrap="truncate-end">{resultLine}</Text>
         </Box>
       )}
     </Box>
@@ -159,24 +178,28 @@ const CompactToolCall: React.FC<{ toolCall: DisplayToolCall }> = ({ toolCall }) 
 // ---------------------------------------------------------------------------
 
 interface StreamingTextProps {
-  text: string;
-  phase: Phase;
+  readonly text: string;
+  readonly phase: Phase;
 }
 
 /**
  * Live streaming text — renders markdown as tokens arrive.
  * Shows a block cursor at the end to indicate active streaming.
  */
-export const StreamingText: React.FC<StreamingTextProps> = ({ text, phase }) => {
+const StreamingTextImpl: React.FC<StreamingTextProps> = ({ text, phase }) => {
+  const { colors } = useTheme();
   if (!text || phase !== "streaming") return null;
 
   return (
     <Box flexDirection="column" marginTop={1} overflowX="hidden">
       <Markdown text={text} />
-      <Text color={PALETTE.dim}>{ICONS.cursor}</Text>
+      <Text color={colors.info}>{ICONS.cursor}</Text>
     </Box>
   );
 };
+
+/** Memoized by text+phase — stable during non-streaming phases. */
+export const StreamingText = React.memo(StreamingTextImpl);
 
 // ---------------------------------------------------------------------------
 // Helpers

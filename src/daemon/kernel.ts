@@ -183,6 +183,8 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/parallel.js"),
     import("./agent/tools/browse.js"),
     import("./agent/tools/delegate.js"),
+    import("./agent/tools/spawn_agent.js"),
+    import("./agent/tools/task_status.js"),
     import("./agent/tools/connector.js"),
     import("./agent/tools/skill.js"),
     import("./agent/tools/webdev.js"),
@@ -190,6 +192,34 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     import("./agent/tools/generate-image.js"),
   ]);
   log.info("Kernel boot: step 6 — built-in tools registered");
+
+  // Step 6.4: Load user-defined lifecycle hooks. Missing / malformed config
+  // degrades to an empty hook set rather than blocking boot.
+  try {
+    const { reloadHooks } = await import("./services/hooks/index.js");
+    const count = reloadHooks();
+    if (count > 0) log.info(`Kernel boot: step 6.4 — ${count} hook(s) loaded`);
+  } catch (err) {
+    log.warn(`Kernel boot: hooks load failed — ${err}`);
+  }
+
+  // Step 6.5: Boot MCP servers — each configured server becomes a set of
+  // agent tools in the same registry. Failures are isolated per server.
+  try {
+    const { startMcpServers } = await import("./services/mcp/index.js");
+    const result = await startMcpServers();
+    if (result.started.length > 0) {
+      log.info(
+        `Kernel boot: step 6.5 — MCP started ${result.started.length} server(s), ` +
+        `${result.toolsRegistered} tool(s) registered`,
+      );
+    }
+    for (const failure of result.failed) {
+      log.warn(`Kernel boot: MCP server "${failure.name}" skipped — ${failure.error}`);
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: MCP bootstrap failed — ${err}`);
+  }
 
   // Step 7: Initialize LLM drivers + model registry
   // Load model registry from models.dev (non-fatal — falls back to static defaults).
@@ -339,6 +369,24 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
   } catch (err) {
     log.warn(`Kernel boot: failed to load persistent memory: ${err}`);
+  }
+
+  // Inject project-level instructions discovered by walking up from CWD.
+  // Nearest-first so the user's own project conventions override anything
+  // farther up the tree. Budget-capped so huge CLAUDE.md files can't crowd
+  // out the tool schemas.
+  try {
+    const { buildInstructionsBlock } = await import("./agent/instructions/index.js");
+    const block = buildInstructionsBlock();
+    if (block.text) {
+      systemPrompt = systemPrompt + "\n\n" + block.text;
+      log.info(
+        `Kernel boot: injected project instructions from ${block.sources.length} file(s)` +
+        (block.truncated ? " (truncated to fit budget)" : ""),
+      );
+    }
+  } catch (err) {
+    log.warn(`Kernel boot: project instruction discovery failed — ${err}`);
   }
 
   // Bind channel message bus to the agent loop + slash-command controls.

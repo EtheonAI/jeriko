@@ -1,5 +1,5 @@
 /**
- * ToolCall — Renders a single tool call with status icon and result.
+ * ToolCall — renders a single tool call with status icon and result.
  *
  * Visual style (Claude Code-inspired):
  *   ⏺ Read src/cli/chat.ts
@@ -8,15 +8,21 @@
  *   ⏺ Bash npm test
  *     ⎿  12 tests passed
  *
- * Status colors:
- *   running:   cyan spinner dot
- *   completed: blue solid dot
- *   pending:   dim dot
+ * Status tones (theme-invariant, resolved at render time):
+ *   running:   info
+ *   completed: tool
+ *   pending:   dim
+ *
+ * The pure helper `getStatusGlyph` returns a semantic Tone, never a hex
+ * value — themes restyle the entire component through one useTheme() read.
  */
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE, ICONS } from "../theme.js";
+import { ICONS } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
+import { resolveTone } from "../ui/tokens.js";
+import type { Tone } from "../ui/types.js";
 import {
   capitalize,
   extractToolSummary,
@@ -26,14 +32,19 @@ import {
 import type { DisplayToolCall } from "../types.js";
 
 // ---------------------------------------------------------------------------
-// Status mapping
+// Status → glyph + tone (pure, theme-invariant)
 // ---------------------------------------------------------------------------
 
-function getStatusIcon(status: DisplayToolCall["status"]): { char: string; color: string } {
+interface StatusGlyph {
+  readonly char: string;
+  readonly tone: Tone;
+}
+
+function getStatusGlyph(status: DisplayToolCall["status"]): StatusGlyph {
   switch (status) {
-    case "completed": return { char: ICONS.tool, color: PALETTE.blue };
-    case "running":   return { char: ICONS.tool, color: PALETTE.cyan };
-    case "pending":   return { char: ICONS.pending, color: PALETTE.dim };
+    case "completed": return { char: ICONS.tool,    tone: "tool" };
+    case "running":   return { char: ICONS.tool,    tone: "info" };
+    case "pending":   return { char: ICONS.pending, tone: "dim" };
   }
 }
 
@@ -42,22 +53,24 @@ function getStatusIcon(status: DisplayToolCall["status"]): { char: string; color
 // ---------------------------------------------------------------------------
 
 interface ToolCallViewProps {
-  toolCall: DisplayToolCall;
+  readonly toolCall: DisplayToolCall;
 }
 
-export const ToolCallView: React.FC<ToolCallViewProps> = ({ toolCall }) => {
+const ToolCallViewImpl: React.FC<ToolCallViewProps> = ({ toolCall }) => {
+  const { colors } = useTheme();
   const name = capitalize(toolCall.name);
   const rawSummary = extractToolSummary(toolCall.args);
   const summary = shortenHome(rawSummary);
-  const { char: statusChar, color: statusColor } = getStatusIcon(toolCall.status);
+  const { char: statusChar, tone: statusTone } = getStatusGlyph(toolCall.status);
+  const statusColor = resolveTone(statusTone, colors);
 
   return (
     <Box flexDirection="column" marginTop={0}>
       {/* Header: ⏺ ToolName summary */}
       <Text>
         <Text color={statusColor}>{statusChar} </Text>
-        <Text bold color={PALETTE.text}>{name}</Text>
-        {summary ? <Text color={PALETTE.muted}> {summary}</Text> : null}
+        <Text bold color={colors.text}>{name}</Text>
+        {summary ? <Text color={colors.muted}> {summary}</Text> : null}
       </Text>
 
       {/* Result: ⎿ output */}
@@ -71,18 +84,22 @@ export const ToolCallView: React.FC<ToolCallViewProps> = ({ toolCall }) => {
   );
 };
 
+/** Memoized by toolCall reference — skips re-render during stream deltas. */
+export const ToolCallView = React.memo(ToolCallViewImpl);
+
 // ---------------------------------------------------------------------------
 // Tool result sub-component
 // ---------------------------------------------------------------------------
 
 interface ToolResultProps {
-  result: string;
-  isError: boolean;
+  readonly result: string;
+  readonly isError: boolean;
 }
 
 const ToolResult: React.FC<ToolResultProps> = ({ result, isError }) => {
-  const connectorColor = isError ? PALETTE.red : PALETTE.dim;
-  const textColor = isError ? PALETTE.red : PALETTE.muted;
+  const { colors } = useTheme();
+  const connectorColor = isError ? colors.error : colors.dim;
+  const textColor      = isError ? colors.error : colors.muted;
 
   return (
     <Box marginLeft={2}>

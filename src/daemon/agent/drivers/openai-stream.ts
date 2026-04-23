@@ -12,7 +12,7 @@
 //   - AbortSignal race for Bun (doesn't reliably abort in-progress reads)
 //   - Flush of remaining partial tool calls on stream end
 
-import type { StreamChunk, ToolCall } from "./index.js";
+import type { StreamChunk, ToolCall, UsageInfo } from "./index.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -122,6 +122,13 @@ export async function* parseOpenAIStream(
           continue;
         }
 
+        // OpenAI emits a final SSE event with `usage` and empty choices[] when
+        // `stream_options.include_usage` is true. Capture that for the ledger.
+        const usage = extractOpenAIUsage(event.usage);
+        if (usage) {
+          yield { type: "usage", content: "", usage };
+        }
+
         const choices = event.choices as Array<Record<string, unknown>> | undefined;
         if (!choices?.length) continue;
 
@@ -212,4 +219,40 @@ function* flushToolCalls(
     yield { type: "tool_call", content: "", tool_call: tc };
   }
   partialToolCalls.clear();
+}
+
+/**
+ * Normalize the OpenAI-flavoured usage object into the driver-agnostic
+ * `UsageInfo`. OpenAI exposes prompt cache telemetry via
+ * `prompt_tokens_details.cached_tokens`; recent o-series variants also
+ * report `cache_creation_tokens` in the same nested object. We fold those
+ * into the same UsageInfo fields used by the Anthropic path so the
+ * cross-provider UsageLedger can reason uniformly.
+ */
+function extractOpenAIUsage(raw: unknown): UsageInfo | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const u = raw as Record<string, unknown>;
+  const details = u.prompt_tokens_details as Record<string, unknown> | undefined;
+
+  const usage: UsageInfo = {};
+  if (typeof u.prompt_tokens === "number") usage.input_tokens = u.prompt_tokens;
+  if (typeof u.completion_tokens === "number") usage.output_tokens = u.completion_tokens;
+
+  if (details) {
+    const cached = details.cached_tokens;
+    if (typeof cached === "number" && cached > 0) {
+      // OpenAI counts cached tokens inside prompt_tokens; split them out so
+      // downstream cost math can apply the cache-read multiplier.
+      usage.cache_read_input_tokens = cached;
+      if (typeof usage.input_tokens === "number") {
+        usage.input_tokens = Math.max(0, usage.input_tokens - cached);
+      }
+    }
+    const created = details.cache_creation_tokens;
+    if (typeof created === "number" && created > 0) {
+      usage.cache_creation_input_tokens = created;
+    }
+  }
+
+  return Object.keys(usage).length > 0 ? usage : undefined;
 }

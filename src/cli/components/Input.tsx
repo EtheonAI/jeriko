@@ -20,7 +20,7 @@
 
 import React, { useState, useRef, useCallback } from "react";
 import { Text, Box, useInput } from "ink";
-import { PALETTE } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
 import { slashCompleter, SLASH_COMMANDS } from "../commands.js";
 import {
   shouldShowAutocomplete,
@@ -70,6 +70,8 @@ interface InputProps {
 // ---------------------------------------------------------------------------
 
 export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) => {
+  const { colors } = useTheme();
+
   // Buffer is an array of lines for multi-line support
   const [lines, setLines] = useState<string[]>([""]);
   const [cursorLine, setCursorLine] = useState(0);
@@ -87,7 +89,7 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
   });
 
   const isIdle = phase === "idle";
-  const isInteractive = phase === "wizard" || phase === "setup";
+  const isInteractive = phase === "wizard";
 
   // ----- Helpers -----
 
@@ -479,12 +481,12 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor={PALETTE.faint}
+        borderColor={colors.faint}
         paddingX={1}
       >
         <Text>
-          <Text color={PALETTE.dim}>{"\u276F "}</Text>
-          <Text color={PALETTE.dim}>
+          <Text color={colors.dim}>{"\u276F "}</Text>
+          <Text color={colors.dim}>
             {lines[0] || " "}
           </Text>
         </Text>
@@ -498,13 +500,13 @@ export const Input: React.FC<InputProps> = ({ phase, onSubmit, onInterrupt }) =>
       <Box
         flexDirection="column"
         borderStyle="round"
-        borderColor={PALETTE.dim}
+        borderColor={colors.dim}
         paddingX={1}
       >
         {lines.map((line, lineIdx) => {
           const isCurrentLine = lineIdx === cursorLine;
           const prompt = lineIdx === 0 ? "\u276F " : "  ";
-          const promptColor = lineIdx === 0 ? PALETTE.brand : PALETTE.dim;
+          const promptColor = lineIdx === 0 ? colors.brand : colors.dim;
 
           if (isCurrentLine) {
             const before = line.slice(0, cursorCol);

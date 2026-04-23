@@ -19,19 +19,16 @@ import { Box, useApp } from "ink";
 import { randomUUID } from "node:crypto";
 
 import type { Backend, BackendCallbacks } from "./backend.js";
-import { persistSetup } from "./backend.js";
 import { isExitCommand, parseSlashCommand, SUB_AGENT_TOOLS } from "./commands.js";
 import { capitalize, formatError, safeParseJson } from "./format.js";
 import { t } from "./theme.js";
 import type { Phase, DisplayToolCall } from "./types.js";
-import type { ProviderOption } from "./lib/setup.js";
 import { useAppState } from "./hooks/useAppReducer.js";
 import { useSlashCommands } from "./hooks/useSlashCommands.js";
 
 import { Messages, StreamingText } from "./components/Messages.js";
 import { Input } from "./components/Input.js";
 import { StatusBar } from "./components/StatusBar.js";
-import { Setup } from "./components/Setup.js";
 
 import { ToolCallView } from "./components/ToolCall.js";
 import { SubAgentView, SubAgentList } from "./components/SubAgent.js";
@@ -308,28 +305,6 @@ export const App: React.FC<AppProps> = ({
 
   // ----- Setup complete handler -----
 
-  const handleSetupComplete = useCallback(
-    async (provider: ProviderOption, apiKey: string) => {
-      try {
-        await persistSetup(provider, apiKey);
-        dispatch({ type: "SET_MODEL", model: provider.model });
-        backend.setModel(provider.model);
-        dispatch({ type: "SET_PHASE", phase: "idle" });
-        addSystemMessage(t.green("✓ Setup complete!"));
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addSystemMessage(formatError(`Setup failed: ${msg}`));
-        dispatch({ type: "SET_PHASE", phase: "idle" });
-      }
-    },
-    [backend, addSystemMessage, dispatch],
-  );
-
-  const handleSetupCancel = useCallback(() => {
-    dispatch({ type: "SET_PHASE", phase: "idle" });
-    addSystemMessage("Setup cancelled. Run /config to configure later.");
-  }, [dispatch, addSystemMessage]);
-
   const handleWizardCancel = useCallback(() => {
     dispatch({ type: "SET_PHASE", phase: "idle" });
   }, [dispatch]);
@@ -381,10 +356,7 @@ export const App: React.FC<AppProps> = ({
           onInterrupt={handleInterrupt}
         />
 
-        {/* Setup wizard (first launch) */}
-        {state.phase === "setup" && <Setup onComplete={handleSetupComplete} onCancel={handleSetupCancel} />}
-
-        {/* Generic interactive wizard */}
+        {/* Wizard — single engine for onboarding + every slash-command flow */}
         {state.phase === "wizard" && wizardConfigRef.current && (
           <Wizard
             config={wizardConfigRef.current}

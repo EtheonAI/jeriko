@@ -54,21 +54,18 @@ describe("computeContextBar", () => {
     expect(result.percentage).toBeCloseTo(0.7, 1);
   });
 
-  test("yellow color below 80%", () => {
+  test("warning tone below 80%", () => {
     const result = computeContextBar(120_000, makeContext());
     expect(result.visible).toBe(true);
-    // Should use warning color (not error) at 60%
-    const { PALETTE } = require("../../../../src/cli/theme.js");
-    expect(result.color).toBe(PALETTE.warning);
+    // Returns a semantic tone — theme-invariant and easier to reason about.
+    expect(result.tone).toBe("warning");
   });
 
-  test("red color at 80%+", () => {
+  test("error tone at 80%+", () => {
     const result = computeContextBar(170_000, makeContext());
     expect(result.visible).toBe(true);
     expect(result.percentage).toBeGreaterThanOrEqual(0.8);
-    // Should use error color
-    const { PALETTE } = require("../../../../src/cli/theme.js");
-    expect(result.color).toBe(PALETTE.error);
+    expect(result.tone).toBe("error");
   });
 
   test("percentage capped at 100%", () => {

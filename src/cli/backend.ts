@@ -1423,6 +1423,8 @@ async function registerTools(): Promise<void> {
     import("../daemon/agent/tools/browse.js"),
     import("../daemon/agent/tools/parallel.js"),
     import("../daemon/agent/tools/delegate.js"),
+    import("../daemon/agent/tools/spawn_agent.js"),
+    import("../daemon/agent/tools/task_status.js"),
     import("../daemon/agent/tools/connector.js"),
     import("../daemon/agent/tools/skill.js"),
     import("../daemon/agent/tools/webdev.js"),
@@ -1499,6 +1501,15 @@ async function loadSystemPrompt(): Promise<string> {
     }
   } catch {
     // Non-fatal — memory is optional
+  }
+
+  // Project instruction discovery (mirrors kernel step — backend parity).
+  try {
+    const { buildInstructionsBlock } = await import("../daemon/agent/instructions/index.js");
+    const block = buildInstructionsBlock();
+    if (block.text) systemPrompt = systemPrompt + "\n\n" + block.text;
+  } catch {
+    // Non-fatal — project instruction discovery never blocks startup.
   }
 
   return systemPrompt;

@@ -23,6 +23,8 @@ import billing from "./migrations/0005_billing.sql" with { type: "text" };
 
 import billingConsent from "./migrations/0006_billing_consent.sql" with { type: "text" };
 
+import subagentTasks from "./migrations/0007_subagent_tasks.sql" with { type: "text" };
+
 export interface Migration {
   filename: string;
   sql: string;
@@ -39,4 +41,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { filename: "0004_share.sql", sql: share },
   { filename: "0005_billing.sql", sql: billing },
   { filename: "0006_billing_consent.sql", sql: billingConsent },
+  { filename: "0007_subagent_tasks.sql", sql: subagentTasks },
 ];

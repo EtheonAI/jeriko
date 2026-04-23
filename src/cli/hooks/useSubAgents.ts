@@ -1,5 +1,5 @@
 /**
- * useSubAgents — Derived state hook for sub-agent live monitoring.
+ * useSubAgents — derived state hook for sub-agent live monitoring.
  *
  * Takes the raw Map<string, SubAgentState> from the reducer and provides:
  *   - sorted list of agents (running first, then completed, then error)
@@ -12,9 +12,10 @@
 
 import { useMemo } from "react";
 import type { SubAgentState } from "../types.js";
+import type { Tone } from "../ui/types.js";
 
 // ---------------------------------------------------------------------------
-// Types
+// Phase ordering
 // ---------------------------------------------------------------------------
 
 /** Phase ordering for sort: running first, then completed, then error. */
@@ -24,8 +25,15 @@ const PHASE_ORDER: Record<SubAgentState["phase"], number> = {
   error: 2,
 };
 
+// ---------------------------------------------------------------------------
+// Agent-type color mapping
+// ---------------------------------------------------------------------------
+
 /**
- * Agent type badge metadata — maps agent type to PALETTE color key.
+ * Agent type badge metadata — maps agent type to a semantic `Tone`.
+ *
+ * Every tone resolves to a live theme color via `resolveTone()` at render
+ * time, so swapping themes restyles badges without any data changes here.
  *
  * Covers all agent types used by the delegate tool:
  *   - Core types: general, research, task, explore, plan
@@ -33,64 +41,61 @@ const PHASE_ORDER: Record<SubAgentState["phase"], number> = {
  *   - Search types: search, browse, analyze
  *   - Infra types: execute, deploy, test
  */
-export const AGENT_TYPE_COLORS: Record<string, string> = {
+export const AGENT_TYPE_COLORS: Record<string, Tone> = {
   // Core
   general:  "text",
-  research: "cyan",
-  task:     "green",
-  explore:  "blue",
+  research: "info",
+  task:     "success",
+  explore:  "tool",
   plan:     "purple",
 
   // Code
   code:     "teal",
   review:   "orange",
-  debug:    "red",
-  write:    "green",
+  debug:    "error",
+  write:    "success",
   edit:     "teal",
 
   // Search & analysis
-  search:   "cyan",
-  browse:   "blue",
+  search:   "info",
+  browse:   "tool",
   analyze:  "purple",
 
   // Infra
   execute:  "orange",
   deploy:   "pink",
-  test:     "green",
+  test:     "success",
 };
 
-/** Derived sub-agent state for rendering. */
+// ---------------------------------------------------------------------------
+// Derived state shape
+// ---------------------------------------------------------------------------
+
 export interface SubAgentDerived {
   /** All agents sorted: running → completed → error, then by start time. */
-  sorted: SubAgentState[];
+  readonly sorted: SubAgentState[];
   /** Count of agents in "running" phase. */
-  runningCount: number;
+  readonly runningCount: number;
   /** Count of agents in "completed" phase. */
-  completedCount: number;
+  readonly completedCount: number;
   /** Count of agents in "error" phase. */
-  errorCount: number;
+  readonly errorCount: number;
   /** Total number of agents tracked. */
-  total: number;
+  readonly total: number;
   /** Whether any agent is currently running. */
-  hasRunning: boolean;
+  readonly hasRunning: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Pure derivation function (testable without React)
 // ---------------------------------------------------------------------------
 
-/**
- * Derive sorted list and counts from the raw sub-agent map.
- * Pure function — no React dependency, fully testable.
- */
 export function deriveSubAgentState(
   agents: Map<string, SubAgentState>,
 ): SubAgentDerived {
   const sorted = Array.from(agents.values()).sort((a, b) => {
-    // Primary: phase order (running → completed → error)
     const phaseSort = PHASE_ORDER[a.phase] - PHASE_ORDER[b.phase];
     if (phaseSort !== 0) return phaseSort;
-    // Secondary: start time (oldest first)
     return a.startTime - b.startTime;
   });
 
@@ -100,15 +105,9 @@ export function deriveSubAgentState(
 
   for (const agent of sorted) {
     switch (agent.phase) {
-      case "running":
-        runningCount++;
-        break;
-      case "completed":
-        completedCount++;
-        break;
-      case "error":
-        errorCount++;
-        break;
+      case "running":   runningCount++;   break;
+      case "completed": completedCount++; break;
+      case "error":     errorCount++;     break;
     }
   }
 
@@ -136,10 +135,22 @@ export function useSubAgents(
   return useMemo(() => deriveSubAgentState(agents), [agents]);
 }
 
+// ---------------------------------------------------------------------------
+// Tone resolution for agent types
+// ---------------------------------------------------------------------------
+
 /**
- * Get the PALETTE color key for an agent type.
- * Returns the string key into PALETTE, not the color hex itself.
+ * Resolve an agent type to a semantic Tone. Returns "purple" for unknown
+ * types as a distinctive fallback (matches the default used by the
+ * orchestrator for sub-delegations).
  */
-export function getAgentTypeColor(agentType: string): string {
+export function getAgentTypeTone(agentType: string): Tone {
   return AGENT_TYPE_COLORS[agentType] ?? AGENT_TYPE_COLORS.general ?? "purple";
 }
+
+/**
+ * Back-compat export — kept so callers that used `getAgentTypeColor`
+ * (returning a string that was an implicit Tone) continue to compile.
+ * New code should import `getAgentTypeTone` directly.
+ */
+export const getAgentTypeColor = getAgentTypeTone;

@@ -18,6 +18,11 @@ function safeParseArgs(json: string): Record<string, unknown> {
 // Anthropic API shapes
 // ---------------------------------------------------------------------------
 
+/** Anthropic prompt cache control marker (applied to the last block of a cached segment). */
+export interface AnthropicCacheControl {
+  type: "ephemeral";
+}
+
 export interface AnthropicContentBlock {
   type: "text" | "tool_use" | "tool_result" | "thinking" | "image";
   text?: string;
@@ -29,12 +34,23 @@ export interface AnthropicContentBlock {
   content?: string;
   /** Image source — Anthropic's native vision format. */
   source?: { type: "base64"; media_type: string; data: string };
+  /** Mark this block as a cache breakpoint — Anthropic caches the prefix up to & including it. */
+  cache_control?: AnthropicCacheControl;
+}
+
+/** A system-prompt segment — array form required to carry cache_control. */
+export interface AnthropicSystemBlock {
+  type: "text";
+  text: string;
+  cache_control?: AnthropicCacheControl;
 }
 
 export interface AnthropicToolDef {
   name: string;
   description: string;
   input_schema: Record<string, unknown>;
+  /** Mark the last tool as a cache breakpoint so tools → system is cached. */
+  cache_control?: AnthropicCacheControl;
 }
 
 export interface AnthropicMessage {
@@ -190,11 +206,16 @@ export function buildAnthropicHeaders(
 
 /**
  * Build the Anthropic Messages API request body.
+ *
+ * The `converted.system` field may be either a raw string (non-cached) or a
+ * pre-decorated array of `AnthropicSystemBlock` (cache-aware). Callers route
+ * through the cache module's `decorateAnthropicRequest()` when they want
+ * prompt caching and pass the decorated shape straight through here.
  */
 export function buildAnthropicRequestBody(
   config: DriverConfig,
   converted: {
-    system: string | undefined;
+    system: string | AnthropicSystemBlock[] | undefined;
     messages: AnthropicMessage[];
     tools: AnthropicToolDef[] | undefined;
   },
@@ -206,8 +227,8 @@ export function buildAnthropicRequestBody(
     stream: true,
   };
 
-  if (converted.system) body.system = converted.system;
-  if (config.system_prompt && !converted.system) body.system = config.system_prompt;
+  const system = converted.system ?? config.system_prompt;
+  if (system !== undefined) body.system = system;
   body.messages = converted.messages;
   if (converted.tools) body.tools = converted.tools;
 

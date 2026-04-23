@@ -14,12 +14,8 @@ import type {
 } from "./index.js";
 import { withTimeout } from "./signal.js";
 import { parseAnthropicStream } from "./anthropic-stream.js";
-import {
-  convertToAnthropicMessages,
-  convertToAnthropicTools,
-  buildAnthropicRequestBody,
-  buildAnthropicHeaders,
-} from "./anthropic-shared.js";
+import { buildAnthropicHeaders } from "./anthropic-shared.js";
+import { buildCachedAnthropicRequest } from "../cache/anthropic-build.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -50,15 +46,12 @@ export class AnthropicDriver implements LLMDriver {
     messages: DriverMessage[],
     config: DriverConfig,
   ): AsyncGenerator<StreamChunk> {
-    const { system, messages: converted } = convertToAnthropicMessages(messages);
-    const tools = convertToAnthropicTools(config);
-
     const headers = buildAnthropicHeaders(
       { apiKey: this.apiKey, baseUrl: this.baseUrl },
       config,
     );
 
-    const body = buildAnthropicRequestBody(config, { system, messages: converted, tools });
+    const { body } = buildCachedAnthropicRequest({ messages, config });
 
     const signal = withTimeout(config.signal);
     let response: Response;
