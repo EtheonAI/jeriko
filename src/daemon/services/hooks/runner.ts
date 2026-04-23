@@ -22,6 +22,12 @@ const log = getLogger();
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_STDOUT_BYTES = 64 * 1024;
+/**
+ * Grace period between SIGTERM and SIGKILL when a hook blows its timeout.
+ * Mirrors `safeSpawn` — some shells/commands ignore SIGTERM (notably `sleep`
+ * on Linux), so we escalate to SIGKILL if the process is still alive.
+ */
+const KILL_GRACE_MS = 250;
 
 // Zod schema mirrors the `HookDecision` union so malformed responses don't
 // crash the agent loop — they degrade to `allow`.
@@ -110,16 +116,30 @@ async function runOneHook(
   let truncated = false;
 
   return await new Promise<HookDecision>((resolve) => {
+    // `detached: true` puts the child in its own process group so we can
+    // signal the whole tree with `process.kill(-pid, …)`. Without this,
+    // `shell: true` leaves the shell's children (e.g. a blocking `sleep`)
+    // running after the shell itself exits, and a stuck hook can keep
+    // occupying the event loop for the full wall-clock of the subcommand.
     const child = spawn(entry.command, {
       shell: true,
+      detached: true,
       env: { ...process.env, ...(entry.env ?? {}) } as NodeJS.ProcessEnv,
       stdio: ["pipe", "pipe", "pipe"],
     });
 
-    const timer = setTimeout(() => {
+    let killTimer: NodeJS.Timeout | null = null;
+    const escalateKill = (): void => {
       log.warn(`Hook "${entry.command}" timed out after ${timeoutMs}ms — allowing`);
-      child.kill("SIGTERM");
-    }, timeoutMs);
+      if (child.pid === undefined) return;
+      try { process.kill(-child.pid, "SIGTERM"); } catch { /* already dead */ }
+      killTimer = setTimeout(() => {
+        if (child.pid === undefined) return;
+        try { process.kill(-child.pid, "SIGKILL"); } catch { /* already dead */ }
+      }, KILL_GRACE_MS);
+    };
+
+    const timer = setTimeout(escalateKill, timeoutMs);
 
     child.stdout.setEncoding("utf-8");
     child.stdout.on("data", (chunk: string) => {
@@ -137,12 +157,14 @@ async function runOneHook(
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       log.warn(`Hook "${entry.command}" failed to start: ${err.message}`);
       resolve(ALLOW);
     });
 
     child.on("close", () => {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (stderr.trim()) log.debug(`Hook "${entry.command}" stderr: ${stderr.trimEnd()}`);
       resolve(parseDecision(stdout, entry.command));
     });
@@ -151,6 +173,7 @@ async function runOneHook(
       child.stdin.end(JSON.stringify(payload));
     } catch (err) {
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       log.warn(`Hook "${entry.command}" stdin write failed: ${err}`);
       resolve(ALLOW);
     }
