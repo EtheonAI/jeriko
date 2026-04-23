@@ -10,7 +10,6 @@
 // compaction, max output) reads from this registry.
 
 import { getLogger } from "../../../shared/logger.js";
-import { DEFAULT_CONTEXT_LIMIT } from "../../../shared/tokens.js";
 import {
   type CustomModel,
   type ProviderConfig,
@@ -110,6 +109,15 @@ const STATIC_ALIASES: Record<string, Record<string, string>> = {
     cc:            "claude-sonnet-4-6",
   },
 };
+
+/**
+ * Ultra-conservative context window used when a totally unknown provider/model
+ * is queried and no family cross-reference applies. Sized so a single turn
+ * fits comfortably but huge prompts are rejected by the caps check — safer
+ * than inheriting the global default limit and silently accepting oversize
+ * inputs against a provider we know nothing about.
+ */
+const UNKNOWN_PROVIDER_CONTEXT_TOKENS = 24_000;
 
 /** Fallback capabilities — ONLY used when models.dev AND Ollama probe both fail.
  *  The local "llama3" ID is a last-resort fallback; at runtime, resolveModel()
@@ -684,10 +692,10 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
   // models by matching against the models.dev family data (e.g., a "deepseek-chat-v3"
   // model on OpenRouter inherits DeepSeek V3's known capabilities).
   //
-  // Only applies when no built-in provider fallback exists — built-in providers
-  // (anthropic, openai, local, claude-code) have intentional fallback caps that
-  // override model-level data (e.g., claude-code disables toolCall by design).
-  if (familyCrossRef.size > 0 && !FALLBACK_CAPS[provider]) {
+  // Only apply this for registered custom providers. Unknown providers stay
+  // ultra-conservative; otherwise a random provider/model string could inherit
+  // an unrelated family's caps and silently look more capable than it is.
+  if (familyCrossRef.size > 0 && !FALLBACK_CAPS[provider] && isKnownProvider(provider)) {
     const matchKeys = generateMatchKeys(modelId);
     for (const matchKey of matchKeys) {
       const ref = familyCrossRef.get(matchKey);
@@ -708,12 +716,12 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
   const fallback = FALLBACK_CAPS[provider];
   if (fallback) return { ...fallback, id: modelId };
 
-  // 5. Ultra-conservative default
+  // 5. Ultra-conservative default for truly unknown providers.
   return {
     id: modelId,
     provider,
     family: "unknown",
-    context: DEFAULT_CONTEXT_LIMIT,
+    context: UNKNOWN_PROVIDER_CONTEXT_TOKENS,
     maxOutput: 4_096,
     toolCall: false,
     reasoning: false,
@@ -861,8 +869,14 @@ export function buildModelList(opts: {
   customProviders?: ReadonlyArray<Pick<ProviderConfig, "id" | "name" | "defaultModel" | "models">>;
   /** User's curated model list from config.agent.customModels. */
   customModels?: ReadonlyArray<string | CustomModel>;
+  /**
+   * When true, only show pinned / custom models. Suppresses the full
+   * models.dev catalog and custom-provider enumerations so the picker stays
+   * short for power users who only use a few models.
+   */
+  pinnedOnly?: boolean;
 }): ModelListEntry[] {
-  const { configuredProviders, customProviders = [], customModels = [] } = opts;
+  const { configuredProviders, customProviders = [], customModels = [], pinnedOnly = false } = opts;
 
   const pinnedSpecs = buildPinnedSpecSet(customModels);
   const seen = new Set<string>();
@@ -876,21 +890,25 @@ export function buildModelList(opts: {
     results.push(capsToEntry(caps, pinnedSpecs.has(key), displayName));
   }
 
-  // 1. Registry models — cloud (models.dev) + local (Ollama probe cache)
-  for (const caps of listModels()) {
-    if (configuredProviders.has(caps.provider)) add(caps);
-  }
-
-  // 2. Custom provider models from config (may not be in models.dev)
-  for (const provider of customProviders) {
-    if (provider.defaultModel && !seen.has(`${provider.id}:${provider.defaultModel}`)) {
-      add(getCapabilities(provider.id, provider.defaultModel), provider.name);
+  if (!pinnedOnly) {
+    // 1. Registry models — cloud (models.dev) + local (Ollama probe cache)
+    for (const caps of listModels()) {
+      if (configuredProviders.has(caps.provider)) add(caps);
     }
-    if (provider.models) {
-      for (const [alias, modelId] of Object.entries(provider.models)) {
-        if (!seen.has(`${provider.id}:${modelId}`)) {
-          const caps = getCapabilities(provider.id, modelId);
-          add({ ...caps, id: modelId, provider: provider.id }, alias);
+
+    // 2. Custom provider models from config (may not be in models.dev)
+    for (const provider of customProviders) {
+      if (provider.defaultModel && !seen.has(`${provider.id}:${provider.defaultModel}`)) {
+        add(getCapabilities(provider.id, provider.defaultModel), provider.name);
+      }
+      if (provider.models) {
+        for (const [alias, modelId] of Object.entries(provider.models)) {
+          // Guard against malformed custom-provider configs where a value isn't a string.
+          if (typeof modelId !== "string") continue;
+          if (!seen.has(`${provider.id}:${modelId}`)) {
+            const caps = getCapabilities(provider.id, modelId);
+            add({ ...caps, id: modelId, provider: provider.id }, alias);
+          }
         }
       }
     }

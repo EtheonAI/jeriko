@@ -9,7 +9,8 @@
 //   3. persistChannelConfig() — write to ~/.config/jeriko/config.json
 //   4. removeChannelConfig() — delete from config.json
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { writeSecretFile } from "../../../shared/secret-file.js";
 import { join } from "node:path";
 import { getConfigDir } from "../../../shared/config.js";
 import { getLogger } from "../../../shared/logger.js";
@@ -233,7 +234,8 @@ function readConfig(): Record<string, unknown> {
 }
 
 function writeConfig(config: Record<string, unknown>): void {
-  writeFileSync(getConfigPath(), JSON.stringify(config, null, 2) + "\n");
+  // Channel config can hold bot tokens and webhook secrets — owner-only perms.
+  writeSecretFile(getConfigPath(), JSON.stringify(config, null, 2) + "\n");
 }
 
 /** Persist a channel's config entry to config.json. */

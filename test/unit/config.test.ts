@@ -1,6 +1,5 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
+import { describe, expect, it, beforeEach, afterEach, mock } from "bun:test";
 import { loadConfig, getConfigDir, getDataDir, getUserId } from "../../src/shared/config.js";
-import { homedir } from "node:os";
 
 describe("config", () => {
   it("loadConfig returns valid defaults", () => {
@@ -34,6 +33,32 @@ describe("config", () => {
   it("getDataDir returns a path under home", () => {
     const dir = getDataDir();
     expect(dir).toContain("jeriko");
+  });
+
+  it("loadConfig warns when a config file contains malformed JSON", () => {
+    const warn = mock(() => {});
+    const originalWarn = console.warn;
+    console.warn = warn;
+
+    try {
+      process.env.XDG_CONFIG_HOME = "/tmp/jeriko-test-malformed-config";
+      const { mkdirSync, writeFileSync, rmSync } = require("node:fs");
+      const { join } = require("node:path");
+      const configDir = join(process.env.XDG_CONFIG_HOME, "jeriko");
+      rmSync(process.env.XDG_CONFIG_HOME, { recursive: true, force: true });
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, "config.json"), "{ invalid json ");
+
+      const config = loadConfig();
+      expect(config.agent).toBeTruthy();
+      expect(warn).toHaveBeenCalled();
+      expect(String(warn.mock.calls[0]?.[0] ?? "")).toContain("malformed JSON");
+    } finally {
+      delete process.env.XDG_CONFIG_HOME;
+      console.warn = originalWarn;
+      const { rmSync } = require("node:fs");
+      rmSync("/tmp/jeriko-test-malformed-config", { recursive: true, force: true });
+    }
   });
 });
 

@@ -15,8 +15,13 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getLogger } from "../../../shared/logger.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
 
 const log = getLogger();
+
+/** Retry budget for single-shot image generation — see tts.ts for rationale. */
+const MEDIA_HTTP_RETRIES = 2;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -126,7 +131,7 @@ async function generateOpenAI(
     ? `${baseUrl}/images/generations`
     : `${baseUrl}/v1/images/generations`;
 
-  const response = await fetch(url, {
+  const response = await withHttpRetry(() => fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -141,11 +146,11 @@ async function generateOpenAI(
       response_format: "url",
     }),
     signal: AbortSignal.timeout(120_000),
-  });
+  }), { maxRetries: MEDIA_HTTP_RETRIES });
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`DALL-E 3 error ${response.status}: ${errorText}`);
+    throw new Error(`DALL-E 3 error ${response.status}: ${redact(errorText)}`);
   }
 
   const result = (await response.json()) as {
@@ -158,9 +163,9 @@ async function generateOpenAI(
   }
 
   // Download the generated image to a local file
-  const imageResponse = await fetch(imageData.url, {
+  const imageResponse = await withHttpRetry(() => fetch(imageData.url!, {
     signal: AbortSignal.timeout(60_000),
-  });
+  }), { maxRetries: MEDIA_HTTP_RETRIES });
 
   if (!imageResponse.ok) {
     throw new Error(`Failed to download generated image: HTTP ${imageResponse.status}`);

@@ -20,6 +20,11 @@ import type { ProviderConfig } from "../../../shared/config.js";
 import { resolveEnvRef } from "../../../shared/env-ref.js";
 import { parseOpenAIStream } from "./openai-stream.js";
 import { withTimeout } from "./signal.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
+import { getLogger } from "../../../shared/logger.js";
+
+const log = getLogger();
 
 // ---------------------------------------------------------------------------
 // Internal types (OpenAI API shapes)
@@ -209,24 +214,34 @@ export class OpenAICompatibleDriver implements LLMDriver {
     }
 
     const signal = withTimeout(config.signal);
+    const serialized = JSON.stringify(body);
+    const providerName = this.config.name;
+
     let response: Response;
     try {
-      response = await fetch(this.chatEndpoint, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal,
-      });
+      response = await withHttpRetry(
+        () => fetch(this.chatEndpoint, { method: "POST", headers, body: serialized, signal }),
+        {
+          onRetry: ({ attempt, delayMs, status }) => {
+            log.debug(
+              `${providerName} retry: status=${status} attempt=${attempt + 1} delay=${Math.round(delayMs)}ms`,
+            );
+          },
+        },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      yield { type: "error", content: `${this.config.name} request failed: ${msg}` };
+      yield { type: "error", content: `${providerName} request failed: ${msg}` };
       yield { type: "done", content: "" };
       return;
     }
 
     if (!response.ok) {
       const errorText = await response.text();
-      yield { type: "error", content: `${this.config.name} API error ${response.status}: ${errorText}` };
+      yield {
+        type: "error",
+        content: `${providerName} API error ${response.status}: ${redact(errorText)}`,
+      };
       yield { type: "done", content: "" };
       return;
     }

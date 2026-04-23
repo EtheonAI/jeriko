@@ -5,6 +5,9 @@
 // Message conversion, tool conversion, and SSE parsing are delegated to shared
 // modules (anthropic-shared.ts, anthropic-stream.ts), also used by
 // AnthropicCompatibleDriver for custom Anthropic-protocol providers.
+//
+// Transport resilience (retry / backoff / Retry-After) is delegated to
+// `shared/http-retry` so every driver + connector shares the same discipline.
 
 import type {
   LLMDriver,
@@ -16,16 +19,12 @@ import { withTimeout } from "./signal.js";
 import { parseAnthropicStream } from "./anthropic-stream.js";
 import { buildAnthropicHeaders } from "./anthropic-shared.js";
 import { buildCachedAnthropicRequest } from "../cache/anthropic-build.js";
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
+import { getLogger } from "../../../shared/logger.js";
 
 const DEFAULT_BASE_URL = "https://api.anthropic.com";
-
-// ---------------------------------------------------------------------------
-// Driver
-// ---------------------------------------------------------------------------
+const log = getLogger();
 
 export class AnthropicDriver implements LLMDriver {
   readonly name = "anthropic";
@@ -51,17 +50,34 @@ export class AnthropicDriver implements LLMDriver {
       config,
     );
 
+    // Prompt-caching aware body builder — places `cache_control` breakpoints
+    // at stable segments so subsequent turns hit the Anthropic prompt cache.
     const { body } = buildCachedAnthropicRequest({ messages, config });
 
     const signal = withTimeout(config.signal);
+    const url = `${this.baseUrl}/v1/messages`;
+    const serialized = JSON.stringify(body);
+
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/v1/messages`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        signal,
-      });
+      response = await withHttpRetry(
+        () => fetch(url, { method: "POST", headers, body: serialized, signal }),
+        {
+          onRetry: ({ attempt, delayMs, status, reason }) => {
+            if (status === 429) {
+              log.warn(
+                `Anthropic rate-limited (429). Retrying in ${Math.round(delayMs)}ms ` +
+                `(attempt ${attempt + 1}).`,
+              );
+            } else {
+              log.debug(
+                `Anthropic retry: status=${status} attempt=${attempt + 1} ` +
+                `delay=${Math.round(delayMs)}ms reason="${reason}"`,
+              );
+            }
+          },
+        },
+      );
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       yield { type: "error", content: `Anthropic request failed: ${msg}` };
@@ -71,7 +87,10 @@ export class AnthropicDriver implements LLMDriver {
 
     if (!response.ok) {
       const errorText = await response.text();
-      yield { type: "error", content: `Anthropic API error ${response.status}: ${errorText}` };
+      yield {
+        type: "error",
+        content: `Anthropic API error ${response.status}: ${redact(errorText)}`,
+      };
       yield { type: "done", content: "" };
       return;
     }

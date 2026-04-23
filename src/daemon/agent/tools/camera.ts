@@ -7,6 +7,14 @@ import type { ToolDefinition } from "./registry.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
+import { safeSpawn } from "../../../shared/spawn-safe.js";
+
+/**
+ * Wall-clock ceiling for a single frame capture. Broken USB cameras and
+ * stuck drivers are the classic `fswebcam` hang vector; 20 s is far more
+ * than any working capture needs.
+ */
+const CAMERA_CAPTURE_TIMEOUT_MS = 20_000;
 
 /** Capture a photo from the webcam using platform-specific tools. */
 async function capturePhoto(): Promise<{ path: string }> {
@@ -21,29 +29,30 @@ async function capturePhoto(): Promise<{ path: string }> {
   }
 
   if (platform === "linux") {
-    // fswebcam is the standard Linux webcam CLI (apt install fswebcam)
-    const { spawn } = await import("node:child_process");
-    return new Promise<{ path: string }>((resolve, reject) => {
-      const proc = spawn("fswebcam", ["-r", "1280x720", "--no-banner", outputPath]);
-
-      proc.on("close", (code) => {
-        if (code === 0) {
-          resolve({ path: outputPath });
-        } else {
-          reject(new Error(
-            `fswebcam exited with code ${code}. Install it with: sudo apt install fswebcam`,
-          ));
-        }
-      });
-
-      proc.on("error", (err) => {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-          reject(new Error("fswebcam not found. Install it with: sudo apt install fswebcam"));
-        } else {
-          reject(new Error(`Camera capture failed: ${err.message}`));
-        }
-      });
+    // fswebcam is the standard Linux webcam CLI (apt install fswebcam).
+    // A hung USB camera would freeze the agent forever without the timeout.
+    const outcome = await safeSpawn({
+      command: "fswebcam",
+      args: ["-r", "1280x720", "--no-banner", outputPath],
+      timeoutMs: CAMERA_CAPTURE_TIMEOUT_MS,
     });
+
+    if (outcome.status === "exited" && outcome.code === 0) {
+      return { path: outputPath };
+    }
+    if (outcome.status === "error") {
+      const enoent = (outcome.error as NodeJS.ErrnoException).code === "ENOENT";
+      throw new Error(enoent
+        ? "fswebcam not found. Install it with: sudo apt install fswebcam"
+        : `Camera capture failed: ${outcome.error.message}`);
+    }
+    if (outcome.status === "timeout") {
+      throw new Error(`Camera capture timed out after ${outcome.timeoutMs}ms — camera may be disconnected`);
+    }
+    if (outcome.status === "exited") {
+      throw new Error(`fswebcam exited with code ${outcome.code}. Install it with: sudo apt install fswebcam`);
+    }
+    throw new Error("Camera capture aborted");
   }
 
   throw new Error(`Camera capture is not supported on ${platform}`);

@@ -13,8 +13,18 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { getLogger } from "../../../shared/logger.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
 
 const log = getLogger();
+
+/**
+ * Retry budget for one-shot TTS calls. Users are waiting for audio in real
+ * time; more than two retries just multiplies the perceived latency without
+ * meaningfully improving success rates (if cloud TTS is down, re-asking
+ * doesn't fix it).
+ */
+const MEDIA_HTTP_RETRIES = 2;
 
 /** Default max text length for TTS conversion (4096 chars). */
 const DEFAULT_MAX_LENGTH = 4096;
@@ -81,7 +91,7 @@ async function synthesizeOpenAI(
     ? `${baseUrl}/audio/speech`
     : `${baseUrl}/v1/audio/speech`;
 
-  const response = await fetch(url, {
+  const response = await withHttpRetry(() => fetch(url, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -94,11 +104,11 @@ async function synthesizeOpenAI(
       response_format: "opus",
     }),
     signal: AbortSignal.timeout(60_000),
-  });
+  }), { maxRetries: MEDIA_HTTP_RETRIES });
 
   if (!response.ok) {
     const errorText = await response.text();
-    log.warn(`TTS OpenAI error ${response.status}: ${errorText}`);
+    log.warn(`TTS OpenAI error ${response.status}: ${redact(errorText)}`);
     return null;
   }
 

@@ -1098,7 +1098,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     const configPath = pathJoin(configDir, "config.json");
     let fileConfig: Record<string, unknown> = {};
     if (fileExists(configPath)) {
-      fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      try {
+        fileConfig = JSON.parse(readFileSync(configPath, "utf-8"));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Config file is malformed JSON: ${configPath} (${message})`);
+      }
+      if (!fileConfig || typeof fileConfig !== "object" || Array.isArray(fileConfig)) {
+        throw new Error(`Config file must contain a JSON object: ${configPath}`);
+      }
     }
     return {
       fileConfig,
@@ -1960,7 +1968,15 @@ function installSignalHandlers(): void {
 
   // Catch unhandled errors — log, cleanup, exit non-zero
   process.on("uncaughtException", async (err) => {
-    log.error(`Uncaught exception: ${err.message}`, { stack: err.stack });
+    const { diagnosticsSnapshot } = await import("../shared/diagnostics.js");
+    const diag = diagnosticsSnapshot();
+    log.error(`Uncaught exception: ${err.message}`, {
+      stack: err.stack,
+      version: diag.version,
+      buildRef: diag.buildRef,
+      platform: diag.platform,
+      uptimeMs: diag.uptimeMs,
+    });
     await shutdown();
     for (const hook of shutdownHooks) {
       try { await hook(); } catch { /* best-effort */ }
@@ -1968,10 +1984,18 @@ function installSignalHandlers(): void {
     process.exit(1);
   });
 
-  process.on("unhandledRejection", (reason) => {
+  process.on("unhandledRejection", async (reason) => {
+    const { diagnosticsSnapshot } = await import("../shared/diagnostics.js");
+    const diag = diagnosticsSnapshot();
     const msg = reason instanceof Error ? reason.message : String(reason);
     const stack = reason instanceof Error ? reason.stack : undefined;
-    log.error(`Unhandled rejection: ${msg}`, { stack });
+    log.error(`Unhandled rejection: ${msg}`, {
+      stack,
+      version: diag.version,
+      buildRef: diag.buildRef,
+      platform: diag.platform,
+      uptimeMs: diag.uptimeMs,
+    });
     // Don't crash on unhandled rejections — log and continue
   });
 }

@@ -35,6 +35,15 @@ const DEFAULT_CLIENT_INFO: ClientInfo = {
   version: "2.0.0",
 };
 
+/**
+ * Per-call wall-clock ceiling. A server that never responds would
+ * otherwise leave the pending map unbounded and the caller hanging
+ * forever. Initialize uses the longer INITIALIZE budget; regular
+ * RPCs use the shorter CALL budget.
+ */
+const RPC_INITIALIZE_TIMEOUT_MS = 30_000;
+const RPC_CALL_TIMEOUT_MS = 60_000;
+
 export class McpRpcError extends Error {
   constructor(
     message: string,
@@ -77,6 +86,7 @@ export class McpClient {
         clientInfo: this.clientInfo,
         capabilities: { tools: {} },
       },
+      RPC_INITIALIZE_TIMEOUT_MS,
     );
 
     await this.transport.send(buildNotification("notifications/initialized"));
@@ -115,18 +125,38 @@ export class McpClient {
     }
   }
 
-  private async call<P, R>(method: string, params: P): Promise<R> {
+  private async call<P, R>(
+    method: string,
+    params: P,
+    timeoutMs: number = RPC_CALL_TIMEOUT_MS,
+  ): Promise<R> {
     const id: JsonRpcId = `${this.nextId++}-${randomUUID().slice(0, 8)}`;
     const request = buildRequest<P>(id, method, params);
 
     const response = await new Promise<JsonRpcResponse<R>>((resolve, reject) => {
-      this.pending.set(id, {
-        resolve: (msg) => resolve(msg as JsonRpcResponse<R>),
-        reject,
-      });
-      this.transport.send(request).catch((err) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = () => {
+        if (timer) clearTimeout(timer);
         this.pending.delete(id);
-        reject(err);
+      };
+
+      this.pending.set(id, {
+        resolve: (msg) => { finish(); resolve(msg as JsonRpcResponse<R>); },
+        reject: (err) => { finish(); reject(err); },
+      });
+
+      timer = setTimeout(() => {
+        const entry = this.pending.get(id);
+        if (entry) {
+          entry.reject(new McpRpcError(
+            `MCP ${method} timed out after ${timeoutMs}ms on ${this.serverName}`,
+          ));
+        }
+      }, timeoutMs);
+
+      this.transport.send(request).catch((err) => {
+        const entry = this.pending.get(id);
+        if (entry) entry.reject(err);
       });
     });
 

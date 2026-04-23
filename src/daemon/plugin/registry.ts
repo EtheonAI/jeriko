@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getLogger } from "../../shared/logger.js";
 import { getDataDir } from "../../shared/config.js";
+import { writeSecretFile } from "../../shared/secret-file.js";
 
 const log = getLogger();
 
@@ -169,15 +170,8 @@ export class PluginRegistry {
 
   private saveTrustStore(): void {
     try {
-      const dir = path.dirname(this.trustStorePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(
-        this.trustStorePath,
-        JSON.stringify(this.trustStore, null, 2),
-        "utf-8",
-      );
+      // Trust store carries plugin capability grants + manifest hashes — owner-only.
+      writeSecretFile(this.trustStorePath, JSON.stringify(this.trustStore, null, 2));
     } catch (err) {
       log.error(`Failed to save trust store: ${err}`);
     }

@@ -11,12 +11,20 @@
 // informative error instead of a mysterious failure, and should fall back
 // to a non-isolated run.
 
-import { spawn } from "node:child_process";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { getLogger } from "../../../shared/logger.js";
+import { safeSpawn } from "../../../shared/spawn-safe.js";
+
+/**
+ * Wall-clock ceiling for a single git operation in the worktree helper.
+ * `git worktree add` on a large repo is the slowest call; 60 s covers
+ * that with headroom while still cutting off a deadlocked config lock
+ * or hung `git status`.
+ */
+const GIT_COMMAND_TIMEOUT_MS = 60_000;
 
 const log = getLogger();
 
@@ -174,21 +182,31 @@ interface GitResult {
   stderr: string;
 }
 
-function runGit(cwd: string, args: readonly string[]): Promise<GitResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf-8"); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
-    child.on("error", (err) => reject(new WorktreeError(`git ${args.join(" ")} failed to start`, err)));
-    child.on("close", (code) => {
-      if (code === 0) resolve({ stdout, stderr });
-      else reject(new WorktreeError(
-        `git ${args.join(" ")} exited with code ${code}: ${stderr.trim() || stdout.trim()}`,
-      ));
-    });
+async function runGit(cwd: string, args: readonly string[]): Promise<GitResult> {
+  const outcome = await safeSpawn({
+    command: "git",
+    args,
+    cwd,
+    timeoutMs: GIT_COMMAND_TIMEOUT_MS,
   });
+
+  if (outcome.status === "exited" && outcome.code === 0) {
+    return { stdout: outcome.stdout, stderr: outcome.stderr };
+  }
+  if (outcome.status === "timeout") {
+    throw new WorktreeError(
+      `git ${args.join(" ")} timed out after ${outcome.timeoutMs}ms in ${cwd}`,
+    );
+  }
+  if (outcome.status === "error") {
+    throw new WorktreeError(`git ${args.join(" ")} failed to start`, outcome.error);
+  }
+  if (outcome.status === "aborted") {
+    throw new WorktreeError(`git ${args.join(" ")} aborted`);
+  }
+  throw new WorktreeError(
+    `git ${args.join(" ")} exited with code ${outcome.code}: ${outcome.stderr.trim() || outcome.stdout.trim()}`,
+  );
 }
 
 async function safeRm(path: string): Promise<void> {

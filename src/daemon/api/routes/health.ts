@@ -1,7 +1,7 @@
 // Health endpoint — returns daemon status, uptime, and subsystem health.
 
 import { Hono } from "hono";
-import { version } from "node:process";
+import { diagnosticsSnapshot } from "../../../shared/diagnostics.js";
 
 const startTime = Date.now();
 
@@ -17,20 +17,23 @@ export function healthRoutes(): Hono {
   router.get("/", (c) => {
     const uptimeMs = Date.now() - startTime;
     const uptimeSeconds = Math.floor(uptimeMs / 1000);
+    const diag = diagnosticsSnapshot();
 
     return c.json({
       ok: true,
       data: {
         status: "healthy",
-        version: process.env.JERIKO_VERSION ?? "dev",
-        node: version,
-        runtime: typeof Bun !== "undefined" ? "bun" : "node",
+        version: diag.version,
+        build_ref: diag.buildRef,
+        platform: diag.platform,
+        os_release: diag.osRelease,
+        runtime: diag.runtime,
         uptime_seconds: uptimeSeconds,
         uptime_human: formatUptime(uptimeSeconds),
         memory: {
           rss_mb: Math.round(process.memoryUsage.rss() / 1024 / 1024),
           heap_mb: Math.round(
-            (process.memoryUsage as any).heapUsed?.() ??
+            (process.memoryUsage as unknown as { heapUsed?: () => number }).heapUsed?.() ??
             process.memoryUsage.rss() / 2 / 1024 / 1024,
           ),
         },

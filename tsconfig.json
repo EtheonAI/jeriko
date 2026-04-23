@@ -21,8 +21,8 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
     "ignoreDeprecations": "6.0",
+    "baseUrl": ".",
     "paths": {
       "@jeriko/shared": ["./src/shared/index.ts"],
       "@jeriko/exec": ["./src/daemon/exec/index.ts"],

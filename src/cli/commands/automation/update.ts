@@ -152,20 +152,28 @@ async function downloadFile(url: string, outputPath: string): Promise<boolean> {
 /**
  * Download a release asset — tries CDN first, then direct GitHub release URL.
  */
-async function downloadAsset(version: string, assetName: string, outputPath: string): Promise<boolean> {
-  // Try CDN
-  const cdnUrl = `${CDN_URL}/releases/${version}/${assetName}`;
-  if (await downloadFile(cdnUrl, outputPath)) return true;
+function releaseBases(version: string): string[] {
+  return [
+    `${CDN_URL}/releases/${version}`,
+    `https://github.com/${GITHUB_REPO}/releases/download/v${version}`,
+    `https://github.com/${GITHUB_REPO}/releases/download/${version}`,
+  ];
+}
 
-  // Try GitHub release (with v prefix)
-  const ghUrl = `https://github.com/${GITHUB_REPO}/releases/download/v${version}/${assetName}`;
-  if (await downloadFile(ghUrl, outputPath)) return true;
+async function resolveReleaseBase(version: string, assetName: string): Promise<string | null> {
+  const probePath = join(DOWNLOAD_DIR, ".origin-probe");
+  for (const base of releaseBases(version)) {
+    if (await downloadFile(`${base}/${assetName}`, probePath)) {
+      try { unlinkSync(probePath); } catch { /* ignore */ }
+      return base;
+    }
+  }
+  try { unlinkSync(probePath); } catch { /* ignore */ }
+  return null;
+}
 
-  // Try GitHub release (without v prefix)
-  const ghUrl2 = `https://github.com/${GITHUB_REPO}/releases/download/${version}/${assetName}`;
-  if (await downloadFile(ghUrl2, outputPath)) return true;
-
-  return false;
+async function downloadAssetFromBase(base: string, assetName: string, outputPath: string): Promise<boolean> {
+  return downloadFile(`${base}/${assetName}`, outputPath);
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +342,8 @@ export const command: CommandHandler = {
     const binaryPath = join(DOWNLOAD_DIR, `jeriko-${targetVersion}-${currentPlatform}`);
 
     console.log(`\x1b[34m→\x1b[0m Downloading ${binaryAsset}...`);
-    if (!await downloadAsset(targetVersion, binaryAsset, binaryPath)) {
+    const releaseBase = await resolveReleaseBase(targetVersion, binaryAsset);
+    if (!releaseBase || !await downloadAssetFromBase(releaseBase, binaryAsset, binaryPath)) {
       fail(`Download failed for ${binaryAsset}. Check: https://github.com/${GITHUB_REPO}/releases`, 2);
       return;
     }
@@ -343,7 +352,7 @@ export const command: CommandHandler = {
     const manifestPath = join(DOWNLOAD_DIR, `manifest-${targetVersion}.json`);
     console.log(`\x1b[34m→\x1b[0m Verifying checksum...`);
 
-    if (!await downloadAsset(targetVersion, "manifest.json", manifestPath)) {
+    if (!await downloadAssetFromBase(releaseBase, "manifest.json", manifestPath)) {
       // Cleanup
       try { unlinkSync(binaryPath); } catch { /* ignore */ }
       fail("No manifest found — cannot verify binary integrity", 2);
@@ -375,7 +384,7 @@ export const command: CommandHandler = {
 
     // 7. Download agent system prompt
     const agentMdPath = join(DOWNLOAD_DIR, "agent.md");
-    if (await downloadAsset(targetVersion, "agent.md", agentMdPath)) {
+    if (await downloadAssetFromBase(releaseBase, "agent.md", agentMdPath)) {
       mkdirSync(CONFIG_DIR, { recursive: true });
       copyFileSync(agentMdPath, join(CONFIG_DIR, "agent.md"));
       console.log(`\x1b[32m✓\x1b[0m Agent prompt updated`);
