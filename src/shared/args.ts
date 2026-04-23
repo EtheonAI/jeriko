@@ -20,15 +20,21 @@ import type { ParsedArgs } from "./types.js";
 export function parseArgs(argv: string[]): ParsedArgs {
   const flags: Record<string, string | boolean> = {};
   const positional: string[] = [];
+  const positionalIndices: number[] = [];
   let i = 0;
   let restPositional = false;
+
+  const pushPositional = (arg: string, idx: number): void => {
+    positional.push(arg);
+    positionalIndices.push(idx);
+  };
 
   while (i < argv.length) {
     const arg = argv[i]!; // Safe: i < argv.length
 
     // After `--`, everything is positional
     if (restPositional) {
-      positional.push(arg);
+      pushPositional(arg, i);
       i++;
       continue;
     }
@@ -85,11 +91,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
 
     // Anything else is positional
-    positional.push(arg);
+    pushPositional(arg, i);
     i++;
   }
 
-  return { flags, positional };
+  return { flags, positional, positionalIndices };
 }
 
 /**

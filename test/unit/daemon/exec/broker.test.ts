@@ -25,7 +25,10 @@ afterEach(() => { registerBroker(null); });
 function lease(partial: Partial<ExecutionLease> = {}): ExecutionLease {
   return {
     agent: "test",
-    command: "ls -la",
+    // Default command is a custom binary the classifier can't categorize
+    // so tests exercise the risk-level path unless they opt into a
+    // classifier-recognized command explicitly.
+    command: "my-custom-binary --run",
     risk: "low",
     scope: "read",
     network: "none",
@@ -40,7 +43,7 @@ describe("defaultShouldAsk", () => {
     expect(defaultShouldAsk(lease({ risk: "low" }))).toBe(false);
   });
 
-  test("medium + high risk ask under the default policy", () => {
+  test("medium + high risk ask under the default policy for unclassified commands", () => {
     expect(defaultShouldAsk(lease({ risk: "medium" }))).toBe(true);
     expect(defaultShouldAsk(lease({ risk: "high" }))).toBe(true);
   });
@@ -50,13 +53,38 @@ describe("defaultShouldAsk", () => {
   });
 
   test("custom policies raise the threshold", () => {
-    const policy = { askAtOrAbove: "high" as RiskLevel };
+    const policy = { ...DEFAULT_BROKER_POLICY, askAtOrAbove: "high" as RiskLevel };
     expect(defaultShouldAsk(lease({ risk: "medium" }), policy)).toBe(false);
     expect(defaultShouldAsk(lease({ risk: "high" }), policy)).toBe(true);
   });
 
   test("DEFAULT_BROKER_POLICY threshold is medium", () => {
     expect(DEFAULT_BROKER_POLICY.askAtOrAbove).toBe("medium");
+  });
+
+  test("classifier auto-approves read-intent commands even at medium risk", () => {
+    // "ls -la" classifies as read, so the broker skips prompting despite
+    // risk being at the ask threshold. This is the whole point of the
+    // classifier — cut prompt fatigue on obvious-safe commands.
+    expect(defaultShouldAsk(lease({ risk: "medium", command: "ls -la" }))).toBe(false);
+    expect(defaultShouldAsk(lease({ risk: "medium", command: "git status" }))).toBe(false);
+    expect(defaultShouldAsk(lease({ risk: "high", command: "cat README.md" }))).toBe(false);
+  });
+
+  test("classifier does not bypass for unclassified commands", () => {
+    expect(defaultShouldAsk(lease({ risk: "medium", command: "curl https://example.com" }))).toBe(true);
+  });
+
+  test("classifier does not bypass complex-shell read commands", () => {
+    // `ls | grep` is safe intuitively but the classifier returns null
+    // because we don't parse shell — the broker asks. This is the safe
+    // default; relaxing it would require a full shell parser.
+    expect(defaultShouldAsk(lease({ risk: "medium", command: "ls | grep foo" }))).toBe(true);
+  });
+
+  test("empty autoApproveIntents disables classifier shortcut", () => {
+    const policy = { ...DEFAULT_BROKER_POLICY, autoApproveIntents: new Set<never>() };
+    expect(defaultShouldAsk(lease({ risk: "medium", command: "ls" }), policy)).toBe(true);
   });
 });
 
@@ -65,8 +93,12 @@ describe("brokerFromAsk", () => {
     const seen: BrokerRequest[] = [];
     const broker = brokerFromAsk(async (req) => { seen.push(req); return true; });
 
+    // Unclassified command at medium risk → ask.
     expect(broker.shouldAsk(lease({ risk: "medium" }))).toBe(true);
+    // Low risk → don't ask.
     expect(broker.shouldAsk(lease({ risk: "low" }))).toBe(false);
+    // Read-intent at medium risk → don't ask (classifier shortcut).
+    expect(broker.shouldAsk(lease({ risk: "medium", command: "ls -la" }))).toBe(false);
 
     const decision = await broker.ask({ lease: lease(), leaseId: "abc" });
     expect(decision).toBe(true);

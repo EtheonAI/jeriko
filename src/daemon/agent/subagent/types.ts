@@ -23,13 +23,25 @@ import type { DriverMessage } from "../drivers/index.js";
 /** How the subagent is spawned. */
 export type SubagentMode = "sync" | "async" | "fork" | "worktree";
 
-/** Lifecycle state of a subagent task. */
+/**
+ * Lifecycle state of a subagent task.
+ *
+ *   • `pending`   — created, not yet running.
+ *   • `running`   — the agent loop is actively executing.
+ *   • `completed` — finished normally with a result.
+ *   • `failed`    — threw or exited with an error.
+ *   • `cancelled` — terminated by explicit user/caller request.
+ *   • `timeout`   — reclaimed by the task reaper after the owning
+ *                   daemon crashed or was killed mid-run (status left
+ *                   at pending/running longer than the stale TTL).
+ */
 export type SubagentStatus =
   | "pending"
   | "running"
   | "completed"
   | "failed"
-  | "cancelled";
+  | "cancelled"
+  | "timeout";
 
 /**
  * Inputs required to spawn any kind of subagent.

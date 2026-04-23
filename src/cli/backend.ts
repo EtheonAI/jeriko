@@ -9,6 +9,22 @@
 
 import { readFileSync } from "node:fs";
 
+import type { McpHealthSnapshot } from "../daemon/services/mcp/index.js";
+
+export interface BackendStatus {
+  readonly phase: string;
+  readonly uptime: number;
+  readonly memoryMb?: number;
+  readonly sessionCount?: number;
+  readonly activeChannels?: number;
+  /**
+   * Optional MCP subsystem health. Populated when the backend is able
+   * to reach the MCP module (always true for in-process; daemon mode
+   * populates from the IPC response when the daemon reports it).
+   */
+  readonly mcp?: McpHealthSnapshot;
+}
+
 // Bundled AGENT.md — Bun inlines at compile time so it's always available,
 // even if ~/.config/jeriko/agent.md is missing (e.g. partial install).
 import BUNDLED_AGENT_MD from "../../AGENT.md" with { type: "text" };
@@ -165,7 +181,7 @@ export interface Backend {
   saveAuth(connectorName: string, keys: string[]): Promise<{ connector: string; label: string; saved: number }>;
 
   // System
-  getStatus(): Promise<{ phase: string; uptime: number; memoryMb?: number; sessionCount?: number; activeChannels?: number }>;
+  getStatus(): Promise<BackendStatus>;
   getConfig(): Promise<Record<string, unknown>>;
 
   // State
@@ -711,7 +727,7 @@ export async function createDaemonBackend(): Promise<Backend> {
       try {
         const response = await sendRequest("status", {});
         if (response.ok && response.data) {
-          return response.data as { phase: string; uptime: number; memoryMb?: number; sessionCount?: number; activeChannels?: number };
+          return response.data as BackendStatus;
         }
       } catch { /* daemon unreachable */ }
       return { phase: "unknown", uptime: 0 };
@@ -735,30 +751,98 @@ export async function createDaemonBackend(): Promise<Backend> {
 // In-process backend — direct agent loop
 // ---------------------------------------------------------------------------
 
-export async function createInProcessBackend(opts: CreateBackendOptions = {}): Promise<Backend> {
-  // Load secrets from .env so JERIKO_USER_ID and API keys are available
-  const { loadSecrets } = await import("../shared/secrets.js");
-  loadSecrets();
+/**
+ * Each phase surface gets its own fault-isolation wrapper so one broken
+ * step doesn't cascade into a raw stack trace and leave the REPL with
+ * no explanation. Mirrors the kernel's step-by-step logging.
+ *
+ * Policy per phase (applied where applicable):
+ *   • recoverable → log a visible warning + continue with the documented
+ *     fallback (e.g. bundled AGENT.md for missing system prompt).
+ *   • fatal       → re-throw a typed {@link BackendBootError} whose
+ *     message is suitable for the end-user; the REPL renders this
+ *     verbatim instead of a stack dump.
+ */
+export class BackendBootError extends Error {
+  constructor(public readonly phase: string, cause: unknown) {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    super(`Backend boot failed at "${phase}": ${message}`);
+    this.name = "BackendBootError";
+  }
+}
 
-  // Register the CLI ↔ exec-gateway permission broker when a bridge is
-  // supplied. This is the single wiring point that makes medium+/high-
-  // risk leases route to the CLI dialog. Without a bridge the gateway
-  // runs unchanged (headless / CI default).
+async function runPhase<T>(
+  phase: string,
+  fn: () => Promise<T> | T,
+  policy: { fatal: true },
+): Promise<T>;
+async function runPhase<T>(
+  phase: string,
+  fn: () => Promise<T> | T,
+  policy: { fatal: false; fallback: T; onError?: (err: unknown) => void },
+): Promise<T>;
+async function runPhase<T>(
+  phase: string,
+  fn: () => Promise<T> | T,
+  policy:
+    | { fatal: true }
+    | { fatal: false; fallback: T; onError?: (err: unknown) => void },
+): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (policy.fatal) {
+      throw new BackendBootError(phase, err);
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    // Surface to stderr so CLI users see the degradation regardless of
+    // log verbosity — this is the "something isn't working but we
+    // pressed on" signal.
+    console.error(`[jeriko] backend boot warning — ${phase}: ${msg}`);
+    policy.onError?.(err);
+    return policy.fallback;
+  }
+}
+
+export async function createInProcessBackend(opts: CreateBackendOptions = {}): Promise<Backend> {
+  // Phase 1: Secrets. Non-fatal — absence means the user hasn't onboarded
+  // yet and will be prompted downstream. Continuing gives them a usable
+  // REPL that can show /onboard instead of crashing.
+  await runPhase("load secrets", async () => {
+    const { loadSecrets } = await import("../shared/secrets.js");
+    loadSecrets();
+  }, { fatal: false, fallback: undefined });
+
+  // Phase 2: Permission broker wiring. Non-fatal — absence means the
+  // gateway runs in its headless default (no consent prompts).
   if (opts.permissionBridge !== undefined) {
-    const { registerBroker } = await import("../daemon/exec/broker.js");
-    const { createBrokerFromBridge } = await import("./permission/daemon-broker.js");
-    registerBroker(createBrokerFromBridge(opts.permissionBridge));
+    await runPhase("register permission broker", async () => {
+      const { registerBroker } = await import("../daemon/exec/broker.js");
+      const { createBrokerFromBridge } = await import("./permission/daemon-broker.js");
+      registerBroker(createBrokerFromBridge(opts.permissionBridge!));
+    }, { fatal: false, fallback: undefined });
   }
 
-  // Initialize database
-  const { getDatabase } = await import("../daemon/storage/db.js");
-  getDatabase();
+  // Phase 3: Database. Fatal — without the DB there's no session table,
+  // no kv store, and no way to run the agent loop at all.
+  await runPhase("initialize database", async () => {
+    const { getDatabase } = await import("../daemon/storage/db.js");
+    getDatabase();
+  }, { fatal: true });
 
-  // Register all agent tools (must match kernel step 6)
-  await registerTools();
+  // Phase 4: Tool registration. Recoverable — a partial tool set still
+  // lets the user chat. We log loudly so missing tools are visible.
+  await runPhase("register agent tools", async () => {
+    await registerTools();
+  }, { fatal: false, fallback: undefined });
 
-  // Load system prompt + skill summaries (must match kernel steps 9-10)
-  const systemPrompt = await loadSystemPrompt();
+  // Phase 5: System prompt + skill summaries + memory + instructions.
+  // Recoverable — the bundled AGENT.md is embedded at build time so we
+  // always have at least the base system prompt (matches kernel's
+  // BUNDLED_AGENT_MD fallback).
+  const systemPrompt = await runPhase("load system prompt", async () => {
+    return await loadSystemPrompt();
+  }, { fatal: false, fallback: BUNDLED_AGENT_MD });
 
   // Initialize LLM drivers + model registry (must match kernel step 7)
   // Without this, custom providers (Groq, OpenRouter, etc.) don't exist in-process.
@@ -1160,8 +1244,9 @@ export async function createInProcessBackend(opts: CreateBackendOptions = {}): P
       return saveAuthDirect(connectorName, keys);
     },
 
-    async getStatus() {
-      return { phase: "in-process", uptime: 0 };
+    async getStatus(): Promise<BackendStatus> {
+      const { getMcpHealth } = await import("../daemon/services/mcp/index.js");
+      return { phase: "in-process", uptime: 0, mcp: getMcpHealth() };
     },
 
     async getConfig() {

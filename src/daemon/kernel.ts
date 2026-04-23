@@ -62,6 +62,8 @@ export interface KernelState {
   startedAt: number | null;
   /** Pending provider auth codes received from relay (keyed by provider name). */
   pendingProviderAuth: Map<string, { code: string; receivedAt: number }>;
+  /** Background reclaimer for subagent_task rows orphaned by crashed daemons. */
+  taskReaper: import("./agent/subagent/reaper.js").Reaper | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,7 @@ const state: KernelState = {
   server: null,
   startedAt: null,
   pendingProviderAuth: new Map(),
+  taskReaper: null,
 };
 
 let log: Logger;
@@ -219,6 +222,20 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     }
   } catch (err) {
     log.warn(`Kernel boot: MCP bootstrap failed — ${err}`);
+  }
+
+  // Step 6.6: Start the subagent task reaper. Its boot-time sweep reclaims
+  // rows orphaned by a prior daemon crash (status still "running" even
+  // though the owning process is gone); the recurring sweep keeps the
+  // table honest while the daemon runs.
+  try {
+    const { createTaskReaper } = await import("./agent/subagent/reaper.js");
+    const reaper = createTaskReaper();
+    reaper.start();
+    state.taskReaper = reaper;
+    log.info("Kernel boot: step 6.6 — subagent task reaper started");
+  } catch (err) {
+    log.warn(`Kernel boot: task reaper init failed (non-fatal): ${err}`);
   }
 
   // Step 7: Initialize LLM drivers + model registry
@@ -795,11 +812,15 @@ export async function boot(opts?: { port?: number }): Promise<KernelState> {
     return { response, tokensIn, tokensOut, sessionId };
   });
 
-  registerMethod("status", async () => ({
-    phase: state.phase,
-    uptime: state.startedAt ? Date.now() - state.startedAt : 0,
-    workers: state.workers?.status() ?? null,
-  }));
+  registerMethod("status", async () => {
+    const { getMcpHealth } = await import("./services/mcp/index.js");
+    return {
+      phase: state.phase,
+      uptime: state.startedAt ? Date.now() - state.startedAt : 0,
+      workers: state.workers?.status() ?? null,
+      mcp: getMcpHealth(),
+    };
+  });
 
   registerMethod("sessions", async (params) => {
     const { listSessions } = await import("./agent/session/session.js");
@@ -1906,6 +1927,13 @@ export async function shutdown(): Promise<void> {
   if (state.workers) {
     try { await state.workers.drain(); } catch (e) { log.error(`Shutdown: worker pool error: ${e}`); }
     state.workers = null;
+  }
+
+  // 5.5. Stop subagent task reaper — clears the interval handle so the
+  // database close below doesn't trip over a pending sweep.
+  if (state.taskReaper) {
+    try { state.taskReaper.stop(); } catch (e) { log.error(`Shutdown: task reaper error: ${e}`); }
+    state.taskReaper = null;
   }
 
   // 6. Close database

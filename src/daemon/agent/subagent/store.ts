@@ -145,6 +145,34 @@ export function takePendingNotifications(parentSessionId: string): SubagentTask[
   return rows;
 }
 
+/**
+ * Mark stale non-terminal tasks as timed out. A task is "stale" when its
+ * `started_at` is older than `cutoffMs` and its `status` is still
+ * `pending` or `running` — both indicate the owning daemon crashed or
+ * was killed between spawn and completion. Terminal statuses
+ * (`completed`, `failed`, `cancelled`, `timeout`) are never touched.
+ *
+ * Returns the number of rows updated so callers can log the cleanup.
+ * A single UPDATE statement keeps the operation atomic and eliminates
+ * the select-then-update race that a naive two-step implementation
+ * would introduce.
+ */
+export function reapStaleTasks(cutoffMs: number): number {
+  const db = getDatabase();
+  const now = Date.now();
+  const result = db
+    .prepare(
+      `UPDATE subagent_task
+         SET status = 'timeout',
+             completed_at = ?,
+             error = COALESCE(error, ?)
+       WHERE status IN ('pending', 'running')
+         AND started_at < ?`,
+    )
+    .run(now, "reaped: exceeded TTL", now - cutoffMs);
+  return Number(result.changes ?? 0);
+}
+
 /** Used for spawn logs — short text describing the task for operators. */
 export function describeInput(input: SubagentSpawnInput): string {
   const label = input.label ?? input.prompt.slice(0, 80);

@@ -25,6 +25,8 @@ import billingConsent from "./migrations/0006_billing_consent.sql" with { type: 
 
 import subagentTasks from "./migrations/0007_subagent_tasks.sql" with { type: "text" };
 
+import subagentTaskTimeout from "./migrations/0008_subagent_task_timeout.sql" with { type: "text" };
+
 export interface Migration {
   filename: string;
   sql: string;
@@ -42,4 +44,5 @@ export const MIGRATIONS: readonly Migration[] = [
   { filename: "0005_billing.sql", sql: billing },
   { filename: "0006_billing_consent.sql", sql: billingConsent },
   { filename: "0007_subagent_tasks.sql", sql: subagentTasks },
+  { filename: "0008_subagent_task_timeout.sql", sql: subagentTaskTimeout },
 ];

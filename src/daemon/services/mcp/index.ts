@@ -31,9 +31,23 @@ interface ActiveServer {
   name: string;
   client: McpClient;
   toolIds: string[];
+  transport: "stdio" | "http";
+  startedAt: number;
 }
 
 const active = new Map<string, ActiveServer>();
+
+/**
+ * Last `startMcpServers()` outcome, kept so `/status` and boot
+ * diagnostics can report servers that tried to start but failed,
+ * not only the ones currently in `active`.
+ */
+let lastBoot: {
+  at: number;
+  started: string[];
+  failed: Array<{ name: string; error: string }>;
+  toolsRegistered: number;
+} | null = null;
 
 export interface StartMcpServersOptions {
   config?: McpConfig;
@@ -82,6 +96,13 @@ export async function startMcpServers(
     }
   }
 
+  lastBoot = {
+    at: Date.now(),
+    started: [...started],
+    failed: failed.map((f) => ({ ...f })),
+    toolsRegistered,
+  };
+
   return { started, failed, toolsRegistered };
 }
 
@@ -103,6 +124,90 @@ export function listActiveMcpServers(): Array<{ name: string; tools: number }> {
 }
 
 // ---------------------------------------------------------------------------
+// Health snapshot
+// ---------------------------------------------------------------------------
+
+export interface McpServerHealth {
+  /** Server name as keyed in `~/.config/jeriko/mcp.json`. */
+  readonly name: string;
+  /** `active` — handshake succeeded, tools registered; `failed` — boot error;
+   *  `inactive` — configured but disabled/not yet started. */
+  readonly status: "active" | "failed" | "inactive";
+  /** Count of tools successfully registered (only meaningful when status="active"). */
+  readonly tools: number;
+  /** Which transport the server uses — stdio (local subprocess) or http. */
+  readonly transport: "stdio" | "http" | null;
+  /** Wall-clock ms since start (active only). */
+  readonly uptimeMs: number | null;
+  /** Failure reason (failed only). */
+  readonly error: string | null;
+}
+
+export interface McpHealthSnapshot {
+  /** When the last `startMcpServers()` call returned. Null if never called. */
+  readonly lastBootAt: number | null;
+  /** Aggregate — `ok` when every configured server started; `degraded` when
+   *  any failed; `idle` when MCP was never booted in this process. */
+  readonly summary: "ok" | "degraded" | "idle";
+  /** Per-server view — every server the last boot attempted, plus any
+   *  currently-active server that wasn't in the last boot set. */
+  readonly servers: readonly McpServerHealth[];
+}
+
+/**
+ * Snapshot the current MCP subsystem health — suitable for `/status`
+ * output, boot diagnostics, and the `/health` HTTP endpoint. Pure:
+ * never touches the network, never re-probes the subprocess.
+ */
+export function getMcpHealth(): McpHealthSnapshot {
+  const now = Date.now();
+  const byName = new Map<string, McpServerHealth>();
+
+  for (const s of active.values()) {
+    byName.set(s.name, {
+      name: s.name,
+      status: "active",
+      tools: s.toolIds.length,
+      transport: s.transport,
+      uptimeMs: now - s.startedAt,
+      error: null,
+    });
+  }
+
+  if (lastBoot) {
+    for (const f of lastBoot.failed) {
+      if (!byName.has(f.name)) {
+        byName.set(f.name, {
+          name: f.name,
+          status: "failed",
+          tools: 0,
+          transport: null,
+          uptimeMs: null,
+          error: f.error,
+        });
+      }
+    }
+  }
+
+  const servers = Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+  let summary: McpHealthSnapshot["summary"];
+  if (lastBoot === null) {
+    summary = "idle";
+  } else if (lastBoot.failed.length > 0) {
+    summary = "degraded";
+  } else {
+    summary = "ok";
+  }
+
+  return {
+    lastBootAt: lastBoot?.at ?? null,
+    summary,
+    servers,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Internals
 // ---------------------------------------------------------------------------
 
@@ -111,7 +216,9 @@ async function startOne(
   cfg: McpServerConfig,
 ): Promise<ActiveServer> {
   const transport = buildTransport(cfg);
+  const transportKind: "stdio" | "http" = cfg.transport === "http" ? "http" : "stdio";
   const client = new McpClient(cfg.label ?? name, transport);
+  const startedAt = Date.now();
 
   await client.start();
 
@@ -137,7 +244,7 @@ async function startOne(
     }
   }
 
-  return { name, client, toolIds: registeredIds };
+  return { name, client, toolIds: registeredIds, transport: transportKind, startedAt };
 }
 
 function buildTransport(cfg: McpServerConfig): Transport {

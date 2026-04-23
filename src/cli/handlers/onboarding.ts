@@ -44,12 +44,30 @@ export interface OnboardingHost {
    * for the Ollama model picker so the flow subsystem can own the UX.
    */
   readonly pickFromList: (opts: OnboardingPickOptions) => Promise<string | null>;
+  /**
+   * Yes / no confirmation prompt. Resolves `true` when the user chooses
+   * to proceed, `false` when they cancel or dismiss. Used by the
+   * executor when a side effect (API-key verification, OAuth handshake)
+   * returns a degraded result and we need to ask whether the user still
+   * wants to persist a best-effort setup. Optional for backwards
+   * compatibility — hosts without an interactive surface (tests,
+   * non-interactive CLI) can omit it, in which case the executor
+   * treats every degraded outcome as "do not persist".
+   */
+  readonly confirm?: (opts: OnboardingConfirmOptions) => Promise<boolean>;
 }
 
 export interface OnboardingPickOptions {
   readonly title: string;
   readonly message: string;
   readonly options: ReadonlyArray<{ readonly value: string; readonly label: string }>;
+}
+
+export interface OnboardingConfirmOptions {
+  readonly title: string;
+  readonly message: string;
+  readonly proceedLabel: string;
+  readonly cancelLabel: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +96,11 @@ export interface OnboardingCopy {
   readonly verifyingKey: string;
   readonly keyVerified: string;
   readonly keyUnverified: string;
+  readonly keyVerificationFailedTitle: string;
+  readonly keyVerificationFailedMessage: string;
+  readonly keyVerificationProceedLabel: string;
+  readonly keyVerificationCancelLabel: string;
+  readonly keyVerificationAborted: string;
   readonly openingBrowser: string;
   readonly authSucceeded: string;
   readonly authFailed: (reason: string) => string;
@@ -98,7 +121,15 @@ export interface OnboardingCopy {
 export const DEFAULT_ONBOARDING_COPY: OnboardingCopy = {
   verifyingKey: "Verifying API key…",
   keyVerified: "✓ API key verified",
-  keyUnverified: "API key could not be verified (continuing anyway)",
+  keyUnverified: "API key could not be verified.",
+  keyVerificationFailedTitle: "API Key Verification Failed",
+  keyVerificationFailedMessage:
+    "The key was rejected or the verification endpoint was unreachable.\n" +
+    "You can still save this key — verification may be flaky — but requests\n" +
+    "will fail if the key is actually invalid.",
+  keyVerificationProceedLabel: "Save anyway",
+  keyVerificationCancelLabel: "Re-enter key",
+  keyVerificationAborted: "Setup cancelled — API key not saved.",
   openingBrowser: "Opening browser for authentication…",
   authSucceeded: "✓ Authenticated successfully",
   authFailed: (reason) => `OAuth failed: ${reason}`,
@@ -145,11 +176,42 @@ export function createOnboardingExecutor(opts: OnboardingExecutorOptions): Onboa
   const { host, deps } = opts;
   const copy = opts.copy ?? DEFAULT_ONBOARDING_COPY;
 
-  const resolveApiKey = async (providerId: string, key: string): Promise<boolean> => {
+  /**
+   * Outcome of the API-key verification step. The executor commits the
+   * key only when `proceed` is true. When verification fails we consult
+   * the host's `confirm()` surface (if any) — the user decides whether
+   * a best-effort save is preferable to starting the wizard over.
+   */
+  const resolveApiKey = async (
+    providerId: string,
+    key: string,
+  ): Promise<{ verified: boolean; proceed: boolean }> => {
     host.announce(copy.verifyingKey);
-    const ok = await deps.verifyApiKey(providerId, key);
-    host.announce(ok ? copy.keyVerified : copy.keyUnverified);
-    return true;
+    const verified = await deps.verifyApiKey(providerId, key);
+    if (verified) {
+      host.announce(copy.keyVerified);
+      return { verified: true, proceed: true };
+    }
+
+    host.announce(copy.keyUnverified);
+
+    // No confirm surface → do not persist an unverified key. This is the
+    // safe default for headless callers that can't interactively ask.
+    if (host.confirm === undefined) {
+      host.announce(copy.keyVerificationAborted);
+      return { verified: false, proceed: false };
+    }
+
+    const proceed = await host.confirm({
+      title: copy.keyVerificationFailedTitle,
+      message: copy.keyVerificationFailedMessage,
+      proceedLabel: copy.keyVerificationProceedLabel,
+      cancelLabel: copy.keyVerificationCancelLabel,
+    });
+    if (!proceed) {
+      host.announce(copy.keyVerificationAborted);
+    }
+    return { verified: false, proceed };
   };
 
   const resolveOAuth = async (provider: ProviderOption): Promise<string | null> => {
@@ -215,7 +277,8 @@ export function createOnboardingExecutor(opts: OnboardingExecutorOptions): Onboa
 
       switch (result.method) {
         case "api-key": {
-          await resolveApiKey(provider.id, result.apiKey);
+          const outcome = await resolveApiKey(provider.id, result.apiKey);
+          if (!outcome.proceed) return;
           apiKey = result.apiKey;
           break;
         }

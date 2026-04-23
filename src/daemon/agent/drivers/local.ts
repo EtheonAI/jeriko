@@ -215,6 +215,8 @@ export class LocalDriver implements LLMDriver {
     // Delegate SSE parsing to shared stream parser.
     // Handles AbortSignal racing, tool call accumulation, and flush-on-end
     // (critical for OSS models that don't send [DONE] or finish_reason).
-    yield* parseOpenAIStream({ response, signal });
+    // `usageShape: "none"` — local models (Ollama / LM Studio) don't
+    // participate in prompt caching, so there's nothing to normalize.
+    yield* parseOpenAIStream({ response, signal, usageShape: "none" });
   }
 }

@@ -19,6 +19,7 @@ import type {
 import type { ProviderConfig } from "../../../shared/config.js";
 import { resolveEnvRef } from "../../../shared/env-ref.js";
 import { parseOpenAIStream } from "./openai-stream.js";
+import { getCapabilities } from "./models.js";
 import { withTimeout } from "./signal.js";
 import { withHttpRetry } from "../../../shared/http-retry.js";
 import { redact } from "../../security/redaction.js";
@@ -252,7 +253,10 @@ export class OpenAICompatibleDriver implements LLMDriver {
       return;
     }
 
-    // Delegate SSE parsing to the shared stream parser.
-    yield* parseOpenAIStream({ response, signal });
+    // Delegate SSE parsing to the shared stream parser. The usageShape
+    // field is sourced from the model registry so cache-token splitting
+    // matches the provider's wire contract (see `provider-defaults.ts`).
+    const caps = getCapabilities(this.config.name, config.model);
+    yield* parseOpenAIStream({ response, signal, usageShape: caps.usageShape });
   }
 }

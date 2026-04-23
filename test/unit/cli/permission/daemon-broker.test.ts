@@ -117,9 +117,13 @@ describe("createBrokerFromBridge", () => {
     const bridge = createInMemoryBridge();
     const broker = createBrokerFromBridge(bridge);
 
-    expect(broker.shouldAsk(lease({ risk: "low" }))).toBe(false);
-    expect(broker.shouldAsk(lease({ risk: "medium" }))).toBe(true);
-    expect(broker.shouldAsk(lease({ risk: "high" }))).toBe(true);
+    // Pick a command the default classifier cannot categorize as
+    // read-intent, otherwise the auto-approve shortcut bypasses the
+    // risk check we're actually trying to exercise here.
+    const cmd = "my-custom-binary --run";
+    expect(broker.shouldAsk(lease({ command: cmd, risk: "low" }))).toBe(false);
+    expect(broker.shouldAsk(lease({ command: cmd, risk: "medium" }))).toBe(true);
+    expect(broker.shouldAsk(lease({ command: cmd, risk: "high" }))).toBe(true);
   });
 
   test("end-to-end: broker + store + bridge produces a single round trip", async () => {

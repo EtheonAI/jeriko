@@ -28,6 +28,10 @@
 
 import type { RiskLevel } from "../../shared/types.js";
 import type { ExecutionLease } from "./lease.js";
+import {
+  defaultClassifier,
+  type CommandClassifier,
+} from "./classifier.js";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -59,16 +63,32 @@ export interface PermissionBroker {
 // ---------------------------------------------------------------------------
 
 /**
- * Ask thresholds by risk level. Keeping this as a typed record (not a bare
- * predicate) means future policy knobs — per-agent overrides, scope-based
- * escalation — have a natural home.
+ * Ask thresholds + opt-in auto-approval. Kept as a typed record (not a
+ * bare predicate) so future knobs — per-agent overrides, scope-based
+ * escalation, allow-lists — have a natural home.
  */
 export interface BrokerPolicy {
+  /** Minimum risk level at which the broker will prompt the user. */
   readonly askAtOrAbove: RiskLevel;
+  /**
+   * Command classifier — when the classifier reports an intent in
+   * {@link autoApproveIntents}, the lease is auto-approved regardless
+   * of its risk level. This removes prompt fatigue on obvious-safe
+   * commands (`ls`, `git status`, `cat`, …) without lowering the
+   * baseline for anything else.
+   *
+   * Defaults to the module's {@link defaultClassifier}. Pass a custom
+   * classifier (or an empty-rule one) to disable auto-approval entirely.
+   */
+  readonly classifier: CommandClassifier;
+  /** Intents that auto-approve without prompting. */
+  readonly autoApproveIntents: ReadonlySet<import("./classifier.js").CommandIntent>;
 }
 
 export const DEFAULT_BROKER_POLICY: BrokerPolicy = {
   askAtOrAbove: "medium",
+  classifier: defaultClassifier,
+  autoApproveIntents: new Set(["read"]),
 };
 
 const RISK_ORDER: Record<RiskLevel, number> = {
@@ -82,12 +102,23 @@ const RISK_ORDER: Record<RiskLevel, number> = {
  * Pure "should I ask?" predicate matching {@link DEFAULT_BROKER_POLICY}.
  * Exported so broker implementations can delegate to the default and
  * layer additional rules on top without re-implementing the comparison.
+ *
+ * Precedence (first rule that fires wins):
+ *   1. Lease's risk is below `askAtOrAbove`        → don't ask.
+ *   2. Classifier recognizes the command as an
+ *      auto-approve intent (default: `read`)      → don't ask.
+ *   3. Otherwise                                   → ask.
  */
 export function defaultShouldAsk(
   lease: ExecutionLease,
   policy: BrokerPolicy = DEFAULT_BROKER_POLICY,
 ): boolean {
-  return RISK_ORDER[lease.risk] >= RISK_ORDER[policy.askAtOrAbove];
+  if (RISK_ORDER[lease.risk] < RISK_ORDER[policy.askAtOrAbove]) return false;
+
+  const intent = policy.classifier.classify(lease.command);
+  if (intent !== null && policy.autoApproveIntents.has(intent)) return false;
+
+  return true;
 }
 
 // ---------------------------------------------------------------------------

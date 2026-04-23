@@ -178,18 +178,57 @@ describe("onboarding executor / api-key path", () => {
     expect(spy.announcements.some((m) => m.includes("Setup complete"))).toBe(true);
   });
 
-  test("unverified key still persists (soft warning, not a hard stop)", async () => {
+  test("unverified key + no confirm surface → does NOT persist (safe default)", async () => {
     const spy = makeSpy();
     const deps = makeDeps(spy, { verifyApiKeyResult: false });
+    // Host without a confirm() method — the non-interactive default.
     const exec = createOnboardingExecutor({ host: makeHost(spy), deps });
 
     await exec.execute({
       method: "api-key", provider: CLAUDE, apiKey: "sk-unverified", authChoiceId: "",
     });
 
-    expect(spy.persisted).toHaveLength(1);
-    expect(spy.persisted[0]!.apiKey).toBe("sk-unverified");
+    expect(spy.persisted).toEqual([]);
     expect(spy.announcements.some((m) => m.includes("could not be verified"))).toBe(true);
+    expect(spy.announcements.some((m) => m.toLowerCase().includes("cancelled"))).toBe(true);
+  });
+
+  test("unverified key + user confirms proceed → persists best-effort", async () => {
+    const spy = makeSpy();
+    const deps = makeDeps(spy, { verifyApiKeyResult: false });
+    const host: OnboardingHost = {
+      ...makeHost(spy),
+      confirm: async (opts) => {
+        spy.announcements.push(`[confirm] ${opts.title}`);
+        return true;
+      },
+    };
+    const exec = createOnboardingExecutor({ host, deps });
+
+    await exec.execute({
+      method: "api-key", provider: CLAUDE, apiKey: "sk-still-save", authChoiceId: "",
+    });
+
+    expect(spy.persisted).toHaveLength(1);
+    expect(spy.persisted[0]!.apiKey).toBe("sk-still-save");
+    expect(spy.announcements.some((m) => m.includes("[confirm]"))).toBe(true);
+  });
+
+  test("unverified key + user cancels → does NOT persist", async () => {
+    const spy = makeSpy();
+    const deps = makeDeps(spy, { verifyApiKeyResult: false });
+    const host: OnboardingHost = {
+      ...makeHost(spy),
+      confirm: async () => false,
+    };
+    const exec = createOnboardingExecutor({ host, deps });
+
+    await exec.execute({
+      method: "api-key", provider: CLAUDE, apiKey: "sk-reject", authChoiceId: "",
+    });
+
+    expect(spy.persisted).toEqual([]);
+    expect(spy.announcements.some((m) => m.toLowerCase().includes("cancelled"))).toBe(true);
   });
 });
 

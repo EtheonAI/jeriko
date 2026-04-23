@@ -27,6 +27,17 @@ afterEach(() => { registerBroker(null); });
 // Helpers — force lease attributes so the classifier doesn't fight us
 // ---------------------------------------------------------------------------
 
+/**
+ * Real commands the broker-consent tests can run. These are chosen to
+ * execute quickly (under a second), produce predictable output, and —
+ * critically — fall through the {@link defaultClassifier} so the broker
+ * consent path is actually exercised instead of being short-circuited
+ * by the auto-approve shortcut. Absolute paths bypass the classifier's
+ * `exact`/`prefix` rules (which key on the first token).
+ */
+const CONSENT_REQUIRED_OK = "/bin/echo hello";
+const CONSENT_REQUIRED_ECHO = "/bin/echo hello";
+
 function runAtRisk(command: string, risk: RiskLevel) {
   return exec("test", command, { lease_overrides: { risk, timeout: 5_000 } });
 }
@@ -77,7 +88,7 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
     const rec = recordingBroker(true);
     registerBroker(rec.broker);
 
-    const result = await runAtRisk("true", "medium");
+    const result = await runAtRisk(CONSENT_REQUIRED_OK, "medium");
     expect(result.exit_code).toBe(0);
     expect(rec.seen).toHaveLength(1);
     expect(rec.seen[0]!.lease.risk).toBe("medium");
@@ -88,7 +99,7 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
     const rec = recordingBroker(false);
     registerBroker(rec.broker);
 
-    const result = await runAtRisk("true", "medium");
+    const result = await runAtRisk(CONSENT_REQUIRED_OK, "medium");
     expect(result.exit_code).toBe(126);
     expect(result.stderr.toLowerCase()).toContain("denied");
     expect(rec.seen).toHaveLength(1);
@@ -98,7 +109,7 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
     const rec = recordingBroker("throw");
     registerBroker(rec.broker);
 
-    const result = await runAtRisk("true", "high");
+    const result = await runAtRisk(CONSENT_REQUIRED_OK, "high");
     expect(result.exit_code).toBe(126);
     expect(rec.seen).toHaveLength(1);
   });
@@ -107,7 +118,7 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
     const rec = recordingBroker(true);
     registerBroker(rec.broker);
 
-    const result = await runAtRisk("true", "medium");
+    const result = await runAtRisk(CONSENT_REQUIRED_OK, "medium");
     expect(result.lease_id).toBe(rec.seen[0]!.leaseId);
   });
 
@@ -115,10 +126,10 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
     const rec = recordingBroker(true);
     registerBroker(rec.broker);
 
-    await runAtRisk("echo hello", "medium");
+    await runAtRisk(CONSENT_REQUIRED_ECHO, "medium");
 
     const request = rec.seen[0]!;
-    expect(request.lease.command).toBe("echo hello");
+    expect(request.lease.command).toBe(CONSENT_REQUIRED_ECHO);
     expect(request.lease.agent).toBe("test");
     expect(request.lease.risk).toBe("medium");
   });
@@ -126,7 +137,7 @@ describe("gateway + broker — medium+ leases consult the broker", () => {
 
 describe("gateway — no broker registered", () => {
   test("medium risk still runs when no broker is attached (headless default)", async () => {
-    const result = await runAtRisk("true", "medium");
+    const result = await runAtRisk(CONSENT_REQUIRED_OK, "medium");
     expect(result.exit_code).toBe(0);
   });
 });
@@ -140,11 +151,26 @@ describe("gateway — shouldAsk short-circuits the ask path", () => {
     };
     registerBroker(broker);
 
-    await runAtRisk("true", "medium");
+    await runAtRisk(CONSENT_REQUIRED_OK, "medium");
     expect(asked).toBe(0);
 
-    await runAtRisk("true", "high");
+    await runAtRisk(CONSENT_REQUIRED_OK, "high");
     expect(asked).toBe(1);
+  });
+});
+
+describe("gateway — classifier auto-approves read-intent commands", () => {
+  // Parallel to the broker unit tests: the default classifier should
+  // let obvious read-only commands through the gateway without a
+  // broker prompt even at medium risk. A broker that would have
+  // denied the command never sees it.
+  test("default broker silently auto-approves 'ls' at medium risk", async () => {
+    const rec = recordingBroker(false); // would deny if asked
+    registerBroker(rec.broker);
+
+    const result = await runAtRisk("ls", "medium");
+    expect(result.exit_code).toBe(0);
+    expect(rec.seen).toEqual([]);
   });
 });
 

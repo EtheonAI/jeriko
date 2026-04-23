@@ -58,5 +58,15 @@ export interface LogEntry {
 export interface ParsedArgs {
   flags: Record<string, string | boolean>;
   positional: string[];
+  /**
+   * Index in the original argv for each entry in {@link positional}. Same
+   * length as `positional`; `positionalIndices[k]` is where
+   * `positional[k]` was read from. Callers that need to slice argv around
+   * a specific positional (e.g. the dispatcher resolving a command's
+   * args) should use this instead of `argv.indexOf(name)`, which returns
+   * the first occurrence — wrong when a flag *value* happens to equal a
+   * command name (e.g. `--format new some-arg`).
+   */
+  positionalIndices: number[];
 }
 

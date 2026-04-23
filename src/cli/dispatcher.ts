@@ -332,9 +332,16 @@ export async function dispatcher(argv: string[]): Promise<void> {
     return;
   }
 
-  // Resolve command (length > 0 guaranteed by the early-return above)
+  // Resolve command (length > 0 guaranteed by the early-return above).
+  //
+  // We use `positionalIndices[0]` rather than `argv.indexOf(cmdName)` so
+  // that a flag value identical to a command name (e.g. `--format new`
+  // where "new" is also a command) doesn't misdirect the slice. The
+  // parser already knows the authoritative index of every positional;
+  // trust it instead of re-scanning.
   const cmdName = parsed.positional[0]!;
-  const cmdArgs = stripGlobalFlags(argv.slice(argv.indexOf(cmdName) + 1));
+  const cmdArgStart = parsed.positionalIndices[0]! + 1;
+  const cmdArgs = stripGlobalFlags(argv.slice(cmdArgStart));
 
   // --help with a command → pass --help through to the command
   const handler = registry.get(cmdName);

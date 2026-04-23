@@ -40,12 +40,27 @@ const SYSTEM_PROMPT = [
 ].join(" ");
 
 /**
- * Call the configured driver and collect a plain-text summary of the
- * provided turns. Returns `undefined` on any error — the caller should
- * fall back to truncation-only compaction.
+ * Discriminated outcome of a summarization attempt. Callers key on
+ * `status` instead of the legacy `string | undefined` convention —
+ * this lets them distinguish "the model returned nothing meaningful"
+ * (skipped) from "the call blew up" (error) and decide retry policy
+ * accordingly.
  */
-export async function summarizeTurns(input: SummarizeInput): Promise<string | undefined> {
-  if (input.droppedTurns.length === 0) return undefined;
+export type SummarizeResult =
+  | { readonly status: "ok"; readonly summary: string }
+  | { readonly status: "empty"; readonly reason: "no-input" | "no-text" }
+  | { readonly status: "error"; readonly kind: "stream" | "exception"; readonly message: string };
+
+/**
+ * Call the configured driver and collect a plain-text summary of the
+ * provided turns. Returns a {@link SummarizeResult} so callers can
+ * distinguish transient failures (worth retrying) from empty outputs
+ * (skip summarization, fall back to truncation) from hard exceptions.
+ */
+export async function summarizeTurns(input: SummarizeInput): Promise<SummarizeResult> {
+  if (input.droppedTurns.length === 0) {
+    return { status: "empty", reason: "no-input" };
+  }
 
   let resolvedModel: string;
   try {
@@ -79,18 +94,23 @@ export async function summarizeTurns(input: SummarizeInput): Promise<string | un
     })) {
       if (chunk.type === "text") text += chunk.content;
       if (chunk.type === "error") {
-        log.warn(`Compaction summarizer error: ${chunk.content}`);
-        return undefined;
+        const message = chunk.content || "stream reported error";
+        log.warn(`Compaction summarizer stream error: ${message}`);
+        return { status: "error", kind: "stream", message };
       }
       if (chunk.type === "done") break;
     }
 
     const trimmed = text.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
+    if (trimmed.length === 0) {
+      return { status: "empty", reason: "no-text" };
+    }
+    return { status: "ok", summary: trimmed };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     log.warn(
-      `Compaction summarizer failed for backend=${input.backend} model=${input.model}: ${err}`,
+      `Compaction summarizer threw for backend=${input.backend} model=${input.model}: ${message}`,
     );
-    return undefined;
+    return { status: "error", kind: "exception", message };
   }
 }

@@ -1,24 +1,17 @@
-// USD cost conversion — driven entirely by `ModelCapabilities.costInput` /
-// `.costOutput` pulled from the dynamic model registry. We do NOT hardcode
-// a second price table here — there's one source of truth, and it comes
-// from models.dev via `drivers/models.ts`.
+// USD cost conversion — every rate is data, never hardcoded.
 //
-// Anthropic-specific cache multipliers are constants of the Anthropic wire
-// protocol (as documented), not per-model data, so they live here.
+// Per-token rates come from `ModelCapabilities.costInput` / `.costOutput`
+// (sourced from models.dev at boot). Cache-read and cache-write
+// multipliers come from `ModelCapabilities.cacheReadRatio` /
+// `.cacheWriteRatio`, which are populated from provider-level defaults
+// (see `../drivers/provider-defaults.ts`).
+//
+// There is exactly one price table in the system — the capability
+// registry. Adding a new provider's pricing means editing
+// `provider-defaults.ts`, not this file.
 
 import { getCapabilities } from "../drivers/models.js";
 import type { UsageCost, UsageTotals } from "./types.js";
-
-/**
- * Anthropic prompt-cache multipliers applied to the *input* rate:
- *   • Writing to cache: 1.25×
- *   • Reading from cache: 0.10×
- *
- * Other providers exposing cache_control will need a per-provider table
- * when that happens — keep this local and swap the branch at that time.
- */
-const ANTHROPIC_CACHE_WRITE_MULTIPLIER = 1.25;
-const ANTHROPIC_CACHE_READ_MULTIPLIER = 0.10;
 
 export interface ComputeCostInput {
   /** Backend id — e.g. "anthropic", "openai", "local". */
@@ -46,9 +39,9 @@ export function computeCost(input: ComputeCostInput): UsageCost {
   const inputUsd = input.totals.input_tokens * inputRate;
   const outputUsd = input.totals.output_tokens * outputRate;
   const cacheCreationUsd =
-    input.totals.cache_creation_input_tokens * inputRate * ANTHROPIC_CACHE_WRITE_MULTIPLIER;
+    input.totals.cache_creation_input_tokens * inputRate * caps.cacheWriteRatio;
   const cacheReadUsd =
-    input.totals.cache_read_input_tokens * inputRate * ANTHROPIC_CACHE_READ_MULTIPLIER;
+    input.totals.cache_read_input_tokens * inputRate * caps.cacheReadRatio;
 
   const totalUsd = inputUsd + outputUsd + cacheCreationUsd + cacheReadUsd;
 

@@ -980,13 +980,29 @@ export function formatSkillDetail(name: string, description: string, body: strin
 /**
  * Format daemon status information with status dot.
  */
-export function formatStatus(status: {
+export interface StatusView {
   phase: string;
   uptime: number;
   memoryMb?: number;
   sessionCount?: number;
   activeChannels?: number;
-}): string {
+  /**
+   * Optional MCP subsystem health. When present, appended as a nested
+   * section so users see at a glance which MCP servers are active,
+   * which failed, and with what error.
+   */
+  mcp?: {
+    summary: "ok" | "degraded" | "idle";
+    servers: ReadonlyArray<{
+      name: string;
+      status: "active" | "failed" | "inactive";
+      tools: number;
+      error: string | null;
+    }>;
+  };
+}
+
+export function formatStatus(status: StatusView): string {
   const lines: string[] = [
     "",
     sectionHeader("Daemon Status"),
@@ -1004,6 +1020,26 @@ export function formatStatus(status: {
   }
   if (status.activeChannels !== undefined) {
     lines.push(kvPair("Channels", t.text(String(status.activeChannels))));
+  }
+
+  if (status.mcp && status.mcp.summary !== "idle") {
+    lines.push("");
+    lines.push(sectionHeader("MCP"));
+    const summaryState =
+      status.mcp.summary === "ok" ? "active" as const
+      : "warning" as const;
+    const summaryColor = status.mcp.summary === "ok" ? t.green : t.yellow;
+    lines.push(kvPair("Summary", `${statusDot(summaryState)} ${summaryColor(status.mcp.summary)}`));
+    for (const server of status.mcp.servers) {
+      const serverState =
+        server.status === "active" ? "active" as const
+        : server.status === "failed" ? "error" as const
+        : "warning" as const;
+      const detail = server.status === "failed" && server.error
+        ? `${server.status} — ${server.error}`
+        : `${server.status} (${server.tools} tool${server.tools === 1 ? "" : "s"})`;
+      lines.push(kvPair(server.name, `${statusDot(serverState)} ${t.text(detail)}`));
+    }
   }
 
   return lines.join("\n");

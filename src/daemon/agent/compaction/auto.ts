@@ -13,9 +13,20 @@ import type { DriverMessage } from "../drivers/index.js";
 import { messageText } from "../drivers/index.js";
 import { estimateTokens } from "../../../shared/tokens.js";
 import { groupIntoTurns, estimateTurnTokens, type Turn } from "../history.js";
-import { summarizeTurns } from "./summarize.js";
+import { summarizeTurns, type SummarizeResult } from "./summarize.js";
+import { getLogger } from "../../../shared/logger.js";
 import type { CompactionPolicy, CompactionResult } from "./types.js";
 import { NO_OP_RESULT } from "./types.js";
+
+const log = getLogger();
+
+/**
+ * Up to how many times we'll retry the summarizer on a transient stream
+ * error before falling back to truncation. A single retry is enough to
+ * ride out the common "driver dropped a chunk" class of failures without
+ * stretching the compaction budget.
+ */
+const SUMMARIZER_STREAM_RETRIES = 1;
 
 export interface AutoCompactInput {
   messages: DriverMessage[];
@@ -56,9 +67,11 @@ export async function autoCompact(input: AutoCompactInput): Promise<CompactionRe
 
   const truncatedTokens = estimateTotalTokens(truncated);
 
-  // Step 2: optional summarization. Failure → keep the truncated result.
+  // Step 2: optional summarization. The summarizer returns a typed
+  // {@link SummarizeResult} so we can retry transient stream errors once,
+  // and fall through to truncation when the model has nothing to say.
   if (policy.summarize && droppedTurns.length > 0) {
-    const summary = await summarizeTurns({
+    const outcome = await runSummarizerWithRetry({
       droppedTurns,
       backend: input.backend,
       model: input.model,
@@ -66,16 +79,27 @@ export async function autoCompact(input: AutoCompactInput): Promise<CompactionRe
       signal: input.signal,
     });
 
-    if (summary) {
-      const withSummary = insertSummary(truncated, summary);
+    if (outcome.status === "ok") {
+      const withSummary = insertSummary(truncated, outcome.summary);
       return {
         messages: withSummary,
         beforeTokens,
         afterTokens: estimateTotalTokens(withSummary),
         turnsRemoved: droppedTurns.length,
         strategy: "summarize",
-        summary,
+        summary: outcome.summary,
       };
+    }
+
+    // Non-ok path — log why we're dropping to plain truncation so a
+    // misconfigured summarizer (wrong model, bad key) shows up in the
+    // daemon log instead of being invisible.
+    if (outcome.status === "error") {
+      log.warn(
+        `Compaction: summarizer ${outcome.kind} error — falling back to truncate. ${outcome.message}`,
+      );
+    } else {
+      log.debug(`Compaction: summarizer empty (${outcome.reason}) — using truncate`);
     }
   }
 
@@ -86,6 +110,28 @@ export async function autoCompact(input: AutoCompactInput): Promise<CompactionRe
     turnsRemoved: droppedTurns.length,
     strategy: "truncate",
   };
+}
+
+/**
+ * Invoke the summarizer with a small retry budget for transient stream
+ * errors. Exceptions and empty outputs are returned directly — only
+ * `status: "error"` with `kind: "stream"` is retried.
+ */
+async function runSummarizerWithRetry(
+  input: Parameters<typeof summarizeTurns>[0],
+): Promise<SummarizeResult> {
+  let attempt = 0;
+  let last: SummarizeResult = await summarizeTurns(input);
+  while (
+    last.status === "error" &&
+    last.kind === "stream" &&
+    attempt < SUMMARIZER_STREAM_RETRIES
+  ) {
+    attempt++;
+    log.debug(`Compaction: summarizer retry ${attempt} after stream error`);
+    last = await summarizeTurns(input);
+  }
+  return last;
 }
 
 // ---------------------------------------------------------------------------

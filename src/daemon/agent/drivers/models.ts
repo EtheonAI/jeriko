@@ -16,6 +16,10 @@ import {
   normalizeCustomModel,
   parseCustomModelSpec,
 } from "../../../shared/config.js";
+import {
+  getProviderDefaults,
+  type CacheUsageShape,
+} from "./provider-defaults.js";
 
 const log = getLogger();
 
@@ -47,6 +51,25 @@ export interface ModelCapabilities {
   costInput: number;
   /** Cost per 1M output tokens (USD). 0 for local models. */
   costOutput: number;
+  /**
+   * Multiplier applied to {@link costInput} when charging cache-read
+   * tokens. Sourced from the provider's published pricing — see
+   * `./provider-defaults.ts`. Defaults to 1 (no discount) when the
+   * provider isn't enumerated.
+   */
+  cacheReadRatio: number;
+  /**
+   * Multiplier applied to {@link costInput} when charging cache-write
+   * tokens. Anthropic charges 1.25×; OpenAI doesn't charge a separate
+   * write rate; local is 0. Provider-level, not per-model.
+   */
+  cacheWriteRatio: number;
+  /**
+   * Wire-protocol shape for the provider's cached-token telemetry.
+   * Drivers key stream parsing on this field instead of branching on
+   * provider id. See `./provider-defaults.ts::CacheUsageShape`.
+   */
+  usageShape: CacheUsageShape;
 }
 
 // ---------------------------------------------------------------------------
@@ -119,34 +142,53 @@ const STATIC_ALIASES: Record<string, Record<string, string>> = {
  */
 const UNKNOWN_PROVIDER_CONTEXT_TOKENS = 24_000;
 
+/**
+ * Build an offline-safe fallback capability. All provider-level fields
+ * (cache ratios, usage shape) are delegated to `getProviderDefaults()`
+ * so the fallback stays in sync with the runtime wire contract without
+ * duplicating constants. Callers supply only model-intrinsic fields.
+ */
+function fallbackCap(
+  provider: string,
+  core: Omit<ModelCapabilities, "cacheReadRatio" | "cacheWriteRatio" | "usageShape">,
+): ModelCapabilities {
+  const pd = getProviderDefaults(provider);
+  return {
+    ...core,
+    cacheReadRatio: pd.cacheReadRatio,
+    cacheWriteRatio: pd.cacheWriteRatio,
+    usageShape: pd.usageShape,
+  };
+}
+
 /** Fallback capabilities — ONLY used when models.dev AND Ollama probe both fail.
  *  The local "llama3" ID is a last-resort fallback; at runtime, resolveModel()
  *  prefers the first model detected from Ollama's /api/tags. */
 const FALLBACK_CAPS: Record<string, ModelCapabilities> = {
-  anthropic: {
+  anthropic: fallbackCap("anthropic", {
     id: "claude-sonnet-4-6", provider: "anthropic", family: "claude-sonnet",
     context: 200_000, maxOutput: 64_000, toolCall: true, reasoning: true,
     vision: true, structuredOutput: true,
     costInput: 3, costOutput: 15,
-  },
-  openai: {
+  }),
+  openai: fallbackCap("openai", {
     id: "gpt-4o", provider: "openai", family: "gpt",
     context: 128_000, maxOutput: 16_384, toolCall: true, reasoning: false,
     vision: true, structuredOutput: true,
     costInput: 2.5, costOutput: 10,
-  },
-  local: {
+  }),
+  local: fallbackCap("local", {
     id: "llama3", provider: "local", family: "llama",
     context: 32_768, maxOutput: 4_096, toolCall: false, reasoning: false,
     vision: false, structuredOutput: false,
     costInput: 0, costOutput: 0,
-  },
-  "claude-code": {
+  }),
+  "claude-code": fallbackCap("claude-code", {
     id: "claude-sonnet-4-6", provider: "claude-code", family: "claude-code",
     context: 200_000, maxOutput: 16_384, toolCall: false, reasoning: true,
     vision: true, structuredOutput: true,
     costInput: 0, costOutput: 0,
-  },
+  }),
 };
 
 // ---------------------------------------------------------------------------
@@ -224,6 +266,7 @@ function parseRegistry(data: Record<string, unknown>): void {
       const limit = (m.limit as Record<string, unknown>) ?? {};
       const cost = (m.cost as Record<string, unknown>) ?? {};
 
+      const pd = getProviderDefaults(providerId);
       const caps: ModelCapabilities = {
         id: modelId,
         provider: providerId,
@@ -236,6 +279,9 @@ function parseRegistry(data: Record<string, unknown>): void {
         structuredOutput: (m.structured_output as boolean) ?? (m.json_mode as boolean) ?? false,
         costInput: (cost.input as number) ?? 0,
         costOutput: (cost.output as number) ?? 0,
+        cacheReadRatio: pd.cacheReadRatio,
+        cacheWriteRatio: pd.cacheWriteRatio,
+        usageShape: pd.usageShape,
       };
 
       capIndex.set(`${providerId}:${modelId}`, caps);
@@ -568,6 +614,7 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     log.debug(`Ollama probe "${modelId}" error: ${msg}`);
   }
 
+  const localDefaults = getProviderDefaults("local");
   const probed: ModelCapabilities = {
     id: modelId,
     provider: "local",
@@ -580,6 +627,9 @@ export async function probeLocalModel(modelId: string): Promise<ModelCapabilitie
     structuredOutput: false,
     costInput: 0,
     costOutput: 0,
+    cacheReadRatio: localDefaults.cacheReadRatio,
+    cacheWriteRatio: localDefaults.cacheWriteRatio,
+    usageShape: localDefaults.usageShape,
   };
 
   // Cross-reference with models.dev to detect capabilities that Ollama's
@@ -700,6 +750,10 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
     for (const matchKey of matchKeys) {
       const ref = familyCrossRef.get(matchKey);
       if (ref) {
+        // Adopt the reference family's structural capabilities but switch
+        // the wire-shape fields to this provider's defaults — pricing and
+        // cache-telemetry shape are provider-level, not family-level.
+        const pd = getProviderDefaults(provider);
         return {
           ...ref,
           id: modelId,
@@ -707,6 +761,9 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
           // Zero out cost — custom provider pricing differs from the reference provider
           costInput: 0,
           costOutput: 0,
+          cacheReadRatio: pd.cacheReadRatio,
+          cacheWriteRatio: pd.cacheWriteRatio,
+          usageShape: pd.usageShape,
         };
       }
     }
@@ -717,6 +774,7 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
   if (fallback) return { ...fallback, id: modelId };
 
   // 5. Ultra-conservative default for truly unknown providers.
+  const unknownDefaults = getProviderDefaults(provider);
   return {
     id: modelId,
     provider,
@@ -729,6 +787,9 @@ export function getCapabilities(provider: string, modelId: string): ModelCapabil
     structuredOutput: false,
     costInput: 0,
     costOutput: 0,
+    cacheReadRatio: unknownDefaults.cacheReadRatio,
+    cacheWriteRatio: unknownDefaults.cacheWriteRatio,
+    usageShape: unknownDefaults.usageShape,
   };
 }
 

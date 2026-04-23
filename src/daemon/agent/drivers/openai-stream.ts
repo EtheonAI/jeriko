@@ -13,6 +13,7 @@
 //   - Flush of remaining partial tool calls on stream end
 
 import type { StreamChunk, ToolCall, UsageInfo } from "./index.js";
+import type { CacheUsageShape } from "./provider-defaults.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -23,6 +24,18 @@ export interface ParseOpenAIStreamOptions {
   response: Response;
   /** Optional AbortSignal — used to race against reader.read() for Bun compat. */
   signal?: AbortSignal;
+  /**
+   * Wire-protocol shape for the provider's cached-token telemetry. Drives
+   * whether cached tokens are subtracted from `prompt_tokens` (legacy
+   * OpenAI `openai-inclusive`), assumed already-excluded (`openai-exclusive`),
+   * or ignored (`none`). Sourced from {@link ModelCapabilities.usageShape};
+   * callers should pass the capability's field verbatim.
+   *
+   * Omitting the option defaults to `openai-inclusive` — the historical
+   * OpenAI v1 Chat Completions contract — so existing call sites that
+   * haven't been updated still behave correctly.
+   */
+  usageShape?: CacheUsageShape;
 }
 
 interface PartialToolCall {
@@ -54,6 +67,7 @@ export async function* parseOpenAIStream(
   opts: ParseOpenAIStreamOptions,
 ): AsyncGenerator<StreamChunk> {
   const { response, signal } = opts;
+  const usageShape: CacheUsageShape = opts.usageShape ?? "openai-inclusive";
 
   if (!response.body) {
     yield { type: "error", content: "Response has no body" };
@@ -124,7 +138,7 @@ export async function* parseOpenAIStream(
 
         // OpenAI emits a final SSE event with `usage` and empty choices[] when
         // `stream_options.include_usage` is true. Capture that for the ledger.
-        const usage = extractOpenAIUsage(event.usage);
+        const usage = extractOpenAIUsage(event.usage, usageShape);
         if (usage) {
           yield { type: "usage", content: "", usage };
         }
@@ -225,11 +239,25 @@ function* flushToolCalls(
  * Normalize the OpenAI-flavoured usage object into the driver-agnostic
  * `UsageInfo`. OpenAI exposes prompt cache telemetry via
  * `prompt_tokens_details.cached_tokens`; recent o-series variants also
- * report `cache_creation_tokens` in the same nested object. We fold those
- * into the same UsageInfo fields used by the Anthropic path so the
- * cross-provider UsageLedger can reason uniformly.
+ * report `cache_creation_tokens` in the same nested object.
+ *
+ * The reported shape varies across OpenAI's wire contract:
+ *
+ *   • `openai-inclusive` — v1 Chat Completions behaviour: `prompt_tokens`
+ *     includes cached tokens. We subtract to split. This is still the
+ *     canonical shape for OpenAI at time of writing.
+ *   • `openai-exclusive` — future / v2 shape where `prompt_tokens`
+ *     already excludes cached tokens. No subtraction; cached tokens are
+ *     surfaced verbatim. Selecting this shape on the legacy contract
+ *     would over-count input by the cached amount — callers must pass
+ *     the right value from `ModelCapabilities.usageShape`.
+ *   • `none` / `anthropic` — not applicable to OpenAI stream parsing
+ *     and are treated as "do not normalize cached tokens".
  */
-function extractOpenAIUsage(raw: unknown): UsageInfo | undefined {
+function extractOpenAIUsage(
+  raw: unknown,
+  usageShape: CacheUsageShape,
+): UsageInfo | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const u = raw as Record<string, unknown>;
   const details = u.prompt_tokens_details as Record<string, unknown> | undefined;
@@ -238,20 +266,24 @@ function extractOpenAIUsage(raw: unknown): UsageInfo | undefined {
   if (typeof u.prompt_tokens === "number") usage.input_tokens = u.prompt_tokens;
   if (typeof u.completion_tokens === "number") usage.output_tokens = u.completion_tokens;
 
-  if (details) {
-    const cached = details.cached_tokens;
-    if (typeof cached === "number" && cached > 0) {
-      // OpenAI counts cached tokens inside prompt_tokens; split them out so
-      // downstream cost math can apply the cache-read multiplier.
-      usage.cache_read_input_tokens = cached;
-      if (typeof usage.input_tokens === "number") {
-        usage.input_tokens = Math.max(0, usage.input_tokens - cached);
-      }
+  if (!details) {
+    return Object.keys(usage).length > 0 ? usage : undefined;
+  }
+
+  const cached = details.cached_tokens;
+  if (typeof cached === "number" && cached > 0) {
+    usage.cache_read_input_tokens = cached;
+    if (usageShape === "openai-inclusive" && typeof usage.input_tokens === "number") {
+      usage.input_tokens = Math.max(0, usage.input_tokens - cached);
     }
-    const created = details.cache_creation_tokens;
-    if (typeof created === "number" && created > 0) {
-      usage.cache_creation_input_tokens = created;
-    }
+    // `openai-exclusive` / `none` / `anthropic` — leave `input_tokens` as
+    // the provider reported it; the provider has already split cached
+    // from uncached input.
+  }
+
+  const created = details.cache_creation_tokens;
+  if (typeof created === "number" && created > 0) {
+    usage.cache_creation_input_tokens = created;
   }
 
   return Object.keys(usage).length > 0 ? usage : undefined;
