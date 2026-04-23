@@ -2,6 +2,8 @@
 //
 // Every caller gets, for free:
 //   • a timeout that cannot be forgotten (SIGTERM first, SIGKILL escalation)
+//   • process-group signalling on POSIX — signals reach shell children,
+//     pipelines, and forked descendants, not just the direct PID
 //   • abort-signal integration
 //   • captured stdout + stderr with configurable buffer caps (no OOM)
 //   • exit-code and elapsed-time reporting
@@ -10,7 +12,12 @@
 // The goal: remove every ad-hoc `setTimeout → child.kill` pattern strewn
 // through tool and service code. One timer, one kill path, one test surface.
 
-import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptions } from "node:child_process";
+import {
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams,
+  type SpawnOptions,
+} from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -45,6 +52,21 @@ export interface SafeSpawnInput {
   readonly gracefulKillDelayMs?: number;
   /** When `true`, run the command through a shell. Mirrors `spawn`'s option. */
   readonly shell?: boolean;
+  /**
+   * When `true` (the default when {@link shell} is `true` on POSIX), the
+   * child is spawned in its own process group and signals are delivered
+   * to the whole subtree via `process.kill(-pid, …)`. This is the only
+   * way to reliably terminate shell pipelines, compound commands, and
+   * long-running subcommands that ignore SIGTERM (notably `sleep` on
+   * several Linux distros). Windows has no `setsid()` equivalent, so
+   * the flag is silently ignored there and kills fall back to the
+   * direct PID — strictly no worse than the prior one-signal path.
+   *
+   * Set explicitly to `false` when the caller *wants* a signal to hit
+   * only the top-level child (rare; pretty much exclusively for daemon
+   * managers that share a controlling process group with the parent).
+   */
+  readonly killTree?: boolean;
 }
 
 export type SafeSpawnOutcome =
@@ -61,6 +83,33 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STDOUT_LIMIT = 1_048_576;
 const DEFAULT_STDERR_LIMIT = 65_536;
 const DEFAULT_GRACEFUL_KILL_DELAY_MS = 2_000;
+
+const IS_POSIX = process.platform !== "win32";
+
+/**
+ * Send a signal to a child process, preferring the process-group form
+ * when {@link killTree} is enabled (POSIX only). Swallows errors from
+ * already-dead processes so callers don't need try/catch at the call
+ * site. Exported so other daemon services (mcp-stdio, etc.) can reuse
+ * the single correct kill path without re-implementing the invariant.
+ */
+export function terminateChild(
+  child: ChildProcess,
+  signal: NodeJS.Signals,
+  opts: { killTree?: boolean } = {},
+): void {
+  if (child.pid === undefined) return;
+  const tree = opts.killTree === true && IS_POSIX;
+  try {
+    if (tree) {
+      process.kill(-child.pid, signal);
+    } else {
+      child.kill(signal);
+    }
+  } catch {
+    // Already dead, or race between close and kill — both safe to ignore.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Main entry point
@@ -79,11 +128,21 @@ export function safeSpawn(input: SafeSpawnInput): Promise<SafeSpawnOutcome> {
     const stderrLimit = input.stderrLimit ?? DEFAULT_STDERR_LIMIT;
     const gracefulDelay = input.gracefulKillDelayMs ?? DEFAULT_GRACEFUL_KILL_DELAY_MS;
 
+    // Default: kill the whole tree when running through a shell. Direct
+    // argv spawns (shell:false, which is the default) don't need a new
+    // process group because the child IS the command, not a shell parent.
+    const killTree = input.killTree ?? (input.shell === true);
+
     const options: SpawnOptions = {
       cwd: input.cwd,
       env: input.env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: input.shell ?? false,
+      // `detached: true` puts the child in its own process group on POSIX
+      // so signals delivered via `process.kill(-pid, …)` reach the whole
+      // tree. We deliberately do not call `child.unref()` — the parent
+      // still awaits the child; detached only affects the group.
+      detached: killTree && IS_POSIX,
     };
 
     let child: ChildProcessWithoutNullStreams;
@@ -137,10 +196,10 @@ export function safeSpawn(input: SafeSpawnInput): Promise<SafeSpawnOutcome> {
     if (timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
-        try { child.kill("SIGTERM"); } catch { /* ignore */ }
+        terminateChild(child, "SIGTERM", { killTree });
         killDelay = setTimeout(() => {
           if (!child.killed) {
-            try { child.kill("SIGKILL"); } catch { /* ignore */ }
+            terminateChild(child, "SIGKILL", { killTree });
           }
         }, gracefulDelay);
       }, timeoutMs);
@@ -150,7 +209,7 @@ export function safeSpawn(input: SafeSpawnInput): Promise<SafeSpawnOutcome> {
     let aborted = false;
     const abortHandler = () => {
       aborted = true;
-      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+      terminateChild(child, "SIGTERM", { killTree });
     };
     if (input.signal) {
       if (input.signal.aborted) abortHandler();

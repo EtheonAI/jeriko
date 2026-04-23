@@ -13,8 +13,7 @@ import type { ExecutionLease, LeaseDecision } from "./lease.js";
 import { auditAllow, auditDeny, auditComplete } from "./audit.js";
 import { isCommandBlocked } from "./sandbox.js";
 import { getActiveBroker } from "./broker.js";
-
-import { spawn } from "node:child_process";
+import { safeSpawn } from "../../shared/spawn-safe.js";
 
 // ═══════════════════════════════════════════════════════════════
 // TYPES
@@ -59,6 +58,15 @@ export interface ExecOptions {
 // ═══════════════════════════════════════════════════════════════
 
 const DEFAULT_MAX_OUTPUT = 1024 * 1024; // 1MB
+
+/**
+ * Grace period between SIGTERM and SIGKILL when a command blows its
+ * timeout. Short by design — the gateway's callers (agent tools, CLI
+ * dispatch) all run under a user-facing latency budget and a stuck
+ * command must not block the loop for the full `gracefulKillDelayMs`
+ * default of `safeSpawn`.
+ */
+const GATEWAY_KILL_GRACE_MS = 500;
 
 /** Environment variable keys that must be stripped before spawning. */
 const SENSITIVE_KEYS: readonly string[] = [
@@ -139,9 +147,17 @@ interface SpawnResult {
 }
 
 /**
- * Spawn a shell command with timeout enforcement and output capping.
+ * Run a shell command through `safeSpawn` and project the outcome into
+ * the gateway's result shape.
+ *
+ * The gateway historically enforced a *shared* stdout+stderr output cap
+ * (`max_output`) so a command emitting heavily onto one stream couldn't
+ * blow the memory budget of the other. `safeSpawn` uses per-stream
+ * limits; we preserve the original contract by setting both limits to
+ * the same number (callers still see truncation when either stream
+ * hits the cap) and OR the truncation flags.
  */
-function spawnCommand(
+async function spawnCommand(
   command: string,
   options: {
     timeout: number;
@@ -151,93 +167,59 @@ function spawnCommand(
     max_output: number;
   },
 ): Promise<SpawnResult> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    const start = performance.now();
-    let stdoutBuf = "";
-    let stderrBuf = "";
-    let truncated = false;
-    let killed = false;
-
-    const proc = spawn("sh", ["-c", command], {
-      cwd: options.cwd,
-      env: options.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    // Timeout enforcement
-    const timer = setTimeout(() => {
-      killed = true;
-      proc.kill("SIGKILL");
-    }, options.timeout);
-
-    // Capture stdout with size cap
-    proc.stdout.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf-8");
-      if (stdoutBuf.length + stderrBuf.length < options.max_output) {
-        const remaining = options.max_output - stdoutBuf.length - stderrBuf.length;
-        stdoutBuf += text.slice(0, remaining);
-        if (text.length > remaining) truncated = true;
-      } else {
-        truncated = true;
-      }
-    });
-
-    // Capture stderr with size cap
-    proc.stderr.on("data", (chunk: Buffer) => {
-      const text = chunk.toString("utf-8");
-      if (stdoutBuf.length + stderrBuf.length < options.max_output) {
-        const remaining = options.max_output - stdoutBuf.length - stderrBuf.length;
-        stderrBuf += text.slice(0, remaining);
-        if (text.length > remaining) truncated = true;
-      } else {
-        truncated = true;
-      }
-    });
-
-    // Pipe stdin if provided
-    if (options.stdin) {
-      proc.stdin.write(options.stdin);
-      proc.stdin.end();
-    } else {
-      proc.stdin.end();
-    }
-
-    proc.on("close", (code) => {
-      clearTimeout(timer);
-      const duration_ms = Math.round(performance.now() - start);
-
-      if (killed) {
-        resolvePromise({
-          stdout: stdoutBuf,
-          stderr: stderrBuf + "\n[jeriko] process killed: timeout exceeded",
-          exit_code: 137, // SIGKILL
-          duration_ms,
-          truncated,
-        });
-        return;
-      }
-
-      resolvePromise({
-        stdout: stdoutBuf,
-        stderr: stderrBuf,
-        exit_code: code ?? 1,
-        duration_ms,
-        truncated,
-      });
-    });
-
-    proc.on("error", (err) => {
-      clearTimeout(timer);
-      const duration_ms = Math.round(performance.now() - start);
-      resolvePromise({
-        stdout: stdoutBuf,
-        stderr: `[jeriko] spawn error: ${err.message}`,
-        exit_code: 1,
-        duration_ms,
-        truncated,
-      });
-    });
+  const outcome = await safeSpawn({
+    command,
+    shell: true,
+    cwd: options.cwd,
+    env: options.env,
+    stdin: options.stdin,
+    timeoutMs: options.timeout,
+    gracefulKillDelayMs: GATEWAY_KILL_GRACE_MS,
+    stdoutLimit: options.max_output,
+    stderrLimit: options.max_output,
   });
+
+  switch (outcome.status) {
+    case "exited": {
+      return {
+        stdout: outcome.stdout,
+        stderr: outcome.stderr,
+        exit_code: outcome.code,
+        duration_ms: outcome.durationMs,
+        truncated: outcome.stdoutTruncated || outcome.stderrTruncated,
+      };
+    }
+    case "timeout": {
+      const tail = outcome.stderr.endsWith("\n") ? "" : "\n";
+      return {
+        stdout: outcome.stdout,
+        stderr: `${outcome.stderr}${tail}[jeriko] process killed: timeout exceeded`,
+        // 137 = 128 + SIGKILL(9). Kept for backwards-compat with callers
+        // that inspect the exit code to detect timeouts.
+        exit_code: 137,
+        duration_ms: outcome.durationMs,
+        truncated: outcome.stdoutTruncated || outcome.stderrTruncated,
+      };
+    }
+    case "aborted": {
+      return {
+        stdout: outcome.stdout,
+        stderr: `${outcome.stderr}\n[jeriko] process aborted`,
+        exit_code: 143, // 128 + SIGTERM(15)
+        duration_ms: outcome.durationMs,
+        truncated: false,
+      };
+    }
+    case "error": {
+      return {
+        stdout: "",
+        stderr: `[jeriko] spawn error: ${outcome.error.message}`,
+        exit_code: 1,
+        duration_ms: 0,
+        truncated: false,
+      };
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

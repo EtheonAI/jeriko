@@ -13,8 +13,16 @@ import {
 } from "./transport.js";
 import type { JsonRpcMessage } from "./protocol.js";
 import { getLogger } from "../../../shared/logger.js";
+import { terminateChild } from "../../../shared/spawn-safe.js";
 
 const log = getLogger();
+
+/**
+ * Grace period between SIGTERM and SIGKILL on shutdown. MCP servers are
+ * usually well-behaved JSON-RPC loops that flush on SIGTERM, but a
+ * wedged server shouldn't be able to stall daemon shutdown indefinitely.
+ */
+const MCP_CLOSE_GRACE_MS = 1_000;
 
 export interface StdioTransportOptions {
   command: string;
@@ -94,14 +102,29 @@ export class StdioTransport implements Transport {
 
   async close(): Promise<void> {
     this.closed = true;
-    if (!this.child) return;
-    try {
-      this.child.stdin?.end();
-    } catch { /* ignore */ }
-    if (!this.child.killed) {
-      try { this.child.kill("SIGTERM"); } catch { /* ignore */ }
-    }
+    const child = this.child;
+    if (!child) return;
     this.child = undefined;
+
+    // Closing stdin lets well-behaved servers drain and exit cleanly.
+    try { child.stdin?.end(); } catch { /* ignore */ }
+
+    if (child.killed || child.exitCode !== null) return;
+
+    await new Promise<void>((resolve) => {
+      const onExit = () => { clearTimeout(killTimer); resolve(); };
+      child.once("exit", onExit);
+
+      terminateChild(child, "SIGTERM");
+
+      const killTimer = setTimeout(() => {
+        child.off("exit", onExit);
+        if (!child.killed && child.exitCode === null) {
+          terminateChild(child, "SIGKILL");
+        }
+        resolve();
+      }, MCP_CLOSE_GRACE_MS);
+    });
   }
 
   // -------------------------------------------------------------------------

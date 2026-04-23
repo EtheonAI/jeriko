@@ -147,3 +147,26 @@ describe("gateway — shouldAsk short-circuits the ask path", () => {
     expect(asked).toBe(1);
   });
 });
+
+describe("gateway — timeout enforcement reaches shell subcommands", () => {
+  // The pre-migration gateway invoked `proc.kill("SIGKILL")` on the
+  // direct `sh -c` child, which leaves pipelines, compound commands,
+  // and SIGTERM-ignoring subcommands running for the full wall-clock
+  // of the subcommand. Now that we go through safeSpawn with
+  // killTree+escalation, a stuck `sleep 30 | cat` must be terminated
+  // inside the configured timeout, not 30 s later.
+  test("kills a shell pipeline at the configured timeout", async () => {
+    const start = Date.now();
+    const result = await exec("test", "sleep 30 | cat", {
+      timeout: 300,
+      lease_overrides: { risk: "low", timeout: 300 },
+    });
+    const elapsed = Date.now() - start;
+    // SIGTERM grace is 500 ms in the gateway; budget the assertion with
+    // a comfortable margin for CI variance, but nowhere near the 30 s
+    // natural completion time of the inner `sleep`.
+    expect(elapsed).toBeLessThan(3_000);
+    expect(result.exit_code).toBe(137);
+    expect(result.stderr).toContain("timeout exceeded");
+  });
+});
