@@ -66,11 +66,8 @@ import {
 // History
 import { InputHistory } from "../../src/cli/lib/history.js";
 
-// Markdown
-import { renderMarkdown } from "../../src/cli/lib/markdown.js";
-
-// Syntax
-import { highlightCode, supportedLanguages } from "../../src/cli/lib/syntax.js";
+// Markdown + syntax highlighter (post-Subsystem 6 barrel)
+import { renderMarkdown, highlightCode, supportedLanguages } from "../../src/cli/rendering/index.js";
 
 // Setup
 import {
@@ -89,7 +86,7 @@ import { computeVisibleWindow } from "../../src/cli/components/Autocomplete.js";
 // Sub-agent derived state
 import {
   deriveSubAgentState,
-  getAgentTypeColor,
+  getAgentTypeTone,
   AGENT_TYPE_COLORS,
 } from "../../src/cli/hooks/useSubAgents.js";
 
@@ -125,7 +122,7 @@ describe("appReducer", () => {
   // ── Phase transitions ──────────────────────────────────────────
 
   test("SET_PHASE transitions to any valid phase", () => {
-    const phases: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "setup", "wizard"];
+    const phases: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "wizard"];
     for (const phase of phases) {
       const next = appReducer(state, { type: "SET_PHASE", phase });
       expect(next.phase).toBe(phase);
@@ -504,8 +501,8 @@ describe("createInitialState", () => {
   });
 
   test("respects overrides", () => {
-    const s = createInitialState({ phase: "setup", model: "gpt-4o", sessionSlug: "test-slug" });
-    expect(s.phase).toBe("setup");
+    const s = createInitialState({ phase: "wizard", model: "gpt-4o", sessionSlug: "test-slug" });
+    expect(s.phase).toBe("wizard");
     expect(s.model).toBe("gpt-4o");
     expect(s.sessionSlug).toBe("test-slug");
   });
@@ -517,7 +514,7 @@ describe("createInitialState", () => {
 
 describe("isPhase", () => {
   test("returns true for all valid phases", () => {
-    const valid: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "setup", "wizard"];
+    const valid: Phase[] = ["idle", "thinking", "streaming", "tool-executing", "sub-executing", "wizard"];
     for (const p of valid) {
       expect(isPhase(p)).toBe(true);
     }
@@ -1177,16 +1174,18 @@ describe("computeContextBar", () => {
     expect(bar.percentage).toBeCloseTo(0.5, 2);
   });
 
-  test("yellow below 80%", () => {
+  test("warning tone below 80%", () => {
+    // Subsystem 5 changed computeContextBar to return a semantic Tone
+    // instead of a hex color, so this bar is now theme-invariant.
     const bar = computeContextBar(120000, { totalTokens: 120000, maxTokens: 200000, compactionCount: 0 });
     expect(bar.visible).toBe(true);
-    expect(bar.color).toBe(PALETTE.yellow);
+    expect(bar.tone).toBe("warning");
   });
 
-  test("red at 80%+", () => {
+  test("error tone at 80%+", () => {
     const bar = computeContextBar(180000, { totalTokens: 180000, maxTokens: 200000, compactionCount: 0 });
     expect(bar.visible).toBe(true);
-    expect(bar.color).toBe(PALETTE.red);
+    expect(bar.tone).toBe("error");
   });
 
   test("hidden when maxTokens is 0", () => {
@@ -1276,17 +1275,20 @@ describe("deriveSubAgentState", () => {
   });
 });
 
-describe("getAgentTypeColor", () => {
-  test("returns known colors", () => {
-    expect(getAgentTypeColor("research")).toBe("cyan");
-    expect(getAgentTypeColor("task")).toBe("green");
-    expect(getAgentTypeColor("explore")).toBe("blue");
-    expect(getAgentTypeColor("plan")).toBe("purple");
-    expect(getAgentTypeColor("general")).toBe("text");
+describe("getAgentTypeTone", () => {
+  test("returns known semantic tones", () => {
+    // Subsystem 5 migrated AGENT_TYPE_COLORS from PALETTE-alias strings
+    // (cyan/green/blue/red) to semantic Tone literals (info/success/tool/error).
+    // The function name is retained as a back-compat alias of getAgentTypeTone.
+    expect(getAgentTypeTone("research")).toBe("info");
+    expect(getAgentTypeTone("task")).toBe("success");
+    expect(getAgentTypeTone("explore")).toBe("tool");
+    expect(getAgentTypeTone("plan")).toBe("purple");
+    expect(getAgentTypeTone("general")).toBe("text");
   });
 
   test("falls back for unknown types", () => {
-    const color = getAgentTypeColor("unknown-type");
+    const color = getAgentTypeTone("unknown-type");
     expect(typeof color).toBe("string");
     expect(color.length).toBeGreaterThan(0);
   });

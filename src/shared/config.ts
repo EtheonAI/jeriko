@@ -414,7 +414,7 @@ export function loadConfig(): JerikoConfig {
 
 /**
  * Read a JSON file and deep-merge it into the target config.
- * Silently returns if the file does not exist or is malformed.
+ * Missing/unreadable files are skipped. Malformed files warn and fall back to defaults.
  */
 function mergeFromFile(target: JerikoConfig, filePath: string): void {
   if (!fs.existsSync(filePath)) return;

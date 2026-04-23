@@ -16,7 +16,6 @@ export type Phase =
   | "streaming"
   | "tool-executing"
   | "sub-executing"
-  | "setup"
   | "wizard";
 
 /** Type guard for valid phase values. */
@@ -27,7 +26,6 @@ export function isPhase(value: unknown): value is Phase {
     value === "streaming" ||
     value === "tool-executing" ||
     value === "sub-executing" ||
-    value === "setup" ||
     value === "wizard"
   );
 }
@@ -43,6 +41,20 @@ export type WizardStep =
   | { type: "text"; message: string; placeholder?: string; validate?: (v: string) => string | undefined }
   | { type: "password"; message: string; validate?: (v: string) => string | undefined };
 
+/**
+ * A step resolver is either a static WizardStep or a function that produces
+ * one from the previous answers. Returning `null` from the function skips
+ * the step (the engine advances without asking the user); the skipped
+ * position is filled with an empty-string placeholder in the results array
+ * so later steps can rely on stable indexing.
+ *
+ * Backward compatible: WizardStep is a subtype of WizardStepResolver, so
+ * existing static step arrays keep working unchanged.
+ */
+export type WizardStepResolver =
+  | WizardStep
+  | ((previous: readonly string[]) => WizardStep | null);
+
 /** An option in a select step. */
 export interface WizardOption {
   value: string;
@@ -53,8 +65,8 @@ export interface WizardOption {
 /** Configuration for an interactive wizard flow. */
 export interface WizardConfig {
   title: string;
-  steps: WizardStep[];
-  onComplete: (results: string[]) => void | Promise<void>;
+  steps: readonly WizardStepResolver[];
+  onComplete: (results: readonly string[]) => void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------

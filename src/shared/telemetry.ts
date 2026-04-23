@@ -7,6 +7,7 @@
  */
 
 import { getUserId } from "./config.js";
+import { VERSION, BUILD_REF } from "./version.js";
 
 // Build-time injection (same pattern as baked-oauth-ids.ts)
 declare const __BAKED_POSTHOG_KEY__: string | undefined;
@@ -17,8 +18,6 @@ const POSTHOG_KEY: string | undefined =
     : process.env.POSTHOG_API_KEY;
 
 const POSTHOG_HOST = "https://us.i.posthog.com";
-
-const VERSION = "2.0.0-alpha.1";
 
 /** Cached opt-out check. */
 let _enabled: boolean | null = null;
@@ -59,6 +58,7 @@ export function capture(
       ...clean,
       $lib: "jeriko",
       $lib_version: VERSION,
+      $lib_build_ref: BUILD_REF,
       $os: process.platform,
       $os_version: process.arch,
     },

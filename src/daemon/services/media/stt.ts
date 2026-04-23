@@ -10,8 +10,13 @@
 import type { STTConfig } from "../../../shared/config.js";
 import { readFileSync, statSync } from "node:fs";
 import { getLogger } from "../../../shared/logger.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
 
 const log = getLogger();
+
+/** Retry budget for single-shot STT transcription — see tts.ts for rationale. */
+const MEDIA_HTTP_RETRIES = 2;
 
 /** Maximum audio file size accepted by OpenAI Whisper API (25 MB). */
 const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
@@ -102,16 +107,16 @@ async function transcribeOpenAI(
     ? `${baseUrl}/audio/transcriptions`
     : `${baseUrl}/v1/audio/transcriptions`;
 
-  const response = await fetch(url, {
+  const response = await withHttpRetry(() => fetch(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}` },
     body: formData,
     signal: AbortSignal.timeout(60_000),
-  });
+  }), { maxRetries: MEDIA_HTTP_RETRIES });
 
   if (!response.ok) {
     const errorText = await response.text();
-    log.warn(`STT OpenAI error ${response.status}: ${errorText}`);
+    log.warn(`STT OpenAI error ${response.status}: ${redact(errorText)}`);
     return null;
   }
 

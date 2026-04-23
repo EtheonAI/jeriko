@@ -70,8 +70,20 @@ const PKG_VERSION = JSON.parse(
   await Bun.file(path.join(ROOT, "package.json")).text(),
 ).version as string;
 
+let buildRef = "unknown";
+try {
+  buildRef = execSync("git rev-parse --short HEAD", {
+    cwd: ROOT,
+    encoding: "utf-8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).trim() || "unknown";
+} catch {
+  buildRef = "unknown";
+}
+
 const BAKED_OAUTH_DEFINES: Record<string, string> = {
   __BAKED_VERSION__:                JSON.stringify(PKG_VERSION),
+  __BAKED_BUILD_REF__:              JSON.stringify(buildRef),
   __BAKED_POSTHOG_KEY__:            JSON.stringify(process.env.BAKED_POSTHOG_KEY ?? ""),
   __BAKED_RELAY_AUTH_SECRET__:       JSON.stringify(RELAY_AUTH_SECRET),
   __BAKED_GITHUB_CLIENT_ID__:       JSON.stringify(process.env.BAKED_GITHUB_CLIENT_ID    ?? ""),

@@ -5,33 +5,35 @@
  * components via callbacks, and manages phase transitions. This is
  * the single source of truth for the CLI's UI state.
  *
- * Event flow:
- *   1. User types message → handleSubmit(text)
- *   2. Check for exit → exit the app
- *   3. Check for slash command → dispatch, add system message
- *   4. Normal message → dispatch SET_PHASE("thinking"), call backend.send()
- *   5. Callbacks dispatch actions: text deltas, tool calls, etc.
- *   6. onTurnComplete → freeze into DisplayMessage, reset to "idle"
+ * Integration-layer responsibilities (ADR-013):
+ *   - Owns the imperative controller refs (theme, help) that slash-command
+ *     handlers write through. Bridge components populate them from inside
+ *     the provider tree.
+ *   - Renders <PermissionOverlay> so daemon-originated lease approvals can
+ *     reach the user.
+ *   - Conditionally renders <KeybindingHelp> when the help controller is
+ *     visible.
+ *
+ * Provider wrappers (<ThemeProvider>, <KeybindingProvider>,
+ * <PermissionProvider>) live in chat.tsx — boot-time concerns stay in
+ * boot-time code, App stays renderable under any test wrapper.
  */
 
-import React, { useRef, useCallback } from "react";
+import React, { useRef, useCallback, useState, useMemo } from "react";
 import { Box, useApp } from "ink";
 import { randomUUID } from "node:crypto";
 
 import type { Backend, BackendCallbacks } from "./backend.js";
-import { persistSetup } from "./backend.js";
 import { isExitCommand, parseSlashCommand, SUB_AGENT_TOOLS } from "./commands.js";
 import { capitalize, formatError, safeParseJson } from "./format.js";
 import { t } from "./theme.js";
 import type { Phase, DisplayToolCall } from "./types.js";
-import type { ProviderOption } from "./lib/setup.js";
 import { useAppState } from "./hooks/useAppReducer.js";
 import { useSlashCommands } from "./hooks/useSlashCommands.js";
 
 import { Messages, StreamingText } from "./components/Messages.js";
 import { Input } from "./components/Input.js";
 import { StatusBar } from "./components/StatusBar.js";
-import { Setup } from "./components/Setup.js";
 
 import { ToolCallView } from "./components/ToolCall.js";
 import { SubAgentView, SubAgentList } from "./components/SubAgent.js";
@@ -39,14 +41,28 @@ import { Wizard } from "./components/Wizard.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { useSubAgents } from "./hooks/useSubAgents.js";
 
+import {
+  NULL_HELP_CONTROLLER,
+  NULL_THEME_CONTROLLER,
+  HelpControllerBridge,
+  ThemeControllerBridge,
+  type HelpController,
+  type ThemeController,
+} from "./boot/index.js";
+import { PermissionOverlay, usePermissionSnapshot } from "./permission/index.js";
+import {
+  KeybindingHelp,
+  useKeybindingSnapshot,
+} from "./keybindings/index.js";
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface AppProps {
-  backend: Backend;
-  initialModel: string;
-  initialPhase?: Phase;
+  readonly backend: Backend;
+  readonly initialModel: string;
+  readonly initialPhase?: Phase;
 }
 
 // ---------------------------------------------------------------------------
@@ -63,6 +79,13 @@ export const App: React.FC<AppProps> = ({
     phase: initialPhase,
     model: initialModel,
   });
+
+  // ----- Integration controllers -----
+  // Refs populated by the bridge components below. NULL defaults ensure
+  // handlers never crash if they fire before the first effect commits.
+  const themeControllerRef = useRef<ThemeController>(NULL_THEME_CONTROLLER);
+  const helpControllerRef = useRef<HelpController>(NULL_HELP_CONTROLLER);
+  const [helpVisible, setHelpVisible] = useState(false);
 
   // Refs for mutable state used in callbacks
   const turnStartRef = useRef(0);
@@ -91,6 +114,8 @@ export const App: React.FC<AppProps> = ({
     state,
     dispatch,
     addSystemMessage,
+    themeControllerRef,
+    helpControllerRef,
   });
 
   // ----- Submit handler -----
@@ -186,12 +211,10 @@ export const App: React.FC<AppProps> = ({
         },
 
         onTurnComplete(tokensIn, tokensOut) {
-          // If the turn was aborted, don't freeze partial state into history
           if (abortedRef.current) return;
 
           const durationMs = Date.now() - turnStartRef.current;
 
-          // Freeze the assistant response into a static message
           dispatch({
             type: "FREEZE_ASSISTANT_MESSAGE",
             id: randomUUID(),
@@ -199,25 +222,15 @@ export const App: React.FC<AppProps> = ({
             toolCalls: accumulatedToolCalls,
           });
 
-          // Update cumulative stats
           dispatch({ type: "UPDATE_STATS", tokensIn, tokensOut, durationMs });
-
-          // Update context token count
-          dispatch({
-            type: "UPDATE_CONTEXT",
-            totalTokens: tokensIn + tokensOut,
-          });
-
-          // Reset live state
+          dispatch({ type: "UPDATE_CONTEXT", totalTokens: tokensIn + tokensOut });
           dispatch({ type: "RESET_TURN" });
         },
 
         onCompaction(before, after) {
           if (abortedRef.current) return;
           dispatch({ type: "CONTEXT_COMPACTED", before, after });
-          addSystemMessage(
-            `✻ Context compacted (${before} → ${after} tokens)`,
-          );
+          addSystemMessage(`✻ Context compacted (${before} → ${after} tokens)`);
         },
 
         onError(message) {
@@ -225,7 +238,6 @@ export const App: React.FC<AppProps> = ({
           addSystemMessage(formatError(message));
         },
 
-        // Sub-agent callbacks — all guarded against post-abort dispatch
         onSubAgentStarted(data) {
           if (abortedRef.current) return;
           dispatch({ type: "SET_PHASE", phase: "sub-executing" });
@@ -267,7 +279,6 @@ export const App: React.FC<AppProps> = ({
       try {
         await backend.send(text, callbacks);
       } catch (err: unknown) {
-        // Ensure the UI always recovers — never leave phase stuck on "thinking"
         const errMsg = err instanceof Error ? err.message : String(err);
         addSystemMessage(formatError(errMsg));
         dispatch({ type: "RESET_TURN" });
@@ -279,6 +290,12 @@ export const App: React.FC<AppProps> = ({
   // ----- Interrupt handler -----
 
   const handleInterrupt = useCallback(() => {
+    // If the help overlay is up, interrupt dismisses it first.
+    if (helpControllerRef.current.visible) {
+      helpControllerRef.current.hide();
+      return;
+    }
+
     const { phase, streamText } = state;
     if (
       phase === "thinking" ||
@@ -289,7 +306,6 @@ export const App: React.FC<AppProps> = ({
       abortedRef.current = true;
       backend.abort();
 
-      // Preserve partial response so the user doesn't lose what was streamed
       if (streamText.length > 0) {
         dispatch({
           type: "FREEZE_ASSISTANT_MESSAGE",
@@ -306,29 +322,7 @@ export const App: React.FC<AppProps> = ({
     }
   }, [state, backend, exit, addSystemMessage, dispatch]);
 
-  // ----- Setup complete handler -----
-
-  const handleSetupComplete = useCallback(
-    async (provider: ProviderOption, apiKey: string) => {
-      try {
-        await persistSetup(provider, apiKey);
-        dispatch({ type: "SET_MODEL", model: provider.model });
-        backend.setModel(provider.model);
-        dispatch({ type: "SET_PHASE", phase: "idle" });
-        addSystemMessage(t.green("✓ Setup complete!"));
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        addSystemMessage(formatError(`Setup failed: ${msg}`));
-        dispatch({ type: "SET_PHASE", phase: "idle" });
-      }
-    },
-    [backend, addSystemMessage, dispatch],
-  );
-
-  const handleSetupCancel = useCallback(() => {
-    dispatch({ type: "SET_PHASE", phase: "idle" });
-    addSystemMessage("Setup cancelled. Run /config to configure later.");
-  }, [dispatch, addSystemMessage]);
+  // ----- Wizard cancel handler -----
 
   const handleWizardCancel = useCallback(() => {
     dispatch({ type: "SET_PHASE", phase: "idle" });
@@ -337,10 +331,28 @@ export const App: React.FC<AppProps> = ({
   // ----- Derived sub-agent state -----
   const subAgentDerived = useSubAgents(state.subAgents);
 
+  // ----- Help overlay — snapshot of every live binding, shown when visible -----
+  const kbSnapshot = useKeybindingSnapshot();
+  const permissionSnapshot = usePermissionSnapshot();
+  const hasPendingPermission = permissionSnapshot.queue.length > 0;
+  const wizardActive = state.phase === "wizard" && wizardConfigRef.current !== null;
+
+  // Help overlay hides while a modal-ish workflow is active so the user
+  // doesn't face two stacked dialogs with ambiguous key focus.
+  const showHelpOverlay = useMemo(
+    () => helpVisible && !hasPendingPermission && !wizardActive,
+    [helpVisible, hasPendingPermission, wizardActive],
+  );
+
   // ----- Render -----
 
   return (
     <ErrorBoundary>
+      {/* Bridges populate imperative controller refs from inside the
+          provider tree. They render null — zero visual cost. */}
+      <ThemeControllerBridge controllerRef={themeControllerRef} />
+      <HelpControllerBridge controllerRef={helpControllerRef} onVisibilityChange={setHelpVisible} />
+
       <Box flexDirection="column" gap={0}>
         {/* Static message history */}
         <Messages messages={state.messages} />
@@ -381,15 +393,21 @@ export const App: React.FC<AppProps> = ({
           onInterrupt={handleInterrupt}
         />
 
-        {/* Setup wizard (first launch) */}
-        {state.phase === "setup" && <Setup onComplete={handleSetupComplete} onCancel={handleSetupCancel} />}
-
-        {/* Generic interactive wizard */}
-        {state.phase === "wizard" && wizardConfigRef.current && (
+        {/* Wizard — single engine for onboarding + every slash-command flow */}
+        {wizardActive && wizardConfigRef.current !== null && (
           <Wizard
             config={wizardConfigRef.current}
             onCancel={handleWizardCancel}
           />
+        )}
+
+        {/* Permission overlay — renders the head of the permission queue
+            when one is pending; null otherwise. */}
+        <PermissionOverlay />
+
+        {/* Keybinding help overlay — toggled by /keybindings. */}
+        {showHelpOverlay && (
+          <KeybindingHelp bindings={kbSnapshot.bindings} />
         )}
       </Box>
     </ErrorBoundary>

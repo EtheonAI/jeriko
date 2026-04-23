@@ -17,10 +17,11 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE, ICONS } from "../theme.js";
-import { formatTokens, formatDuration, capitalize } from "../format.js";
+import { ICONS } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
+import { formatTokens, capitalize } from "../format.js";
 import { estimateModelCost, formatModelCost } from "../lib/cost.js";
-import { Spinner } from "./Spinner.js";
+import { Spinner } from "../ui/motion-primitives/Spinner.js";
 import { ContextBar } from "./ContextBar.js";
 import type { Phase, SessionStats, ContextInfo, SubAgentState } from "../types.js";
 import type { DevMode } from "../hooks/useDevMode.js";
@@ -44,7 +45,7 @@ interface StatusBarProps {
   devMode?: DevMode;
 }
 
-export const StatusBar: React.FC<StatusBarProps> = ({
+const StatusBarImpl: React.FC<StatusBarProps> = ({
   phase,
   model,
   stats,
@@ -59,7 +60,7 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     case "thinking":
       return (
         <Box marginTop={1}>
-          <Spinner label="Thinking" preset="thinking" />
+          <Spinner label="Thinking" phase="thinking" />
         </Box>
       );
 
@@ -72,7 +73,6 @@ export const StatusBar: React.FC<StatusBarProps> = ({
     case "sub-executing":
       return <SubExecutingStatus subAgents={subAgents} />;
 
-    case "setup":
     case "wizard":
       return null;
 
@@ -89,6 +89,13 @@ export const StatusBar: React.FC<StatusBarProps> = ({
   }
 };
 
+/**
+ * Memoized so that stream-text deltas that don't change the status bar's
+ * inputs (phase/model/stats/tool/context) don't re-render it. Shallow-equal
+ * covers primitives + stable object references from the reducer.
+ */
+export const StatusBar = React.memo(StatusBarImpl);
+
 // ---------------------------------------------------------------------------
 // Phase-specific status components
 // ---------------------------------------------------------------------------
@@ -101,7 +108,7 @@ const StreamingStatus: React.FC<{ streamLength?: number }> = ({ streamLength }) 
 
   return (
     <Box marginTop={1}>
-      <Spinner label={label} preset="streaming" />
+      <Spinner label={label} phase="streaming" />
     </Box>
   );
 };
@@ -111,7 +118,7 @@ const ToolExecutingStatus: React.FC<{ currentTool?: string }> = ({ currentTool }
 
   return (
     <Box marginTop={1}>
-      <Spinner label={toolLabel} preset="tool-executing" />
+      <Spinner label={toolLabel} phase="tool-executing" />
     </Box>
   );
 };
@@ -126,7 +133,7 @@ const SubExecutingStatus: React.FC<{ subAgents?: Map<string, SubAgentState> }> =
   if (runningCount === 0) {
     return (
       <Box marginTop={1}>
-        <Spinner label="Delegating" preset="sub-executing" />
+        <Spinner label="Delegating" phase="sub-executing" />
       </Box>
     );
   }
@@ -145,7 +152,7 @@ const SubExecutingStatus: React.FC<{ subAgents?: Map<string, SubAgentState> }> =
 
   return (
     <Box marginTop={1}>
-      <Spinner label={label} preset="sub-executing" />
+      <Spinner label={label} phase="sub-executing" />
     </Box>
   );
 };
@@ -169,6 +176,7 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
   sessionSlug,
   devMode,
 }) => {
+  const { colors } = useTheme();
   if (stats.turns === 0) return null;
 
   const cost = estimateModelCost(stats.tokensIn, stats.tokensOut, model);
@@ -200,14 +208,14 @@ const IdleStatus: React.FC<IdleStatusProps> = ({
   return (
     <Box flexDirection="column" marginTop={0}>
       <Box>
-        <Text color={PALETTE.dim} wrap="truncate-end">{parts.join(sep)}</Text>
+        <Text color={colors.dim} wrap="truncate-end">{parts.join(sep)}</Text>
       </Box>
       {modeLabel && (
         <Box>
-          <Text color={devMode === "auto-accept" ? PALETTE.warning : PALETTE.brand}>
+          <Text color={devMode === "auto-accept" ? colors.warning : colors.brand}>
             {`  ${modeLabel}`}
           </Text>
-          <Text color={PALETTE.dim}>{" · esc to interrupt"}</Text>
+          <Text color={colors.dim}>{" · esc to interrupt"}</Text>
         </Box>
       )}
       {context && (

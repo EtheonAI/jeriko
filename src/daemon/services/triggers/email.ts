@@ -15,6 +15,7 @@
 import { createConnection, type Socket } from "node:net";
 import { connect as tlsConnect, type TLSSocket } from "node:tls";
 import { getLogger } from "../../../shared/logger.js";
+import { parseEnvInt } from "../../../shared/env-parse.js";
 import type { ConnectorManager } from "../connectors/manager.js";
 
 const log = getLogger();
@@ -315,7 +316,7 @@ export class EmailTrigger {
 
     // IMAP fallback settings
     this.host = config.host ?? process.env.IMAP_HOST ?? "imap.gmail.com";
-    this.port = config.port ?? parseInt(process.env.IMAP_PORT ?? "993", 10);
+    this.port = config.port ?? parseEnvInt("IMAP_PORT", 993, { min: 1, max: 65535 });
     this.user = config.user ?? process.env.IMAP_USER ?? "";
     this.password = config.password ?? process.env.IMAP_PASSWORD ?? "";
     this.intervalMs = config.intervalMs ?? 120_000;

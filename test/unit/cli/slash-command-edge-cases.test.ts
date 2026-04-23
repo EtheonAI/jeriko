@@ -132,6 +132,16 @@ function createTestCtx(backendOverrides: Partial<Backend> = {}) {
   const messages: string[] = [];
   const dispatched: unknown[] = [];
   const backend = createMockBackend(backendOverrides);
+  const themeControllerRef = {
+    current: {
+      current: "jeriko" as const,
+      set: (_id: string) => {},
+      list: () => [{ id: "jeriko", displayName: "Jeriko (Electric Indigo)", kind: "dark", colors: {} as never }],
+    },
+  };
+  const helpControllerRef = {
+    current: { visible: false, show: () => {}, hide: () => {}, toggle: () => {} },
+  };
   return {
     backend,
     dispatch: (action: unknown) => dispatched.push(action),
@@ -139,6 +149,8 @@ function createTestCtx(backendOverrides: Partial<Backend> = {}) {
     messages,
     dispatched,
     wizardConfigRef: { current: null as any },
+    themeControllerRef,
+    helpControllerRef,
     state: {
       model: "claude-sonnet-4-6",
       stats: { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 200, cacheWriteTokens: 100, totalCost: 0.05, messageCount: 10 },
@@ -1339,18 +1351,42 @@ describe("System handlers — edge cases", () => {
   // ── /theme ──
 
   describe("/theme", () => {
-    test("no args shows active theme", async () => {
+    test("no args lists themes and marks the active one", async () => {
       const ctx = createTestCtx();
       const h = createSystemHandlers(ctx);
       await h.theme("");
       expect(ctx.messages[0]).toContain("jeriko");
+      expect(ctx.messages[0]).toContain("▸");
     });
 
-    test("with args still shows active theme", async () => {
+    test("unknown theme name surfaces a clear error", async () => {
       const ctx = createTestCtx();
       const h = createSystemHandlers(ctx);
       await h.theme("dark");
-      expect(ctx.messages[0]).toContain("jeriko");
+      expect(ctx.messages[0]).toContain("Unknown theme");
+    });
+
+    test("known theme name invokes controller.set", async () => {
+      const ctx = createTestCtx();
+      let setTo: string | null = null;
+      ctx.themeControllerRef.current.set = (id: string) => { setTo = id; };
+      const h = createSystemHandlers(ctx);
+      await h.theme("jeriko");
+      expect(setTo).toBe("jeriko");
+    });
+  });
+
+  // ── /keybindings ──
+
+  describe("/keybindings", () => {
+    test("toggles the help controller once per invocation", async () => {
+      const ctx = createTestCtx();
+      let toggled = 0;
+      ctx.helpControllerRef.current.toggle = () => { toggled++; };
+      const h = createSystemHandlers(ctx);
+      await h.keybindings("");
+      await h.keybindings("");
+      expect(toggled).toBe(2);
     });
   });
 });

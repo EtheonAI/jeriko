@@ -13,6 +13,11 @@ import type {
 } from "./index.js";
 import { parseOpenAIStream } from "./openai-stream.js";
 import { withTimeout } from "./signal.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
+import { redact } from "../../security/redaction.js";
+import { getLogger } from "../../../shared/logger.js";
+
+const log = getLogger();
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -162,14 +167,26 @@ export class LocalDriver implements LLMDriver {
     }
 
     const signal = withTimeout(config.signal);
+    const serialized = JSON.stringify(body);
+    const url = `${this.baseUrl}/v1/chat/completions`;
+
     let response: Response;
     try {
-      response = await fetch(`${this.baseUrl}/v1/chat/completions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-        signal,
-      });
+      response = await withHttpRetry(
+        () => fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: serialized,
+          signal,
+        }),
+        {
+          onRetry: ({ attempt, delayMs, status }) => {
+            log.debug(
+              `Ollama retry: status=${status} attempt=${attempt + 1} delay=${Math.round(delayMs)}ms`,
+            );
+          },
+        },
+      );
     } catch (err) {
       yield {
         type: "error",
@@ -181,7 +198,10 @@ export class LocalDriver implements LLMDriver {
 
     if (!response.ok) {
       const errorText = await response.text();
-      yield { type: "error", content: `Ollama API error ${response.status}: ${errorText}` };
+      yield {
+        type: "error",
+        content: `Ollama API error ${response.status}: ${redact(errorText)}`,
+      };
       yield { type: "done", content: "" };
       return;
     }

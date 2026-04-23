@@ -102,7 +102,8 @@ Packages:           packages/protocol/    (wire protocol types)
 - **Channels** (2): Telegram (grammy), WhatsApp (Baileys)
 - **Connectors** (14+): stripe, paypal, github, twilio, vercel, x, gdrive, onedrive, gmail, outlook, hubspot, shopify, instagram, threads
 - **Triggers** (6 types): cron, webhook, file, http, email, once
-- **Agent tools** (17): bash, browse, camera, connector, delegate, edit, list, memory-tool, parallel, read, screenshot, search, skill, web, webdev, write + registry
+- **Agent tools** (19): bash, browse, camera, connector, delegate, edit, generate_image, list, memory-tool, parallel, read, screenshot, search, skill, spawn_agent, task_status, web, webdev, write
+- **Subagent subsystem** (`src/daemon/agent/subagent/`): four spawn modes — sync (blocking), async (fire-and-forget + task-notification re-injection), fork (shares parent's exact system-prompt bytes for prompt-cache hit), worktree (isolated git worktree). Per-agent tool pools assembled independently of parent restrictions. Auto-backgrounding transitions slow sync tasks to async at a configurable threshold (default 2 s). Task state is tracked in SQLite (`subagent_task` table, migration 0007).
 - **LLM drivers**: Anthropic, OpenAI, local (Ollama/LM Studio), Claude Code, custom providers (OpenAI-compat or Anthropic-compat)
 - **Custom model list**: `config.agent.customModels` — user-curated models shown first in picker. Managed via `/model pin`/`unpin` or config file. `buildModelList()` in `models.ts` is the single source of truth for model listing.
 

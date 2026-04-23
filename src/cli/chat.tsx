@@ -5,8 +5,16 @@
  * all rendering: animated spinners, static message history, live
  * streaming text, tool call visualization, and slash command completion.
  *
- * Entry point: startChat() → prints banner → render(<App />).
+ * Entry point: startChat() → loads boot config → wraps providers → renders <App />.
  * The dispatcher calls startChat(), Ink manages everything from there.
+ *
+ * Integration (ADR-013):
+ *   - Loads theme + keybindings + permissions config in parallel before
+ *     mount (loadCLIBootConfig).
+ *   - Wraps <App> in <ThemeProvider> → <KeybindingProvider> →
+ *     <PermissionProvider> so every subsystem hooks the store/context
+ *     it needs from one place.
+ *   - Theme auto-detects when no saved preference exists.
  */
 
 import { render } from "ink";
@@ -23,6 +31,15 @@ import { persistSetup } from "./wizard/onboarding.js";
 import type { Phase } from "./types.js";
 import { VERSION } from "../shared/version.js";
 
+// Subsystem 2: theme context + OSC 11 detection.
+import { ThemeProvider } from "./themes/index.js";
+// Subsystem 3: keybinding registry + user config.
+import { KeybindingProvider } from "./keybindings/index.js";
+// Subsystem 7: permission store + bridge.
+import { PermissionProvider, createAutoApproveBridge } from "./permission/index.js";
+// Subsystem 8 (this integration): unified boot-time config.
+import { loadCLIBootConfig, actionableDiagnostics } from "./boot/index.js";
+
 // Re-export for backward compat (tests, dispatcher)
 export { slashCompleter } from "./commands.js";
 
@@ -36,8 +53,7 @@ export async function startChat(): Promise<void> {
 
   const version = VERSION;
 
-  // First-run onboarding wizard (before Ink mounts).
-  // Only handles provider setup — channels are added after via /connect.
+  // ── First-run provider onboarding (pre-Ink, clack-based) ─────────────
   if (needsSetup()) {
     const result = await runOnboarding(new ClackPrompter(), version);
 
@@ -57,10 +73,7 @@ export async function startChat(): Promise<void> {
       process.exit(1);
     }
 
-    // Restore stdin after clack wizard. Clack uses readline internally
-    // which sets raw mode, pauses stdin, and may emit 'end'. Ink needs
-    // a flowing, non-raw, referenced stdin to receive keystrokes.
-    // Order matters: disable raw mode first, then resume, then ref.
+    // Restore stdin after clack wizard (raw mode off, resume, ref).
     if (process.stdin.setRawMode) {
       try { process.stdin.setRawMode(false); } catch { /* not a TTY */ }
     }
@@ -68,40 +81,71 @@ export async function startChat(): Promise<void> {
     if (typeof process.stdin.ref === "function") {
       process.stdin.ref();
     }
-
-    // Give the event loop a tick to settle stdin state before proceeding.
-    // Without this, Ink may see a stale stdin state and exit immediately.
     await new Promise((r) => setTimeout(r, 50));
   }
 
-  // Single backend creation point — ensureDaemon() auto-starts if needed,
-  // provides visible feedback on failure, and gracefully degrades.
+  // ── Boot config (theme + keybindings + permissions) ─────────────────
+  // Parallel, non-fatal load — any individual subsystem file may be
+  // missing/malformed and we still boot with sensible defaults.
+  const bootConfig = await loadCLIBootConfig();
+
+  // ── Backend (daemon or in-process) ──────────────────────────────────
   const backend = await createBackend();
   const model = backend.model;
   const cwd = process.cwd();
 
-  // Print banner before Ink takes over (stays in scrollback)
+  // Print banner before Ink takes over (stays in scrollback).
   printBanner(version, model, cwd, backend.mode);
 
-  // Always start idle (setup handled by wizard above)
+  // Surface any non-fatal config diagnostics above the chat — helps users
+  // spot a broken keybindings.json or permissions.json without silent drift.
+  const issues = actionableDiagnostics(bootConfig.diagnostics);
+  if (issues.length > 0) {
+    for (const issue of issues) {
+      const entry = issue.entry as { kind: string };
+      console.log(`⚠ ${issue.subsystem} config: ${entry.kind}`);
+    }
+  }
+
+  // Always start idle (setup handled by wizard above).
   const initialPhase: Phase = "idle";
 
-  // Wrap stdin in a filter that strips bracketed paste escape sequence
-  // markers (\x1b[200~ / \x1b[201~) BEFORE Ink's input parser sees them.
-  // Ink splits escape sequences across multiple useInput callbacks, so
-  // filtering must happen at the stream level to be reliable.
+  // Wrap stdin with a filter that strips bracketed paste escape markers
+  // before Ink's input parser sees them.
   const filteredStdin = new StdinFilter(process.stdin);
 
-  // Render Ink app with optimized options:
-  //   stdin: Filtered stream that strips paste markers (see StdinFilter)
-  //   patchConsole: Intercepts console.log/warn/error so they don't break the TUI
-  const { waitUntilExit } = render(
-    <App backend={backend} initialModel={model} initialPhase={initialPhase} />,
-    {
-      stdin: filteredStdin as unknown as NodeJS.ReadStream,
-      patchConsole: true,
-    },
+  // ── Render the full provider tree ───────────────────────────────────
+  // Composition order:
+  //   ThemeProvider       — innermost colors/context consumed by everything
+  //   KeybindingProvider  — feeds the dialog scope and help overlay
+  //   PermissionProvider  — feeds the PermissionOverlay mounted inside App
+  //
+  // The `bridge` for PermissionProvider is the auto-approve stub until the
+  // daemon exec-gateway emits lease-pending events (see ADR-012). Swapping
+  // the bridge is a one-line change once the adapter lands.
+  const tree = (
+    <ThemeProvider
+      initialTheme={bootConfig.themeId ?? undefined}
+      autoDetect={bootConfig.themeId === null}
+    >
+      <KeybindingProvider
+        specs={bootConfig.keybindingSpecs}
+        initialScopes={["input"]}
+      >
+        <PermissionProvider
+          initialPersistentRules={bootConfig.permissionRules}
+          bridge={createAutoApproveBridge()}
+        >
+          <App backend={backend} initialModel={model} initialPhase={initialPhase} />
+        </PermissionProvider>
+      </KeybindingProvider>
+    </ThemeProvider>
   );
+
+  const { waitUntilExit } = render(tree, {
+    stdin: filteredStdin as unknown as NodeJS.ReadStream,
+    patchConsole: true,
+  });
 
   await waitUntilExit();
 

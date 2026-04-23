@@ -15,7 +15,7 @@ describe("dispatcher", () => {
     logSpy.mockRestore();
   });
 
-  it("--version prints version and exits", async () => {
+  it("--version prints a diagnostics line with version + build ref + platform and exits", async () => {
     const { dispatcher } = await import("../../src/cli/dispatcher.js");
     try {
       await dispatcher(["--version"]);
@@ -23,7 +23,10 @@ describe("dispatcher", () => {
       // Only swallow the EXIT error from our process.exit mock
       if (e?.message !== "EXIT") throw e;
     }
-    expect(logSpy).toHaveBeenCalledWith(`jeriko ${VERSION}`);
+    const output = logSpy.mock.calls.map((c) => c[0]).join("\n");
+    // Format: `jeriko <version> (build <ref>) <platform>/<arch>` — see renderDiagnosticsLine
+    expect(output).toContain(`jeriko ${VERSION}`);
+    expect(output).toMatch(/\(build \S+\)/);
   });
 
   it("--help prints help and exits", async () => {

@@ -19,7 +19,8 @@
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE, ICONS } from "../theme.js";
+import { ICONS } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
 import type { AutocompleteItem } from "../lib/autocomplete.js";
 
 // ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
   items,
   selectedIndex,
 }) => {
+  const { colors } = useTheme();
   if (items.length === 0) return null;
 
   // Compute the visible window (scroll if more than MAX_VISIBLE_ITEMS)
@@ -58,18 +60,18 @@ export const Autocomplete: React.FC<AutocompleteProps> = ({
 
         return (
           <Text key={item.name}>
-            <Text color={isSelected ? PALETTE.brand : PALETTE.dim}>
+            <Text color={isSelected ? colors.brand : colors.dim}>
               {isSelected ? `${ICONS.arrow} ` : "  "}
             </Text>
-            <Text color={isSelected ? PALETTE.brand : PALETTE.muted} bold={isSelected}>
+            <Text color={isSelected ? colors.brand : colors.muted} bold={isSelected}>
               {item.name.padEnd(18)}
             </Text>
-            <Text color={PALETTE.dim}>{item.description}</Text>
+            <Text color={colors.dim}>{item.description}</Text>
           </Text>
         );
       })}
       {items.length > MAX_VISIBLE_ITEMS && (
-        <Text color={PALETTE.faint}>  ({items.length} total)</Text>
+        <Text color={colors.faint}>  ({items.length} total)</Text>
       )}
     </Box>
   );

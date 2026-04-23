@@ -91,6 +91,35 @@ export interface AgentContext {
   created_at: number;
 }
 
+/** A subagent spawn record — tracks sync/async/fork/worktree tasks. */
+export interface SubagentTask {
+  id: string;
+  parent_session_id: string;
+  child_session_id: string;
+  /** How the subagent was spawned. */
+  mode: "sync" | "async" | "fork" | "worktree";
+  /** Agent role preset applied when spawning. */
+  agent_type: string;
+  /** Short human-readable label for the task. */
+  label: string;
+  /** The prompt sent to the subagent. */
+  prompt: string;
+  /** Current lifecycle state. */
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  /** Absolute path of the git worktree if mode=worktree, else null. */
+  worktree_path: string | null;
+  started_at: number;
+  completed_at: number | null;
+  tokens_in: number;
+  tokens_out: number;
+  /** Error message if the task failed. */
+  error: string | null;
+  /** Final text response from the child agent. */
+  result_text: string | null;
+  /** 1 once the parent has been shown the completion notification. */
+  notified: number;
+}
+
 // ─── DDL Constants ──────────────────────────────────────────────────────────
 
 export const SQL_CREATE_SESSION = `

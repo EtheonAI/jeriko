@@ -20,11 +20,25 @@ export interface ToolResult {
   is_error: boolean;
 }
 
+/** Token usage telemetry reported by the provider for a single response. */
+export interface UsageInfo {
+  /** Regular uncached input tokens billed at full rate. */
+  input_tokens?: number;
+  /** Output tokens billed at the completion rate. */
+  output_tokens?: number;
+  /** Anthropic: tokens written to the prompt cache on this call (full-rate + 25%). */
+  cache_creation_input_tokens?: number;
+  /** Anthropic: tokens read from the prompt cache on this call (10% of full rate). */
+  cache_read_input_tokens?: number;
+}
+
 /** An atomic piece of a streaming LLM response. */
 export interface StreamChunk {
-  type: "text" | "tool_call" | "thinking" | "done" | "error";
+  type: "text" | "tool_call" | "thinking" | "usage" | "done" | "error";
   content: string;
   tool_call?: ToolCall;
+  /** Present when type === "usage" — incremental telemetry from the provider. */
+  usage?: UsageInfo;
 }
 
 // ---------------------------------------------------------------------------

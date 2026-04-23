@@ -1,40 +1,70 @@
 /**
- * Wizard — Generic multi-step interactive flow component.
+ * Wizard — generic multi-step interactive flow component.
  *
- * Renders steps one at a time:
- *   - select: Numbered list with arrow-key navigation and `❯` marker
- *   - text: Inline text input with placeholder
- *   - password: Fully masked text input
+ * The single engine for every interactive flow in the CLI (onboarding,
+ * /model add, /channel add, /connector add). A flow is defined declaratively
+ * (see src/cli/flows/) and lowered into a WizardConfig that this component
+ * renders.
  *
- * Controls:
- *   ↑↓       Navigate options (select step)
- *   Enter     Confirm selection / submit text
- *   Esc       Go back one step (or cancel on first step)
- *   Backspace Delete character (text/password)
+ * Step kinds:
+ *   - select:       numbered list with arrow-key navigation
+ *   - multi-select: checkbox list with Space toggle and "a" select-all
+ *   - text:         inline text entry with placeholder + validation
+ *   - password:     fully-masked text entry with validation
  *
- * Example:
- *   ───────────────────────────────────
- *   Connect a channel
+ * Dynamic / conditional steps:
+ *   A step in `config.steps` can be either a static WizardStep object or a
+ *   function `(previous: readonly string[]) => WizardStep | null`. A null
+ *   return skips the step — the engine advances automatically and fills the
+ *   skipped position with an empty-string placeholder in `results` so later
+ *   steps can rely on stable indexing.
  *
- *     1  ❯ telegram     Telegram Bot
- *     2    whatsapp     WhatsApp Web
- *
- *   ↑↓ navigate · Enter select · Esc cancel
- *   ───────────────────────────────────
+ * Theming:
+ *   Colors resolve via `useTheme()` (Subsystem 2) so a theme switch instantly
+ *   restyles the wizard. No hardcoded hex anywhere.
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Text, Box, useInput } from "ink";
-import { PALETTE } from "../theme.js";
-import type { WizardConfig, WizardStep } from "../types.js";
+import { useTheme } from "../hooks/useTheme.js";
+import type {
+  WizardConfig,
+  WizardStep,
+  WizardStepResolver,
+} from "../types.js";
+
+// ---------------------------------------------------------------------------
+// Step resolution
+// ---------------------------------------------------------------------------
+
+/** Apply a resolver with the given prior answers, producing a step or null. */
+function resolveStep(
+  resolver: WizardStepResolver | undefined,
+  previous: readonly string[],
+): WizardStep | null {
+  if (resolver === undefined) return null;
+  if (typeof resolver === "function") return resolver(previous);
+  return resolver;
+}
+
+// ---------------------------------------------------------------------------
+// Glyphs — small set, centralized so tests and the component agree
+// ---------------------------------------------------------------------------
+
+const GLYPHS = {
+  pointer:     "❯", // ❯
+  checked:     "◼", // ◼
+  unchecked:   "◻", // ◻
+  maskBullet:  "●", // ●
+} as const;
 
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface WizardProps {
-  config: WizardConfig;
-  onCancel: () => void;
+  readonly config: WizardConfig;
+  readonly onCancel: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,8 +72,10 @@ interface WizardProps {
 // ---------------------------------------------------------------------------
 
 export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
+  const { colors } = useTheme();
+
   const [stepIndex, setStepIndex] = useState(0);
-  const [results, setResults] = useState<string[]>([]);
+  const [results, setResults] = useState<readonly string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [checkedSet, setCheckedSet] = useState<Set<string>>(new Set());
   const [textBuffer, setTextBuffer] = useState("");
@@ -56,22 +88,42 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
   const [inputActive, setInputActive] = useState(false);
   useEffect(() => { setInputActive(true); }, []);
 
-  const step = config.steps[stepIndex];
-  if (!step) return null;
+  // Resolve the current step (may be null when a resolver opted to skip).
+  const step: WizardStep | null = useMemo(
+    () => resolveStep(config.steps[stepIndex], results),
+    [config.steps, stepIndex, results],
+  );
+
+  // Auto-advance past skipped (null) steps by pushing an empty placeholder.
+  // Running this in an effect (not during render) keeps state updates
+  // predictable and avoids re-entrancy issues with the resolver.
+  useEffect(() => {
+    if (step !== null) return;
+    if (stepIndex >= config.steps.length) return;
+    const nextResults = [...results, ""];
+    if (stepIndex === config.steps.length - 1) {
+      void Promise.resolve(config.onComplete(nextResults));
+      return;
+    }
+    setResults(nextResults);
+    setStepIndex((i) => i + 1);
+    setSelectedIndex(0);
+    setCheckedSet(new Set());
+    setTextBuffer("");
+    setError(null);
+  }, [step, stepIndex, results, config.steps.length, config]);
 
   const isFirstStep = stepIndex === 0;
   const isLastStep = stepIndex === config.steps.length - 1;
 
-  // Advance to next step or complete
-  const advance = (value: string) => {
+  // Advance to next step or complete with the supplied answer.
+  const advance = (value: string): void => {
     const newResults = [...results, value];
     if (isLastStep) {
-      // onComplete may be async — void the promise to suppress unhandled rejections.
-      // Error handling is centralized in launchWizard() wrappers.
       void Promise.resolve(config.onComplete(newResults));
     } else {
       setResults(newResults);
-      setStepIndex(stepIndex + 1);
+      setStepIndex((i) => i + 1);
       setSelectedIndex(0);
       setCheckedSet(new Set());
       setTextBuffer("");
@@ -79,13 +131,13 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
     }
   };
 
-  // Go back one step
-  const goBack = () => {
+  // Go back one step (or cancel on first step).
+  const goBack = (): void => {
     if (isFirstStep) {
       onCancel();
     } else {
       setResults(results.slice(0, -1));
-      setStepIndex(stepIndex - 1);
+      setStepIndex((i) => i - 1);
       setSelectedIndex(0);
       setCheckedSet(new Set());
       setTextBuffer("");
@@ -95,13 +147,10 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
 
   useInput(
     (input, key) => {
-      // Escape — go back or cancel
-      if (key.escape) {
-        goBack();
-        return;
-      }
+      if (step === null) return;
 
-      // ── Select step ─────────────────────────────────────────────
+      if (key.escape) { goBack(); return; }
+
       if (step.type === "select") {
         const opts = step.options;
         if (key.upArrow) {
@@ -128,7 +177,6 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
         return;
       }
 
-      // ── Multi-select step ───────────────────────────────────────
       if (step.type === "multi-select") {
         const opts = step.options;
         if (key.upArrow) {
@@ -139,7 +187,6 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
           setSelectedIndex((i) => (i < opts.length - 1 ? i + 1 : 0));
           return;
         }
-        // Space toggles the current item
         if (input === " ") {
           const opt = opts[selectedIndex];
           if (opt) {
@@ -148,7 +195,6 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
               if (next.has(opt.value)) {
                 next.delete(opt.value);
               } else {
-                // Enforce max constraint
                 if (step.max !== undefined && next.size >= step.max) {
                   setError(`Maximum ${step.max} selections allowed`);
                   return prev;
@@ -161,7 +207,6 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
           }
           return;
         }
-        // Enter confirms selection
         if (key.return) {
           const min = step.min ?? 0;
           if (checkedSet.size < min) {
@@ -169,12 +214,10 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
             return;
           }
           setError(null);
-          // Encode multi-select as comma-separated values
           const value = Array.from(checkedSet).join(",");
           advance(value);
           return;
         }
-        // "a" toggles all
         if (input === "a") {
           setCheckedSet((prev) => {
             if (prev.size === opts.length) return new Set();
@@ -187,21 +230,14 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
         return;
       }
 
-      // ── Text / Password step ────────────────────────────────────
       if (step.type === "text" || step.type === "password") {
         if (key.return) {
           const trimmed = textBuffer.trim();
           if (step.validate) {
             const err = step.validate(trimmed);
-            if (err) {
-              setError(err);
-              return;
-            }
+            if (err) { setError(err); return; }
           }
-          if (!trimmed) {
-            setError("Value cannot be empty");
-            return;
-          }
+          if (!trimmed) { setError("Value cannot be empty"); return; }
           setError(null);
           advance(trimmed);
           return;
@@ -228,34 +264,32 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
 
   // ── Render ────────────────────────────────────────────────────────
 
+  if (step === null) return null;
+
   return (
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor={PALETTE.dim}
+      borderColor={colors.dim}
       paddingX={1}
       paddingY={1}
     >
       {/* Title + step indicator */}
       <Box marginBottom={1}>
-        <Text color={PALETTE.brand} bold>{config.title}</Text>
+        <Text color={colors.brand} bold>{config.title}</Text>
         {config.steps.length > 1 && (
-          <Text color={PALETTE.dim}>{"  "}Step {stepIndex + 1}/{config.steps.length}</Text>
+          <Text color={colors.dim}>{"  "}Step {stepIndex + 1}/{config.steps.length}</Text>
         )}
       </Box>
 
       {/* Step message */}
-      <Text color={PALETTE.text}>{step.message}</Text>
+      <Text color={colors.text}>{step.message}</Text>
       <Text>{""}</Text>
 
       {/* Step content */}
       {step.type === "select" && (
-        <SelectView
-          options={step.options}
-          selectedIndex={selectedIndex}
-        />
+        <SelectView options={step.options} selectedIndex={selectedIndex} />
       )}
-
       {step.type === "multi-select" && (
         <MultiSelectView
           options={step.options}
@@ -263,7 +297,6 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
           checkedSet={checkedSet}
         />
       )}
-
       {step.type === "text" && (
         <TextInputView
           buffer={textBuffer}
@@ -271,36 +304,29 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
           masked={false}
         />
       )}
-
       {step.type === "password" && (
-        <TextInputView
-          buffer={textBuffer}
-          placeholder={undefined}
-          masked={true}
-        />
+        <TextInputView buffer={textBuffer} masked={true} />
       )}
 
       {/* Error */}
-      {error && (
-        <Text color={PALETTE.error}>{error}</Text>
-      )}
+      {error && <Text color={colors.error}>{error}</Text>}
 
       {/* Hint line */}
       <Text>{""}</Text>
       {step.type === "select" && (
-        <Text color={PALETTE.dim}>
+        <Text color={colors.dim}>
           {"↑↓ navigate · Enter select · Esc "}
           {isFirstStep ? "cancel" : "back"}
         </Text>
       )}
       {step.type === "multi-select" && (
-        <Text color={PALETTE.dim}>
+        <Text color={colors.dim}>
           {"↑↓ navigate · Space toggle · a all · Enter confirm · Esc "}
           {isFirstStep ? "cancel" : "back"}
         </Text>
       )}
       {(step.type === "text" || step.type === "password") && (
-        <Text color={PALETTE.dim}>
+        <Text color={colors.dim}>
           {"Enter to confirm · Esc "}
           {isFirstStep ? "cancel" : "back"}
         </Text>
@@ -310,30 +336,28 @@ export const Wizard: React.FC<WizardProps> = ({ config, onCancel }) => {
 };
 
 // ---------------------------------------------------------------------------
-// Select list view — numbered options with ❯ marker
+// Select list view
 // ---------------------------------------------------------------------------
 
 const SelectView: React.FC<{
-  options: Array<{ value: string; label: string; hint?: string }>;
+  options: ReadonlyArray<{ value: string; label: string; hint?: string }>;
   selectedIndex: number;
 }> = ({ options, selectedIndex }) => {
+  const { colors } = useTheme();
   return (
     <Box flexDirection="column">
       {options.map((opt, i) => {
         const isSelected = i === selectedIndex;
         const num = `${i + 1}`.padStart(2);
-        const marker = isSelected ? " \u276F " : "   ";
-
+        const marker = isSelected ? ` ${GLYPHS.pointer} ` : "   ";
         return (
           <Text key={opt.value}>
-            <Text color={PALETTE.dim}>{`  ${num}`}</Text>
-            <Text color={isSelected ? PALETTE.brand : PALETTE.dim}>{marker}</Text>
-            <Text color={isSelected ? PALETTE.brand : PALETTE.text} bold={isSelected}>
+            <Text color={colors.dim}>{`  ${num}`}</Text>
+            <Text color={isSelected ? colors.brand : colors.dim}>{marker}</Text>
+            <Text color={isSelected ? colors.brand : colors.text} bold={isSelected}>
               {opt.label}
             </Text>
-            {opt.hint && (
-              <Text color={PALETTE.dim}>{"  "}{opt.hint}</Text>
-            )}
+            {opt.hint && <Text color={colors.dim}>{"  "}{opt.hint}</Text>}
           </Text>
         );
       })}
@@ -342,36 +366,34 @@ const SelectView: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Multi-select list view — checkboxes with arrow-key navigation
+// Multi-select list view
 // ---------------------------------------------------------------------------
 
 const MultiSelectView: React.FC<{
-  options: Array<{ value: string; label: string; hint?: string }>;
+  options: ReadonlyArray<{ value: string; label: string; hint?: string }>;
   selectedIndex: number;
   checkedSet: Set<string>;
 }> = ({ options, selectedIndex, checkedSet }) => {
+  const { colors } = useTheme();
   return (
     <Box flexDirection="column">
       {options.map((opt, i) => {
         const isFocused = i === selectedIndex;
         const isChecked = checkedSet.has(opt.value);
         const num = `${i + 1}`.padStart(2);
-        const checkbox = isChecked ? "◼" : "◻";
-        const checkColor = isChecked ? PALETTE.brand : PALETTE.dim;
-
+        const checkbox = isChecked ? GLYPHS.checked : GLYPHS.unchecked;
+        const checkColor = isChecked ? colors.brand : colors.dim;
         return (
           <Text key={opt.value}>
-            <Text color={PALETTE.dim}>{`  ${num}`}</Text>
-            <Text color={isFocused ? PALETTE.brand : PALETTE.dim}>
-              {isFocused ? " \u276F " : "   "}
+            <Text color={colors.dim}>{`  ${num}`}</Text>
+            <Text color={isFocused ? colors.brand : colors.dim}>
+              {isFocused ? ` ${GLYPHS.pointer} ` : "   "}
             </Text>
             <Text color={checkColor}>{checkbox} </Text>
-            <Text color={isFocused ? PALETTE.brand : PALETTE.text} bold={isFocused}>
+            <Text color={isFocused ? colors.brand : colors.text} bold={isFocused}>
               {opt.label}
             </Text>
-            {opt.hint && (
-              <Text color={PALETTE.dim}>{"  "}{opt.hint}</Text>
-            )}
+            {opt.hint && <Text color={colors.dim}>{"  "}{opt.hint}</Text>}
           </Text>
         );
       })}
@@ -380,7 +402,7 @@ const MultiSelectView: React.FC<{
 };
 
 // ---------------------------------------------------------------------------
-// Text input view — inline text entry with cursor
+// Text input view
 // ---------------------------------------------------------------------------
 
 const TextInputView: React.FC<{
@@ -388,21 +410,15 @@ const TextInputView: React.FC<{
   placeholder?: string;
   masked: boolean;
 }> = ({ buffer, placeholder, masked }) => {
-  let display: string;
-  if (masked) {
-    display = "\u25CF".repeat(buffer.length);
-  } else {
-    display = buffer;
-  }
-
-  const showPlaceholder = !buffer && placeholder;
-
+  const { colors } = useTheme();
+  const display = masked ? GLYPHS.maskBullet.repeat(buffer.length) : buffer;
+  const showPlaceholder = buffer.length === 0 && placeholder !== undefined && placeholder !== "";
   return (
     <Box>
-      <Text color={PALETTE.brand} bold>{"  \u276F "}</Text>
+      <Text color={colors.brand} bold>{`  ${GLYPHS.pointer} `}</Text>
       {showPlaceholder ? (
         <>
-          <Text color={PALETTE.faint}>{placeholder}</Text>
+          <Text color={colors.faint}>{placeholder}</Text>
           <Text inverse>{" "}</Text>
         </>
       ) : (

@@ -24,7 +24,10 @@ import {
   formatError,
   capitalize,
 } from "../format.js";
-import { t, getActiveTheme } from "../theme.js";
+import { t } from "../theme.js";
+import type { ThemeId } from "../themes/index.js";
+import type { HelpController, ThemeController } from "../boot/index.js";
+import { saveThemeConfig, themeConfigPath } from "../boot/index.js";
 import { getProviderOptions, validateApiKey, MIN_API_KEY_LENGTH } from "../lib/setup.js";
 import { verifyApiKey, verifyOllamaRunning, fetchOllamaModelList, verifyLMStudioRunning } from "../wizard/verify.js";
 import { persistSetup, type OnboardingResult } from "../wizard/onboarding.js";
@@ -55,6 +58,10 @@ export interface SystemCommandContext {
   dispatch: (action: AppAction) => void;
   addSystemMessage: (content: string) => void;
   wizardConfigRef: React.MutableRefObject<WizardConfig | null>;
+  /** Populated by ThemeControllerBridge; handlers call `.set(id)` to switch live. */
+  themeControllerRef: React.MutableRefObject<ThemeController>;
+  /** Populated by HelpControllerBridge; handlers call `.toggle()` to show the overlay. */
+  helpControllerRef: React.MutableRefObject<HelpController>;
 }
 
 function requireDaemon(ctx: SystemCommandContext, label: string): boolean {
@@ -74,7 +81,7 @@ function launchWizard(ctx: SystemCommandContext, config: WizardConfig): void {
   const originalOnComplete = config.onComplete;
   ctx.wizardConfigRef.current = {
     ...config,
-    onComplete: async (results: string[]) => {
+    onComplete: async (results: readonly string[]) => {
       try {
         await originalOnComplete(results);
       } catch (err: unknown) {
@@ -1032,8 +1039,50 @@ export function createSystemHandlers(ctx: SystemCommandContext) {
 
     // ── Theme ──
 
-    async theme(_args: string): Promise<void> {
-      addSystemMessage(t.muted(`Active theme: ${getActiveTheme()}`));
+    async theme(args: string): Promise<void> {
+      const ctrl = ctx.themeControllerRef.current;
+      const arg = args.trim();
+
+      if (arg === "" || arg === "list") {
+        const themes = ctrl.list();
+        if (themes.length === 0) {
+          addSystemMessage(t.muted(`Active theme: ${ctrl.current}`));
+          return;
+        }
+        const lines = themes.map((theme) => {
+          const marker = theme.id === ctrl.current ? "▸" : " ";
+          return `  ${marker} ${theme.id.padEnd(18)} ${t.dim(theme.displayName)}`;
+        });
+        addSystemMessage(
+          `${t.muted(`Active: ${ctrl.current}\n`)}${lines.join("\n")}\n${t.dim("  switch with  /theme <id>")}`,
+        );
+        return;
+      }
+
+      const target = ctrl.list().find((theme) => theme.id === arg);
+      if (target === undefined) {
+        addSystemMessage(
+          `${t.red(`Unknown theme: ${arg}`)}\n${t.dim("  run  /theme list  to see options")}`,
+        );
+        return;
+      }
+
+      ctrl.set(arg);
+
+      const save = await saveThemeConfig(themeConfigPath(), arg as ThemeId);
+      if (!save.ok && save.diagnostic !== undefined) {
+        addSystemMessage(
+          `${t.green(`✓ Theme: ${target.displayName}`)}  ${t.yellow(`(not persisted: ${save.diagnostic.kind})`)}`,
+        );
+        return;
+      }
+      addSystemMessage(t.green(`✓ Theme: ${target.displayName}`));
+    },
+
+    // ── Keybindings help overlay ──
+
+    async keybindings(_args: string): Promise<void> {
+      ctx.helpControllerRef.current.toggle();
     },
   };
 }

@@ -1,32 +1,54 @@
 /**
- * ErrorBoundary — Catches unhandled React component errors.
+ * ErrorBoundary — catches unhandled React component errors.
  *
- * Prevents the entire CLI from crashing when a component throws during
- * render. Shows a styled error message and allows the user to continue.
+ * Split into two parts:
+ *   - `ErrorBoundary`   (class, required by React for error catching)
+ *   - `ErrorFallback`   (functional, reads the theme context for styling)
  *
- * React error boundaries must be class components — functional components
- * cannot catch render errors via hooks.
+ * The class holds no display logic — its only job is error capture +
+ * stderr logging. Rendering the fallback is delegated to a functional
+ * component so theme-reactive styling composes via useTheme() without
+ * dragging Context.Consumer into the class render method.
  */
 
 import React from "react";
 import { Text, Box } from "ink";
-import { PALETTE } from "../theme.js";
+import { useTheme } from "../hooks/useTheme.js";
 
 // ---------------------------------------------------------------------------
-// Types
+// Fallback — functional, theme-reactive
+// ---------------------------------------------------------------------------
+
+interface ErrorFallbackProps {
+  readonly error: Error;
+}
+
+const ErrorFallback: React.FC<ErrorFallbackProps> = ({ error }) => {
+  const { colors } = useTheme();
+  return (
+    <Box flexDirection="column" marginY={1}>
+      <Text color={colors.error} bold>
+        A rendering error occurred:
+      </Text>
+      <Text color={colors.dim}>{error.message}</Text>
+      <Text color={colors.dim}>
+        The CLI may be in an inconsistent state. Press Ctrl+C to exit.
+      </Text>
+    </Box>
+  );
+};
+
+// ---------------------------------------------------------------------------
+// Boundary — class (required by React for render-error capture)
 // ---------------------------------------------------------------------------
 
 interface ErrorBoundaryProps {
-  children: React.ReactNode;
+  readonly children: React.ReactNode;
 }
 
 interface ErrorBoundaryState {
-  error: Error | null;
+  readonly error: Error | null;
 }
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
 
 export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
   constructor(props: ErrorBoundaryProps) {
@@ -39,27 +61,16 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   }
 
   override componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    // Log to stderr so it doesn't pollute Ink output
+    // stderr so it doesn't pollute Ink output.
     process.stderr.write(
       `[ErrorBoundary] ${error.message}\n${info.componentStack ?? ""}\n`,
     );
   }
 
   override render(): React.ReactNode {
-    if (this.state.error) {
-      return (
-        <Box flexDirection="column" marginY={1}>
-          <Text color={PALETTE.error} bold>
-            A rendering error occurred:
-          </Text>
-          <Text color={PALETTE.dim}>{this.state.error.message}</Text>
-          <Text color={PALETTE.dim}>
-            The CLI may be in an inconsistent state. Press Ctrl+C to exit.
-          </Text>
-        </Box>
-      );
+    if (this.state.error !== null) {
+      return <ErrorFallback error={this.state.error} />;
     }
-
     return this.props.children;
   }
 }

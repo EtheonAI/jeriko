@@ -181,6 +181,26 @@ function createTestCtx(backendOverrides: Partial<Backend> = {}) {
   const dispatched: unknown[] = [];
   const backend = createMockBackend(backendOverrides);
 
+  // Subsystem-8 controllers — minimal stubs so /theme and /keybindings
+  // handlers don't dereference undefined. The /theme stub advertises the
+  // default theme as the only option; individual tests can override
+  // ctx.themeControllerRef.current if they want to exercise list behaviour.
+  const themeControllerRef = {
+    current: {
+      current: "jeriko" as const,
+      set: (_id: string) => {},
+      list: () => [{ id: "jeriko", displayName: "Jeriko (Electric Indigo)", kind: "dark", colors: {} as never }],
+    },
+  };
+  const helpControllerRef = {
+    current: {
+      visible: false,
+      show:   () => {},
+      hide:   () => {},
+      toggle: () => {},
+    },
+  };
+
   return {
     backend,
     dispatch: (action: unknown) => dispatched.push(action),
@@ -188,6 +208,8 @@ function createTestCtx(backendOverrides: Partial<Backend> = {}) {
     messages,
     dispatched,
     wizardConfigRef: { current: null },
+    themeControllerRef,
+    helpControllerRef,
     state: {
       model: "claude-sonnet-4-6",
       stats: {
@@ -672,17 +694,28 @@ describe("System handlers", () => {
     expect(ctx.dispatched.some((a: any) => a.type === "SET_PHASE" && a.phase === "wizard")).toBe(true);
   });
 
-  test("/theme shows active theme", async () => {
+  test("/theme with no args lists themes (includes active)", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.theme("");
+    // New Subsystem-8 behaviour: shows the list with ▸ on the active theme.
     expect(ctx.messages[0]).toContain("jeriko");
+    expect(ctx.messages[0]).toContain("▸");
   });
 
-  test("/theme with args still shows active theme", async () => {
+  test("/theme <unknown> surfaces an error message", async () => {
     const ctx = createTestCtx();
     const h = createSystemHandlers(ctx);
     await h.theme("anything");
-    expect(ctx.messages[0]).toContain("jeriko");
+    expect(ctx.messages[0]).toContain("Unknown theme");
+  });
+
+  test("/keybindings toggles the help controller", async () => {
+    const ctx = createTestCtx();
+    let toggled = 0;
+    ctx.helpControllerRef.current.toggle = () => { toggled++; };
+    const h = createSystemHandlers(ctx);
+    await h.keybindings("");
+    expect(toggled).toBe(1);
   });
 });

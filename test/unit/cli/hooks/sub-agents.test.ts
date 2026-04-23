@@ -7,7 +7,7 @@
 import { describe, test, expect } from "bun:test";
 import {
   deriveSubAgentState,
-  getAgentTypeColor,
+  getAgentTypeTone,
   AGENT_TYPE_COLORS,
 } from "../../../../src/cli/hooks/useSubAgents.js";
 import type { SubAgentState } from "../../../../src/cli/types.js";
@@ -281,22 +281,25 @@ describe("deriveSubAgentState", () => {
 });
 
 // ---------------------------------------------------------------------------
-// getAgentTypeColor
+// getAgentTypeTone
 // ---------------------------------------------------------------------------
 
-describe("getAgentTypeColor", () => {
-  test("returns correct colors for known agent types", () => {
-    expect(getAgentTypeColor("general")).toBe("text");
-    expect(getAgentTypeColor("research")).toBe("cyan");
-    expect(getAgentTypeColor("task")).toBe("green");
-    expect(getAgentTypeColor("explore")).toBe("blue");
-    expect(getAgentTypeColor("plan")).toBe("purple");
+describe("getAgentTypeTone", () => {
+  test("returns correct semantic tones for known agent types", () => {
+    // AGENT_TYPE_COLORS now stores semantic Tone values (info/success/tool/
+    // purple/etc) instead of the legacy PALETTE alias strings. This keeps
+    // sub-agent badges theme-reactive through resolveTone().
+    expect(getAgentTypeTone("general")).toBe("text");
+    expect(getAgentTypeTone("research")).toBe("info");
+    expect(getAgentTypeTone("task")).toBe("success");
+    expect(getAgentTypeTone("explore")).toBe("tool");
+    expect(getAgentTypeTone("plan")).toBe("purple");
   });
 
   test("returns 'text' (general) for unknown agent types", () => {
-    expect(getAgentTypeColor("custom")).toBe("text");
-    expect(getAgentTypeColor("")).toBe("text");
-    expect(getAgentTypeColor("nonexistent")).toBe("text");
+    expect(getAgentTypeTone("custom")).toBe("text");
+    expect(getAgentTypeTone("")).toBe("text");
+    expect(getAgentTypeTone("nonexistent")).toBe("text");
   });
 });
 

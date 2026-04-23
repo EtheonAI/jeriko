@@ -12,8 +12,20 @@ import type { ConnectorManager } from "../connectors/manager.js";
 import type { WebhookEvent } from "../connectors/interface.js";
 import type { ChannelRegistry } from "../channels/index.js";
 import { kvGet } from "../../storage/kv.js";
+import { safeSpawn } from "../../../shared/spawn-safe.js";
 
 const log = getLogger();
+
+/**
+ * Wall-clock ceiling (ms) for a single `shell` trigger action.
+ *
+ * User-supplied shell commands run inside the trigger engine process. A
+ * stuck process (e.g. `sleep infinity`, deadlocked pipe) would otherwise
+ * freeze the engine. Five minutes is long enough for legitimate build /
+ * deploy scripts; anything longer should use `mode: "agent"` or offload
+ * to a worktree subagent.
+ */
+const TRIGGER_SHELL_TIMEOUT_MS = 5 * 60_000;
 
 /**
  * Extract a value from a JSON response body using a dot-notation path.
@@ -789,25 +801,33 @@ export class TriggerEngine {
         };
 
         // Sanitize env: strip null bytes from values — corrupted env vars
-        // (e.g. OAuth tokens with trailing \0) crash Bun.spawn.
+        // (e.g. OAuth tokens with trailing \0) crash spawn.
         const safeEnv: Record<string, string> = {};
         for (const [k, v] of Object.entries({ ...process.env, ...env })) {
           if (v != null) safeEnv[k] = v.replaceAll("\0", "");
         }
 
-        const proc = Bun.spawn(["sh", "-c", action.command], {
+        const outcome = await safeSpawn({
+          command: "sh",
+          args: ["-c", action.command],
           env: safeEnv,
-          stdout: "pipe",
-          stderr: "pipe",
+          // User-supplied trigger commands MUST have a bounded lifetime —
+          // without this a `sleep inf` trigger freezes the engine.
+          timeoutMs: TRIGGER_SHELL_TIMEOUT_MS,
         });
 
-        const exitCode = await proc.exited;
-        if (exitCode !== 0) {
-          const stderr = await new Response(proc.stderr).text();
-          log.warn(`Trigger ${trigger.id} shell action exited ${exitCode}: ${stderr}`);
-          this.recordError(trigger);
-        } else {
+        if (outcome.status === "exited" && outcome.code === 0) {
           this.resetErrorCount(trigger);
+        } else {
+          const reason = outcome.status === "exited"
+            ? `exited ${outcome.code}: ${outcome.stderr || outcome.stdout}`
+            : outcome.status === "timeout"
+            ? `timed out after ${outcome.timeoutMs}ms`
+            : outcome.status === "aborted"
+            ? "aborted"
+            : `spawn failed: ${outcome.error.message}`;
+          log.warn(`Trigger ${trigger.id} shell action ${reason}`);
+          this.recordError(trigger);
         }
         break;
       }

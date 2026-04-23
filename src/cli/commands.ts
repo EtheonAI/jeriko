@@ -83,6 +83,7 @@ export const COMMAND_CATEGORIES: readonly CommandCategory[] = [
       ["/sys",            "System info"],
       ["/config",         "Show configuration"],
       ["/theme [name]",   "Show or switch theme"],
+      ["/keybindings",    "Toggle the keybinding help overlay"],
     ],
   },
 ] as const;
@@ -136,6 +137,7 @@ export const SLASH_COMMANDS = new Map<string, string>([
   ["/sys",            "System info"],
   ["/config",         "Show configuration"],
   ["/theme",          "Show or switch theme"],
+  ["/keybindings",    "Toggle the keybinding help overlay"],
 ]);
 
 /**

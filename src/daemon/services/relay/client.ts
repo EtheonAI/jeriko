@@ -484,7 +484,15 @@ export class RelayClient {
       },
       message.requestId,
     ).catch((err) => {
-      log.error(`Relay client: OAuth tokens handler error — ${err}`);
+      // Surface token-storage failures loudly: the user has just completed
+      // an OAuth flow in their browser and believes they are connected, but
+      // the tokens never made it into the local store. Without this log,
+      // subsequent "not authenticated" errors look mysterious.
+      const msg = err instanceof Error ? err.message : String(err);
+      log.error(
+        `Relay client: failed to store OAuth tokens for provider=${message.provider} ` +
+        `requestId=${message.requestId} — ${msg}. User may need to re-authenticate.`,
+      );
     });
   }
 

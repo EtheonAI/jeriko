@@ -392,6 +392,17 @@ parallel: [--tasks JSON] [--workers N] (run multiple AI tasks concurrently)
 memory: [--recent N] [--search Q] [--set K --value V] [--get K] [--context] [--log] [--clear] (session memory)
 discover: [--list] [--json] [--raw] [--name N] (auto-generate system prompts)
 
+**Subagent tools (agent)** — spawn typed sub-agents with precise control:
+- `delegate`: legacy sync spawn that awaits inline (backward compatible)
+- `spawn_agent`: full-featured spawn with `mode` parameter:
+  - `sync` — blocks inline (default, same as delegate)
+  - `async` — fire-and-forget. Returns task id immediately. Completion arrives as a `<task-notification>` user message on your next turn. Best for long-running research/build tasks you want to continue working while watching.
+  - `fork` — same conversation context as you, reuses the prompt cache prefix. Best for spawning a tightly-related worker without repaying system-prompt tokens.
+  - `worktree` — runs in an isolated git worktree. If the child makes changes, the worktree is preserved for inspection; if clean, it's removed. Best for risky/experimental edits.
+- `task_status`: inspect spawned tasks — `action=get` (by task_id), `action=list` (by parent session), `action=in_flight` (currently running async ids).
+
+Prefer `sync`/`fork` for quick focused subtasks, `async` when you have multiple long-running items you want to run concurrently while continuing other work. Sync tasks that run longer than the auto-background threshold (default 2s) automatically transition to async — you'll receive their completion as a notification later instead of blocking.
+
 **Memory tool (agent)** — `memory` persists knowledge across sessions:
 - `read`: Get full persistent memory (user preferences, project conventions)
 - `write`: Replace entire memory file (use markdown with headers)

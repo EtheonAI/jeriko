@@ -8,7 +8,8 @@
 
 import { registerTool } from "./registry.js";
 import type { ToolDefinition } from "./registry.js";
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { readFileSync, mkdirSync, existsSync } from "node:fs";
+import { writeSecretFile } from "../../../shared/secret-file.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
@@ -36,7 +37,9 @@ function writeMemory(content: string): void {
   if (Buffer.byteLength(content, "utf-8") > MAX_MEMORY_SIZE) {
     throw new Error(`Memory file would exceed ${MAX_MEMORY_SIZE / 1024}KB limit. Remove old entries first.`);
   }
-  writeFileSync(MEMORY_FILE, content, "utf-8");
+  // Memory can hold PII, user preferences, and tokens referenced in prior turns.
+  // Owner-only perms match the secrets.ts / daemon.env pattern.
+  writeSecretFile(MEMORY_FILE, content);
 }
 
 async function execute(args: Record<string, unknown>): Promise<string> {

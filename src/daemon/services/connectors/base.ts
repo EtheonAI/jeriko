@@ -45,6 +45,7 @@ import type {
 import { withRetry, withTimeout, refreshToken } from "./middleware.js";
 import { saveSecret } from "../../../shared/secrets.js";
 import { getRelayApiUrl, isSelfHosted } from "../../../shared/urls.js";
+import { withHttpRetry } from "../../../shared/http-retry.js";
 
 // ---------------------------------------------------------------------------
 // ConnectorBase — abstract root for all connectors
@@ -150,7 +151,23 @@ export abstract class ConnectorBase implements ConnectorInterface {
     if (!handler) {
       return { ok: false, error: `Unknown ${this.label} method: ${method}` };
     }
+    // Retry on thrown exceptions (network/DNS failure, unexpected parse error).
+    // HTTP-status-aware retry lives in `fetchWithRetry()` and fires on 429/5xx.
     return withRetry(() => handler(params), 2, 500);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Centralised HTTP fetch — every helper below routes through this, so one
+  // retry/backoff implementation applies to every connector method.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Fetch with transparent retry on transient HTTP failures
+   * (429 + Retry-After, 500, 502, 503, 504, 408, 425) and on thrown
+   * network errors. Subclasses should NEVER call `fetch` directly.
+   */
+  protected fetchWithRetry(url: string, init?: RequestInit): Promise<Response> {
+    return withHttpRetry(() => fetch(url, init));
   }
 
   // ---------------------------------------------------------------------------
@@ -190,7 +207,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
       if (str) url += (url.includes("?") ? "&" : "?") + str;
     }
     const authHeader = await this.buildAuthHeader();
-    const res = await fetch(url, {
+    const res = await this.fetchWithRetry(url, {
       headers: { Authorization: authHeader, ...this.extraHeaders() },
     });
     return this.toResult(res);
@@ -199,7 +216,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
   /** POST with JSON body. */
   protected async post(path: string, body: Record<string, unknown>): Promise<ConnectorResult> {
     const authHeader = await this.buildAuthHeader();
-    const res = await fetch(this.buildUrl(path), {
+    const res = await this.fetchWithRetry(this.buildUrl(path), {
       method: "POST",
       headers: {
         Authorization: authHeader,
@@ -218,7 +235,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && k !== "id") body.set(k, String(v));
     }
-    const res = await fetch(this.buildUrl(path), {
+    const res = await this.fetchWithRetry(this.buildUrl(path), {
       method: "POST",
       headers: {
         Authorization: authHeader,
@@ -233,7 +250,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
   /** PATCH with JSON body. */
   protected async patch(path: string, body: Record<string, unknown>): Promise<ConnectorResult> {
     const authHeader = await this.buildAuthHeader();
-    const res = await fetch(this.buildUrl(path), {
+    const res = await this.fetchWithRetry(this.buildUrl(path), {
       method: "PATCH",
       headers: {
         Authorization: authHeader,
@@ -248,7 +265,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
   /** PUT with JSON body. */
   protected async put(path: string, body: Record<string, unknown>): Promise<ConnectorResult> {
     const authHeader = await this.buildAuthHeader();
-    const res = await fetch(this.buildUrl(path), {
+    const res = await this.fetchWithRetry(this.buildUrl(path), {
       method: "PUT",
       headers: {
         Authorization: authHeader,
@@ -263,7 +280,7 @@ export abstract class ConnectorBase implements ConnectorInterface {
   /** DELETE request. Returns `{ ok: true }` for 204 No Content. */
   protected async del(path: string): Promise<ConnectorResult> {
     const authHeader = await this.buildAuthHeader();
-    const res = await fetch(this.buildUrl(path), {
+    const res = await this.fetchWithRetry(this.buildUrl(path), {
       method: "DELETE",
       headers: { Authorization: authHeader, ...this.extraHeaders() },
     });
@@ -495,7 +512,7 @@ export abstract class BearerConnector extends ConnectorBase {
       params.scope = this.auth.refreshScope;
     }
 
-    const res = await fetch(this.auth.tokenUrl!, {
+    const res = await this.fetchWithRetry(this.auth.tokenUrl!, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(params).toString(),
@@ -533,7 +550,7 @@ export abstract class BearerConnector extends ConnectorBase {
       body.scope = this.auth.refreshScope;
     }
 
-    const res = await fetch(relayUrl, {
+    const res = await this.fetchWithRetry(relayUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
