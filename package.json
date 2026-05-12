@@ -99,7 +99,7 @@
     "drizzle-orm": "^0.45.2",
     "grammy": "^1.35.0",
     "hono": "^4.7.0",
-    "ink": "7.0.1",
+    "ink": "7.0.2",
     "playwright-core": "^1.58.2",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
